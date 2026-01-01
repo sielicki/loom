@@ -1,0 +1,57 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+
+# Compiled binaries
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Object files
+*.o
+*.obj
+*.lo
+
+# Compilation database
+compile_commands.json
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Nix
+result
+result-*
+.direnv/
+.envrc
+
+# Rust
+bindings/rust/target/
+bindings/rust/Cargo.lock
+
+# Zig
+zig-cache/
+zig-out/
+bindings/zig/.zig-cache/
+
+# Testing
+Testing/
+*.gcda
+*.gcno
+*.gcov
+
