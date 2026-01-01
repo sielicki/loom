@@ -243,11 +243,13 @@ auto main() -> int {
 
 ## Potential Future Work
 
-* sender/receiver integration/implementation with [stdexec](https://github.com/NVIDIA/stdexec)/[beman::execution](https://github.com/bemanproject/execution).
-* integration/implementation with [asio](https://think-async.com/Asio/).
-* competing implementation of [NCCL/RCCL ofi plugin](https://github.com/aws/aws-ofi-nccl).
-* competing implementation of [nvshmem ofi plugin](https://github.com/NVIDIA/nvshmem/tree/devel/src/modules/transport/libfabric).
-* competing implementation of [nixl ofi plugin](https://github.com/ai-dynamo/nixl/tree/main/src/plugins/libfabric).
-* stability/performance improvements, bug fixes (surely there are a few in this early draft.)
-* builds/ci, mostly targeting manylinux targets.
-* convert doxygen to html or markdown.
+- sender/receiver integration/implementation with [stdexec](https://github.com/NVIDIA/stdexec)/[beman::execution](https://github.com/bemanproject/execution).
+- integration/implementation with [asio](https://think-async.com/Asio/).
+- competing implementation of [NCCL/RCCL ofi plugin](https://github.com/aws/aws-ofi-nccl).
+- competing implementation of [nvshmem ofi plugin](https://github.com/NVIDIA/nvshmem/tree/devel/src/modules/transport/libfabric).
+- competing implementation of [nixl ofi plugin](https://github.com/ai-dynamo/nixl/tree/main/src/plugins/libfabric).
+- stability/performance improvements, bug fixes (surely there are a few in this early draft.)
+- builds/ci, mostly targeting manylinux targets.
+- convert doxygen to html or markdown.
+- rust bindings via [cxx](https://docs.rs/cxx/latest/cxx/) which compete with libfabric-sys in upstream libfabric but work better with tokio.
+- zig bindings and integration with their new async stuff.
