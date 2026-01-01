@@ -241,6 +241,253 @@ auto main() -> int {
 }
 ```
 
+### Allocator-Aware Design
+
+All loom objects support custom allocators via `std::pmr::memory_resource`,
+enabling integration with arena allocators, memory pools, or GPU memory:
+
+```cpp
+#include <loom/loom.hpp>
+#include <loom/async/completion_queue.hpp>
+#include <memory_resource>
+
+auto main() -> int {
+    using namespace loom;
+
+    // Create a monotonic buffer for zero-allocation steady-state operation
+    std::array<std::byte, 1024 * 1024> buffer{};  // 1MB arena
+    std::pmr::monotonic_buffer_resource arena{buffer.data(), buffer.size()};
+
+    // All loom objects accept an optional memory_resource* parameter
+    auto info = query_fabric({}, &arena).value();
+    auto fab = fabric::create(info, &arena).value();
+    auto dom = domain::create(fab, info, &arena).value();
+
+    // Completion queues, address vectors, counters - all allocator-aware
+    auto cq = completion_queue::create(dom, {.size = 256}, &arena).value();
+    auto av = address_vector::create(dom, {}, &arena).value();
+    auto cntr = counter::create(dom, {}, &arena).value();
+
+    // Endpoints and memory regions too
+    auto ep = endpoint::create(dom, info, &arena).value();
+
+    std::array<std::byte, 4096> data{};
+    auto mr = memory_region::register_memory(
+        dom, std::span{data},
+        mr_access_flags::send | mr_access_flags::recv,
+        &arena
+    ).value();
+
+    // Deferred/triggered work also supports custom allocators
+    auto deferred = trigger::deferred_work::create_send(
+        dom, ep,
+        trigger::threshold_condition{&cntr, 1},
+        nullptr,
+        msg::send_message<void*>{},
+        msg::send_flag::none,
+        &arena  // Custom allocator for internal structures
+    ).value();
+
+    return 0;
+}
+```
+
+### Compile-Time Provider Traits
+
+loom provides compile-time provider characteristics for zero-overhead abstraction
+and static dispatch based on fabric capabilities:
+
+```cpp
+#include <loom/loom.hpp>
+
+using namespace loom;
+
+// Provider traits give compile-time access to provider capabilities
+static_assert(provider_traits<provider::verbs_tag>::supports_native_atomics);
+static_assert(provider_traits<provider::efa_tag>::uses_staged_atomics);
+static_assert(provider_traits<provider::slingshot_tag>::supports_auto_progress);
+
+// Concepts enable compile-time capability checking
+static_assert(native_atomic_provider<provider::verbs_tag>);
+static_assert(staged_atomic_provider<provider::efa_tag>);
+static_assert(inject_capable_provider<provider::shm_tag>);
+static_assert(auto_progress_provider<provider::slingshot_tag>);
+static_assert(manual_progress_provider<provider::tcp_tag>);
+
+// Query provider-specific limits at compile time
+constexpr auto verbs_inject_size = provider_traits<provider::verbs_tag>::max_inject_size;  // 64
+constexpr auto shm_inject_size = provider_traits<provider::shm_tag>::max_inject_size;      // 4096
+
+// Compile-time helper functions
+static_assert(can_inject<provider::verbs_tag>(32));   // true: 32 <= 64
+static_assert(!can_inject<provider::verbs_tag>(128)); // false: 128 > 64
+
+// Get default MR mode for a provider
+constexpr auto verbs_mr = get_mr_mode<provider::verbs_tag>();
+// verbs_mr == mr_mode_flags::basic | mr_mode_flags::local | mr_mode_flags::prov_key
+
+// Check progress requirements
+static_assert(requires_manual_progress<provider::verbs_tag>());
+static_assert(!requires_manual_progress<provider::slingshot_tag>());
+```
+
+### Protocol Abstraction Layer
+
+Define custom protocol types with compile-time capability validation:
+
+```cpp
+#include <loom/loom.hpp>
+#include <loom/protocol/protocol.hpp>
+
+using namespace loom;
+
+// Define a protocol with static capability flags
+template <typename Provider>
+class my_rdma_protocol {
+public:
+    using provider_type = Provider;
+
+    // Static capability declarations - checked at compile time
+    static constexpr bool supports_rma = true;
+    static constexpr bool supports_tagged = true;
+    static constexpr bool supports_atomic = native_atomic_provider<Provider>;
+    static constexpr bool supports_inject = provider_traits<Provider>::supports_inject;
+
+    explicit my_rdma_protocol(endpoint& ep, memory_region& mr)
+        : ep_(ep), mr_(mr) {}
+
+    [[nodiscard]] auto name() const noexcept -> const char* {
+        return "my_rdma_protocol";
+    }
+
+    // Required by basic_protocol concept
+    [[nodiscard]] auto send(std::span<const std::byte> data, context_ptr<void> ctx = {})
+        -> void_result {
+        return ep_.send(data, ctx);
+    }
+
+    [[nodiscard]] auto recv(std::span<std::byte> buf, context_ptr<void> ctx = {})
+        -> void_result {
+        return ep_.recv(buf, ctx);
+    }
+
+    // Required by tagged_protocol concept
+    [[nodiscard]] auto tagged_send(std::span<const std::byte> data, std::uint64_t tag,
+                                   context_ptr<void> ctx = {}) -> void_result {
+        return ep_.tagged_send(data, tag, ctx);
+    }
+
+    [[nodiscard]] auto tagged_recv(std::span<std::byte> buf, std::uint64_t tag,
+                                   std::uint64_t ignore = 0, context_ptr<void> ctx = {})
+        -> void_result {
+        return ep_.tagged_recv(buf, tag, ignore, ctx);
+    }
+
+    // Required by rma_protocol concept
+    [[nodiscard]] auto read(std::span<std::byte> local, rma_addr remote,
+                            mr_key key, context_ptr<void> ctx = {}) -> void_result {
+        return rma::read(ep_, local, mr_, remote_memory{remote.get(), key.get(), local.size()}, ctx);
+    }
+
+    [[nodiscard]] auto write(std::span<const std::byte> local, rma_addr remote,
+                             mr_key key, context_ptr<void> ctx = {}) -> void_result {
+        return rma::write(ep_, local, mr_, remote_memory{remote.get(), key.get(), local.size()}, ctx);
+    }
+
+    // Required by inject_capable concept (when supported)
+    [[nodiscard]] auto inject(std::span<const std::byte> data,
+                              fabric_addr dest = fabric_addrs::unspecified) -> void_result
+        requires inject_capable_provider<Provider>
+    {
+        return ep_.inject(data, dest);
+    }
+
+private:
+    endpoint& ep_;
+    memory_region& mr_;
+};
+
+// Compile-time concept validation
+static_assert(basic_protocol<my_rdma_protocol<provider::verbs_tag>>);
+static_assert(tagged_protocol<my_rdma_protocol<provider::verbs_tag>>);
+static_assert(rma_protocol<my_rdma_protocol<provider::verbs_tag>>);
+static_assert(has_static_capabilities<my_rdma_protocol<provider::verbs_tag>>);
+static_assert(provider_aware_protocol<my_rdma_protocol<provider::verbs_tag>>);
+
+// Use protocol-generic functions
+void use_any_protocol(auto& proto) requires basic_protocol<decltype(proto)> {
+    std::array<std::byte, 64> buf{};
+    protocol::send(proto, std::span{buf});  // Generic send via protocol layer
+
+    // Conditionally use RMA if available
+    if constexpr (rma_protocol<decltype(proto)>) {
+        protocol::read(proto, std::span{buf}, rma_addr{0x1000}, mr_key{42});
+    }
+
+    // Query capabilities at compile time
+    using caps = protocol_capabilities<std::remove_cvref_t<decltype(proto)>>;
+    if constexpr (caps::static_rma) {
+        // RMA path - zero runtime overhead
+    }
+}
+```
+
+### Compile-Time Fabric Queries
+
+Use `fabric_query` for type-safe, compile-time capability requirements:
+
+```cpp
+#include <loom/loom.hpp>
+
+using namespace loom;
+
+// Define capability requirements at compile time
+using rdm_query = fabric_query<rdm_tagged_messaging>;
+using rma_query = fabric_query<rdma_write_ops, rdma_read_ops>;
+using atomic_query = fabric_query<atomic_ops>;
+using gpu_query = fabric_query<gpu_direct_rdma>;
+
+// Combine multiple capability requirements
+using full_query = fabric_query<rdm_tagged_messaging, rdma_write_ops, atomic_ops>;
+
+// Query capabilities are computed at compile time
+static_assert(rdm_query::get_endpoint_type() == endpoint_types::rdm);
+static_assert(rma_query::get_required_caps().has(capability::rma));
+static_assert(full_query::get_required_caps().has(capability::tagged));
+static_assert(full_query::get_required_caps().has(capability::rma));
+static_assert(full_query::get_required_caps().has(capability::atomic));
+
+auto main() -> int {
+    // Runtime query using compile-time hints
+    auto providers = rdm_query::query();  // Returns result<provider_range>
+    if (!providers) {
+        return 1;
+    }
+
+    // Iterate over matching providers
+    for (const auto& info : *providers) {
+        auto fabric_attr = info.get_fabric_attr();
+        if (fabric_attr) {
+            std::println("Found provider: {}", fabric_attr->provider_name);
+        }
+    }
+
+    // Or get just the first match
+    auto first = atomic_query::query_first();  // Returns result<optional<fabric_info>>
+
+    // Convenience function for common case
+    auto tagged_providers = query_providers<rdm_tagged_messaging>();
+
+    // Filter with a predicate
+    auto filtered = query_providers<rdma_write_ops>([](const fabric_info& info) {
+        auto attr = info.get_fabric_attr();
+        return attr && attr->provider_name == "verbs";
+    });
+
+    return 0;
+}
+```
+
 ## Potential Future Work
 
 - sender/receiver integration/implementation with [stdexec](https://github.com/NVIDIA/stdexec)/[beman::execution](https://github.com/bemanproject/execution).
