@@ -1,6 +1,6 @@
 # loom
 
-[<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Simple_treadle_floorloom%2C_line_drawing.png/500px-Simple_treadle_floorloom%2C_line_drawing.png">](https://en.wikipedia.org/wiki/Loom)
+[<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/7/79/Warp-weighted_loom_twill.jpg/250px-Warp-weighted_loom_twill.jpg">](https://en.wikipedia.org/wiki/Loom)
 
 C++ bindings for libfabric, done right.
 
