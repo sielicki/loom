@@ -1,5 +1,7 @@
 # loom
 
+[<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Simple_treadle_floorloom%2C_line_drawing.png/500px-Simple_treadle_floorloom%2C_line_drawing.png">](https://en.wikipedia.org/wiki/Loom)
+
 C++ bindings for libfabric, done right.
 
 loom provides an opinionated, idiomatic, and strongly-typed C++23 interface over [libfabric](https://github.com/ofiwg/libfabric), which is a low-level vendor-agnostic fabric abstraction layer for HPC/RDMA networking.
