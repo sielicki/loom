@@ -87,7 +87,7 @@ if(LOOM_USE_STDEXEC)
         FetchContent_Declare(
             stdexec
             GIT_REPOSITORY https://github.com/NVIDIA/stdexec.git
-            GIT_TAG        a1c78ecfc2cdc38d5f435c688036955d1e18117d
+            GIT_TAG        4b90a664736a63276d3d2efc1b70eb86e730b744
             GIT_SHALLOW    TRUE
         )
 
@@ -129,7 +129,7 @@ if(LOOM_USE_ASIO)
             FetchContent_Declare(
                 asio
                 GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
-                GIT_TAG        asio-1-30-2
+                GIT_TAG        55684d42ac00021b4c31ba8571aca414c863ead5
                 GIT_SHALLOW    TRUE
             )
 
@@ -184,6 +184,7 @@ endif()
 
 # Also try to detect beman::execution
 option(LOOM_USE_BEMAN_EXECUTION "Enable beman::execution integration" OFF)
+option(LOOM_FETCHCONTENT_BEMAN_EXECUTION "Allow FetchContent for beman::execution if not found" OFF)
 set(LOOM_HAS_BEMAN_EXECUTION OFF)
 
 if(LOOM_USE_BEMAN_EXECUTION)
@@ -191,36 +192,49 @@ if(LOOM_USE_BEMAN_EXECUTION)
     if(beman_execution_FOUND)
         message(STATUS "Found beman::execution via find_package")
         set(LOOM_HAS_BEMAN_EXECUTION ON)
+    elseif(LOOM_FETCHCONTENT_BEMAN_EXECUTION)
+        include(FetchContent)
+        message(STATUS "Fetching beman::execution via FetchContent")
 
-        if(NOT TARGET loom::execution)
-            add_library(loom_execution INTERFACE)
-            add_library(loom::execution ALIAS loom_execution)
+        FetchContent_Declare(
+            beman_execution
+            GIT_REPOSITORY https://github.com/beman-project/execution26.git
+            GIT_TAG        6a0bc94ec2497ad04289f24d0a57501d447afa8b
+            GIT_SHALLOW    TRUE
+        )
 
-            target_include_directories(loom_execution
-                INTERFACE
-                    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-                    $<INSTALL_INTERFACE:include>
-            )
-
-            target_link_libraries(loom_execution
-                INTERFACE
-                    loom::loom
-                    beman::execution
-            )
-
-            target_compile_definitions(loom_execution
-                INTERFACE
-                    LOOM_HAS_BEMAN_EXECUTION=1
-            )
-
-            target_compile_features(loom_execution INTERFACE cxx_std_23)
-
-            install(TARGETS loom_execution
-                EXPORT loomTargets
-            )
-        endif()
+        FetchContent_MakeAvailable(beman_execution)
+        set(LOOM_HAS_BEMAN_EXECUTION ON)
     else()
-        message(STATUS "beman::execution not found")
+        message(STATUS "beman::execution not found and FetchContent disabled")
+    endif()
+
+    if(LOOM_HAS_BEMAN_EXECUTION AND NOT TARGET loom::execution)
+        add_library(loom_execution INTERFACE)
+        add_library(loom::execution ALIAS loom_execution)
+
+        target_include_directories(loom_execution
+            INTERFACE
+                $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                $<INSTALL_INTERFACE:include>
+        )
+
+        target_link_libraries(loom_execution
+            INTERFACE
+                loom::loom
+                beman::execution
+        )
+
+        target_compile_definitions(loom_execution
+            INTERFACE
+                LOOM_HAS_BEMAN_EXECUTION=1
+        )
+
+        target_compile_features(loom_execution INTERFACE cxx_std_23)
+
+        install(TARGETS loom_execution
+            EXPORT loomTargets
+        )
     endif()
 endif()
 
