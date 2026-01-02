@@ -79,10 +79,17 @@ target_include_directories(test_trigger PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(test_trigger PRIVATE loom::loom)
 add_test(NAME test_trigger COMMAND test_trigger)
 
-# Async/stdexec integration tests - disabled until core is stable
-# add_executable(test_async_senders test_async_senders.cpp)
-# target_link_libraries(test_async_senders PRIVATE loom::loom)
-# add_test(NAME test_async_senders COMMAND test_async_senders)
+# Async/stdexec integration tests
+if(LOOM_HAS_STDEXEC)
+    message(STATUS "Building stdexec/P2300 integration tests")
+
+    add_executable(test_async_senders test_async_senders.cpp)
+    target_include_directories(test_async_senders PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_async_senders PRIVATE loom::execution)
+    add_test(NAME test_async_senders COMMAND test_async_senders)
+else()
+    message(STATUS "Skipping stdexec integration tests (LOOM_USE_STDEXEC=OFF)")
+endif()
 
 # Benchmarks - disabled until core is stable
 # find_package(MPI QUIET)

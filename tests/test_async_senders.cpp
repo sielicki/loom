@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
-#include <loom/async/completion_queue.hpp>
-#include <loom/async/rma.hpp>
-#include <loom/async/scheduler.hpp>
-#include <loom/async/send_recv.hpp>
+
+#include <loom/execution.hpp>
+#include <loom/loom.hpp>
 
 #include <array>
+#include <cstdint>
+#include <memory>
 #include <ranges>
 #include <vector>
 
@@ -20,19 +21,24 @@ suite async_senders_suite = [] {
     };
 
     "send sender concept"_test = [] {
-        static_assert(stdexec::sender<loom::async::send_sender>, "send_sender must satisfy sender");
+        static_assert(stdexec::sender<loom::execution::send_sender>,
+                      "send_sender must satisfy sender");
     };
 
     "recv sender concept"_test = [] {
-        static_assert(stdexec::sender<loom::async::recv_sender>, "recv_sender must satisfy sender");
+        static_assert(stdexec::sender<loom::execution::recv_sender>,
+                      "recv_sender must satisfy sender");
     };
 
     "rma senders concept"_test = [] {
-        static_assert(stdexec::sender<loom::async::read_sender>, "read_sender must satisfy sender");
-        static_assert(stdexec::sender<loom::async::write_sender>,
+        static_assert(stdexec::sender<loom::execution::read_sender>,
+                      "read_sender must satisfy sender");
+        static_assert(stdexec::sender<loom::execution::write_sender>,
                       "write_sender must satisfy sender");
-        static_assert(stdexec::sender<loom::async::atomic_sender<std::uint64_t>>,
-                      "atomic_sender must satisfy sender");
+        static_assert(stdexec::sender<loom::execution::fetch_add_sender<std::uint64_t>>,
+                      "fetch_add_sender must satisfy sender");
+        static_assert(stdexec::sender<loom::execution::compare_swap_sender<std::uint64_t>>,
+                      "compare_swap_sender must satisfy sender");
     };
 
     "sender composition when_all"_test = [] {
@@ -119,16 +125,32 @@ suite async_senders_suite = [] {
         static_assert(stdexec::sender<decltype(rmw)>, "RMW chain must be a sender");
     };
 
-    "atomic operations"_test = [] {
+    "atomic fetch_add operations"_test = [] {
         loom::endpoint ep{nullptr};
         loom::completion_queue cq{nullptr};
         loom::rma_addr addr{0x2000ULL};
         loom::mr_key key{99ULL};
+        loom::memory_region* result_mr = nullptr;
 
-        auto atomic_op = loom::rma_async(ep).fetch_add<std::uint64_t>(addr, 1, key, &cq) |
-                         stdexec::then([](std::uint64_t old_val) { return old_val + 1; });
+        auto atomic_op =
+            loom::rma_async(ep).fetch_add<std::uint64_t>(addr, 1, key, result_mr, &cq) |
+            stdexec::then([](std::uint64_t old_val) { return old_val + 1; });
 
-        static_assert(stdexec::sender<decltype(atomic_op)>, "atomic operation must be a sender");
+        static_assert(stdexec::sender<decltype(atomic_op)>, "fetch_add must be a sender");
+    };
+
+    "atomic compare_swap operations"_test = [] {
+        loom::endpoint ep{nullptr};
+        loom::completion_queue cq{nullptr};
+        loom::rma_addr addr{0x3000ULL};
+        loom::mr_key key{100ULL};
+        loom::memory_region* result_mr = nullptr;
+
+        auto cas_op =
+            loom::rma_async(ep).compare_swap<std::uint64_t>(addr, 0, 1, key, result_mr, &cq) |
+            stdexec::then([](std::uint64_t old_val) { return old_val == 0; });
+
+        static_assert(stdexec::sender<decltype(cas_op)>, "compare_swap must be a sender");
     };
 
     "recv return type"_test = [] {

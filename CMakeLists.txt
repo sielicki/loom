@@ -152,6 +152,78 @@ if(LOOM_USE_ASIO)
     endif()
 endif()
 
+# Create loom_execution interface library if stdexec/beman::execution is available
+if(LOOM_HAS_STDEXEC)
+    add_library(loom_execution INTERFACE)
+    add_library(loom::execution ALIAS loom_execution)
+
+    target_include_directories(loom_execution
+        INTERFACE
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+    )
+
+    target_link_libraries(loom_execution
+        INTERFACE
+            loom::loom
+            STDEXEC::stdexec
+    )
+
+    target_compile_definitions(loom_execution
+        INTERFACE
+            LOOM_HAS_STDEXEC=1
+    )
+
+    target_compile_features(loom_execution INTERFACE cxx_std_23)
+
+    # Install loom_execution
+    install(TARGETS loom_execution
+        EXPORT loomTargets
+    )
+endif()
+
+# Also try to detect beman::execution
+option(LOOM_USE_BEMAN_EXECUTION "Enable beman::execution integration" OFF)
+set(LOOM_HAS_BEMAN_EXECUTION OFF)
+
+if(LOOM_USE_BEMAN_EXECUTION)
+    find_package(beman_execution QUIET)
+    if(beman_execution_FOUND)
+        message(STATUS "Found beman::execution via find_package")
+        set(LOOM_HAS_BEMAN_EXECUTION ON)
+
+        if(NOT TARGET loom::execution)
+            add_library(loom_execution INTERFACE)
+            add_library(loom::execution ALIAS loom_execution)
+
+            target_include_directories(loom_execution
+                INTERFACE
+                    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                    $<INSTALL_INTERFACE:include>
+            )
+
+            target_link_libraries(loom_execution
+                INTERFACE
+                    loom::loom
+                    beman::execution
+            )
+
+            target_compile_definitions(loom_execution
+                INTERFACE
+                    LOOM_HAS_BEMAN_EXECUTION=1
+            )
+
+            target_compile_features(loom_execution INTERFACE cxx_std_23)
+
+            install(TARGETS loom_execution
+                EXPORT loomTargets
+            )
+        endif()
+    else()
+        message(STATUS "beman::execution not found")
+    endif()
+endif()
+
 # Create loom_asio interface library if Asio is available
 if(LOOM_HAS_ASIO)
     add_library(loom_asio INTERFACE)

@@ -623,9 +623,157 @@ nix build .#loom-asio
 nix develop .#asio  # Development shell with Asio
 ```
 
+### P2300 std::execution Integration
+
+loom provides first-class integration with P2300-style sender/receiver async programming.
+This works with multiple implementations:
+
+- [stdexec](https://github.com/NVIDIA/stdexec) (NVIDIA's reference implementation)
+- [beman::execution](https://github.com/bemanproject/execution) (Beman project)
+- `std::execution` (future C++26 standard)
+
+The integration is designed to be generic - code written against loom's execution interface
+will work with any conforming P2300 implementation with minimal changes.
+
+```cpp
+#include <loom/execution.hpp>
+#include <stdexec/execution.hpp>  // Or beman/execution/execution.hpp
+
+using namespace loom;
+
+auto main() -> int {
+    // ... fabric/domain/endpoint setup as in previous examples ...
+
+    // Create sender factories for operations
+    auto msg_ops = loom::async(ep);       // For messaging
+    auto rma_ops = loom::rma_async(ep);   // For RMA
+
+    // Create senders for async operations
+    std::array<std::byte, 4096> buffer{};
+    auto send_op = msg_ops.send(buffer, &cq);
+    auto recv_op = msg_ops.recv(buffer, &cq);
+
+    // Compose with P2300 algorithms
+    auto pipeline = send_op
+                  | stdexec::then([] { std::println("sent!"); });
+
+    // Parallel operations with when_all
+    std::array<std::byte, 4096> buf1{}, buf2{};
+    auto both = stdexec::when_all(
+        msg_ops.send(buf1, &cq),
+        msg_ops.recv(buf2, &cq)
+    );
+
+    // Chain operations with let_value
+    auto send_then_recv = msg_ops.send(buf1, &cq)
+                        | stdexec::let_value([&] {
+                              return msg_ops.recv(buf2, &cq);
+                          });
+
+    // Error handling
+    auto with_error = msg_ops.send(buffer, &cq)
+                    | stdexec::upon_error([](std::error_code ec) {
+                          std::println(stderr, "Error: {}", ec.message());
+                          return -1;
+                      });
+
+    return 0;
+}
+```
+
+#### RMA Operations with Senders
+
+```cpp
+#include <loom/execution.hpp>
+
+// ... setup ...
+
+auto rma_ops = loom::rma_async(ep);
+
+// RMA read sender
+auto read_op = rma_ops.read(local_buffer, remote_addr, key, &cq);
+
+// RMA write sender
+auto write_op = rma_ops.write(local_buffer, remote_addr, key, &cq);
+
+// Read-modify-write pattern
+auto rmw = rma_ops.read(buffer, addr, key, &cq)
+         | stdexec::then([&] {
+               // Modify buffer
+               process(buffer);
+               return buffer;
+           })
+         | stdexec::let_value([&](auto& buf) {
+               return rma_ops.write(buf, addr, key, &cq);
+           });
+
+// Atomic operations
+auto atomic_op = rma_ops.fetch_add<std::uint64_t>(addr, 1, key, &cq)
+               | stdexec::then([](std::uint64_t old_val) {
+                     return old_val + 1;
+                 });
+```
+
+#### Scheduler
+
+loom provides a scheduler type for scheduling work on a completion queue context:
+
+```cpp
+#include <loom/execution.hpp>
+
+// Create a scheduler from a completion queue
+auto cq_ptr = std::make_shared<loom::completion_queue>(std::move(cq));
+loom::scheduler sched{cq_ptr};
+
+// Schedule work on the CQ context
+auto work = stdexec::schedule(sched)
+          | stdexec::then([] { return 42; });
+
+// Use with starts_on for explicit context control
+auto on_cq = stdexec::starts_on(sched, some_sender);
+```
+
+#### Building with P2300
+
+Enable stdexec integration:
+
+```bash
+cmake -B build -DLOOM_USE_STDEXEC=ON
+```
+
+Or with beman::execution:
+
+```bash
+cmake -B build -DLOOM_USE_BEMAN_EXECUTION=ON
+```
+
+With Nix (recommended):
+
+```bash
+nix build .#loom-stdexec
+nix develop .#stdexec  # Development shell with stdexec
+```
+
+#### Backend Detection
+
+The P2300 backend is automatically detected at compile time:
+
+```cpp
+#include <loom/execution.hpp>
+
+if constexpr (loom::execution::has_execution_backend) {
+    std::println("Using: {}", loom::execution::execution_backend_name);
+    // Prints: "stdexec", "beman::execution", or "std::execution"
+}
+
+// Check for specific features
+if constexpr (loom::execution::features::has_when_all) {
+    auto both = loom::execution::when_all(sender1, sender2);
+}
+```
+
 ## Potential Future Work
 
-- sender/receiver integration/implementation with [stdexec](https://github.com/NVIDIA/stdexec)/[beman::execution](https://github.com/bemanproject/execution).
 - competing implementation of [NCCL/RCCL ofi plugin](https://github.com/aws/aws-ofi-nccl).
 - competing implementation of [nvshmem ofi plugin](https://github.com/NVIDIA/nvshmem/tree/devel/src/modules/transport/libfabric).
 - competing implementation of [nixl ofi plugin](https://github.com/ai-dynamo/nixl/tree/main/src/plugins/libfabric).
