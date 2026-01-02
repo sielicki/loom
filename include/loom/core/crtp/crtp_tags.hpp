@@ -22,5 +22,10 @@ struct event_tag {};
  * @brief Tag type for remote memory CRTP base classes.
  */
 struct remote_memory_tag {};
+/**
+ * @struct asio_context_tag
+ * @brief Tag type for asio context CRTP base classes.
+ */
+struct asio_context_tag {};
 
 }  // namespace loom::crtp

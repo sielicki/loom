@@ -57,6 +57,8 @@ struct endpoint_impl {
 };
 }  // namespace detail
 
+endpoint::endpoint() = default;
+
 endpoint::endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 endpoint::~endpoint() = default;

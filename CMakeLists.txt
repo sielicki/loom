@@ -98,6 +98,92 @@ if(LOOM_USE_STDEXEC)
     endif()
 endif()
 
+# Asio - optional dependency for async integration
+option(LOOM_USE_ASIO "Enable Asio integration" OFF)
+option(LOOM_FETCHCONTENT_ASIO "Allow FetchContent for Asio if not found" OFF)
+
+set(LOOM_HAS_ASIO OFF)
+
+if(LOOM_USE_ASIO)
+    # Try to find asio via find_package first (e.g., from Nix or system install)
+    find_package(asio QUIET)
+
+    if(asio_FOUND)
+        message(STATUS "Found Asio via find_package")
+        set(LOOM_HAS_ASIO ON)
+        set(ASIO_TARGET asio::asio)
+    else()
+        # Try pkg-config
+        if(PKG_CONFIG_FOUND)
+            pkg_check_modules(ASIO QUIET asio)
+        endif()
+
+        if(ASIO_FOUND)
+            message(STATUS "Found Asio via pkg-config")
+            set(LOOM_HAS_ASIO ON)
+        elseif(LOOM_FETCHCONTENT_ASIO)
+            # Fall back to FetchContent if allowed
+            include(FetchContent)
+            message(STATUS "Fetching Asio via FetchContent")
+
+            FetchContent_Declare(
+                asio
+                GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
+                GIT_TAG        asio-1-30-2
+                GIT_SHALLOW    TRUE
+            )
+
+            FetchContent_MakeAvailable(asio)
+
+            # Create interface library for header-only asio
+            add_library(asio_headers INTERFACE)
+            target_include_directories(asio_headers INTERFACE
+                ${asio_SOURCE_DIR}/asio/include
+            )
+            target_compile_definitions(asio_headers INTERFACE
+                ASIO_STANDALONE
+                ASIO_NO_DEPRECATED
+            )
+            set(ASIO_TARGET asio_headers)
+            set(LOOM_HAS_ASIO ON)
+        else()
+            message(STATUS "Asio not found and FetchContent disabled - Asio integration will be skipped")
+        endif()
+    endif()
+endif()
+
+# Create loom_asio interface library if Asio is available
+if(LOOM_HAS_ASIO)
+    add_library(loom_asio INTERFACE)
+    add_library(loom::asio ALIAS loom_asio)
+
+    target_include_directories(loom_asio
+        INTERFACE
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:include>
+    )
+
+    target_link_libraries(loom_asio
+        INTERFACE
+            loom::loom
+            ${ASIO_TARGET}
+    )
+
+    target_compile_definitions(loom_asio
+        INTERFACE
+            LOOM_HAS_ASIO=1
+            ASIO_STANDALONE
+            ASIO_NO_DEPRECATED
+    )
+
+    target_compile_features(loom_asio INTERFACE cxx_std_23)
+
+    # Install loom_asio
+    install(TARGETS loom_asio
+        EXPORT loomTargets
+    )
+endif()
+
 # Main library
 add_library(loom
     src/address.cpp

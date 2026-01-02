@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
+#include "loom/core/address_vector.hpp"
 #include "loom/core/atomic.hpp"
 #include "loom/core/collective.hpp"
 #include "loom/core/concepts/capabilities.hpp"

@@ -60,6 +60,9 @@
           # Use our custom stdexec derivation (header-only)
           stdexec = pkgs.callPackage ./nix/pkgs/stdexec { };
 
+          # Asio (standalone, header-only)
+          asio = pkgs.asio;
+
           # Common build inputs for all targets
           commonBuildInputs = with pkgs;
             [
@@ -109,11 +112,13 @@
             , pkg-config
             , libfabric
             , stdexec
+            , asio ? null
             , rdma-core
             , numactl
             , darwin ? null
             , enableTests ? true
             , enableExamples ? false
+            , enableAsio ? false
             , # Disabled until core is stable
               enableAsan ? false
             , enableUbsan ? false
@@ -139,6 +144,7 @@
                   libfabric
                   stdexec
                 ]
+                ++ lib.optionals enableAsio [ asio ]
                 ++ lib.optionals (!stdenv.isDarwin) [
                   rdma-core
                   numactl
@@ -163,7 +169,9 @@
                 }"
                   # Disable FetchContent in Nix builds - we provide dependencies
                   "-DLOOM_FETCHCONTENT_STDEXEC=OFF"
+                  "-DLOOM_FETCHCONTENT_ASIO=OFF"
                 ]
+                ++ lib.optionals enableAsio [ "-DLOOM_USE_ASIO=ON" ]
                 ++ lib.optionals enableAsan [ "-DLOOM_ENABLE_ASAN=ON" ]
                 ++ lib.optionals enableUbsan [ "-DLOOM_ENABLE_UBSAN=ON" ];
 
@@ -225,6 +233,18 @@
 
               # Clang build (for all platforms)
               loom-clang = pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec; };
+
+              # Build with Asio integration
+              loom-asio =
+                if isDarwin
+                then pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec asio; enableAsio = true; }
+                else
+                  pkgs.gcc15Stdenv.mkDerivation (mkLoom {
+                    stdenv = pkgs.gcc15Stdenv;
+                    inherit (pkgs) lib cmake ninja pkg-config rdma-core numactl;
+                    inherit libfabric stdexec asio;
+                    enableAsio = true;
+                  });
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
               loom-debug = pkgs.callPackage mkLoom {
@@ -352,6 +372,48 @@
                   fi
                 '';
               };
+
+              # Asio development shell
+              asio =
+                let
+                  stdenv =
+                    if isDarwin
+                    then pkgs.llvmPackages_latest.stdenv
+                    else pkgs.gcc15Stdenv;
+                in
+                pkgs.mkShell.override { inherit stdenv; } {
+                  name = "loom-dev-asio";
+
+                  inputsFrom = [
+                    self'.packages.loom-asio
+                    config.treefmt.build.devShell
+                  ];
+
+                  buildInputs = commonBuildInputs ++ devDependencies ++ testDependencies ++ [
+                    asio
+                  ];
+
+                  shellHook = ''
+                    echo "🧵 Loom Development Environment (Asio)"
+                    echo "======================================"
+                    echo ""
+                    echo "Platform: ${system}"
+                    echo "Compiler: $(${stdenv.cc}/bin/c++ --version | head -n1)"
+                    echo "Asio: ${asio.version}"
+                    echo ""
+
+                    alias configure='cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLOOM_USE_ASIO=ON'
+                    alias build='cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)'
+                    alias test='(cd build && ctest --output-on-failure)'
+                    alias clean='rm -rf build'
+
+                    # Create symlink to compile_commands.json if build directory exists
+                    if [ -f build/compile_commands.json ] && [ ! -e compile_commands.json ]; then
+                      ln -s build/compile_commands.json compile_commands.json
+                      echo "Created symlink: compile_commands.json -> build/compile_commands.json"
+                    fi
+                  '';
+                };
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
               # Sanitizer development shell (Linux only)
@@ -398,6 +460,9 @@
 
               # Build check with Clang
               loom-build-clang = self'.packages.loom-clang;
+
+              # Build check with Asio integration
+              loom-build-asio = self'.packages.loom-asio;
 
               # Formatting check (treefmt)
               formatting = config.treefmt.build.check self;

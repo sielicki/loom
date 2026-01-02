@@ -89,7 +89,7 @@ public:
     /**
      * @brief Default constructor creating an empty endpoint.
      */
-    endpoint() = default;
+    endpoint();
 
     /**
      * @brief Constructs an endpoint from an implementation pointer.

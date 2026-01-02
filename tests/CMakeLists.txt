@@ -106,3 +106,30 @@ add_test(NAME test_trigger COMMAND test_trigger)
 
 # Fabtests - disabled until core is stable
 # add_subdirectory(fabtests)
+
+# Asio integration tests
+if(LOOM_HAS_ASIO)
+    message(STATUS "Building Asio integration tests")
+
+    add_executable(test_asio_context test_asio_context.cpp)
+    target_include_directories(test_asio_context PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_asio_context PRIVATE loom::asio)
+    add_test(NAME test_asio_context COMMAND test_asio_context)
+
+    add_executable(test_asio_registered_buffer test_asio_registered_buffer.cpp)
+    target_include_directories(test_asio_registered_buffer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_asio_registered_buffer PRIVATE loom::asio)
+    add_test(NAME test_asio_registered_buffer COMMAND test_asio_registered_buffer)
+
+    add_executable(test_asio_fabric_service test_asio_fabric_service.cpp)
+    target_include_directories(test_asio_fabric_service PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_asio_fabric_service PRIVATE loom::asio)
+    add_test(NAME test_asio_fabric_service COMMAND test_asio_fabric_service)
+
+    add_executable(test_asio_endpoint test_asio_endpoint.cpp)
+    target_include_directories(test_asio_endpoint PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_asio_endpoint PRIVATE loom::asio)
+    add_test(NAME test_asio_endpoint COMMAND test_asio_endpoint)
+else()
+    message(STATUS "Skipping Asio integration tests (LOOM_USE_ASIO=OFF)")
+endif()

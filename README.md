@@ -488,10 +488,144 @@ auto main() -> int {
 }
 ```
 
+### Asio Integration
+
+loom provides first-class integration with [Asio](https://think-async.com/Asio/) for
+async I/O, supporting all Asio completion token types (callbacks, `use_awaitable`,
+`use_future`, `deferred`):
+
+```cpp
+#include <loom/asio.hpp>
+#include <asio/io_context.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/use_awaitable.hpp>
+
+auto main() -> int {
+    using namespace loom;
+
+    // Query for fabric provider
+    auto info = query_fabric({.ep_type = endpoint_types::rdm}).value();
+    auto fabric = fabric::create(info).value();
+    auto domain = domain::create(fabric, info).value();
+    auto cq = completion_queue::create(domain, {.size = 128}).value();
+    auto av = address_vector::create(domain).value();
+
+    // Create Asio io_context
+    ::asio::io_context ioc;
+
+    // Create an Asio-integrated endpoint using the convenience helper
+    auto ep = loom::asio::make_endpoint(ioc, domain, info, cq, av).value();
+
+    // Register the completion queue with the fabric service for polling
+    auto& service = loom::asio::fabric_service::use(ioc);
+    service.register_cq(cq);
+    service.start();
+
+    // Register memory for RDMA operations
+    std::array<std::byte, 4096> buffer{};
+    auto mr = memory_region::register_memory(
+        domain, std::span{buffer},
+        mr_access_flags::send | mr_access_flags::recv
+    ).value();
+
+    // Async send with callback
+    ep.async_send(::asio::buffer(buffer), [](std::error_code ec, std::size_t n) {
+        if (!ec) {
+            std::println("Sent {} bytes", n);
+        }
+    });
+
+    // Or use std::future
+    auto future = ep.async_receive(::asio::buffer(buffer), ::asio::use_future);
+    ioc.run();
+    auto bytes = future.get();  // Blocks until receive completes
+
+    return 0;
+}
+```
+
+#### Coroutine Support
+
+```cpp
+#include <loom/asio.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/use_awaitable.hpp>
+
+asio::awaitable<void> communicate(loom::asio::endpoint& ep) {
+    std::array<std::byte, 1024> buf{};
+
+    // Await async operations naturally
+    std::size_t n = co_await ep.async_receive(
+        ::asio::buffer(buf),
+        ::asio::use_awaitable
+    );
+    std::println("Received {} bytes", n);
+
+    // Tagged messaging with coroutines
+    co_await ep.async_tagged_send(
+        ::asio::buffer(buf),
+        0x1234,  // tag
+        ::asio::use_awaitable
+    );
+}
+
+auto main() -> int {
+    ::asio::io_context ioc;
+    // ... setup endpoint as above ...
+
+    ::asio::co_spawn(ioc, communicate(ep), ::asio::detached);
+    ioc.run();
+    return 0;
+}
+```
+
+#### Registered Buffers
+
+Use `registered_buffer` for zero-copy operations with RDMA-registered memory:
+
+```cpp
+#include <loom/asio.hpp>
+
+// ... fabric/domain setup ...
+
+std::array<std::byte, 4096> storage{};
+auto mr = memory_region::register_memory(
+    domain, std::span{storage},
+    mr_access_flags::send | mr_access_flags::recv
+).value();
+
+// Create a DynamicBuffer backed by registered memory
+loom::asio::registered_buffer buf(mr, std::span{storage});
+
+// Use with async_read/async_write or directly
+auto prepared = buf.prepare(1024);  // Get writable buffer
+// ... receive data into prepared ...
+buf.commit(bytes_received);         // Commit received data
+
+auto data = buf.data();             // Get readable view
+// ... process data ...
+buf.consume(bytes_processed);       // Release processed data
+```
+
+#### Building with Asio
+
+Enable Asio integration via CMake:
+
+```bash
+cmake -B build -DLOOM_USE_ASIO=ON
+```
+
+Or with Nix:
+
+```bash
+nix build .#loom-asio
+nix develop .#asio  # Development shell with Asio
+```
+
 ## Potential Future Work
 
 - sender/receiver integration/implementation with [stdexec](https://github.com/NVIDIA/stdexec)/[beman::execution](https://github.com/bemanproject/execution).
-- integration/implementation with [asio](https://think-async.com/Asio/).
 - competing implementation of [NCCL/RCCL ofi plugin](https://github.com/aws/aws-ofi-nccl).
 - competing implementation of [nvshmem ofi plugin](https://github.com/NVIDIA/nvshmem/tree/devel/src/modules/transport/libfabric).
 - competing implementation of [nixl ofi plugin](https://github.com/ai-dynamo/nixl/tree/main/src/plugins/libfabric).
