@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-fedora:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, Release]
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg CC=${{ matrix.cc }} \
+            --build-arg CXX=${{ matrix.cxx }} \
+            --build-arg BUILD_TYPE=${{ matrix.build_type }} \
+            -t loom:${{ matrix.compiler }}-${{ matrix.build_type }} \
+            .
+
+      - name: Run tests
+        run: |
+          docker run --rm loom:${{ matrix.compiler }}-${{ matrix.build_type }}
+
+  build-fedora-stdexec:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image with stdexec
+        run: |
+          docker build \
+            --build-arg CC=${{ matrix.cc }} \
+            --build-arg CXX=${{ matrix.cxx }} \
+            --build-arg BUILD_TYPE=Release \
+            --build-arg USE_STDEXEC=ON \
+            -t loom:${{ matrix.compiler }}-stdexec \
+            .
+
+      - name: Run tests
+        run: |
+          docker run --rm loom:${{ matrix.compiler }}-stdexec
+
+  build-fedora-asio:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image with Asio
+        run: |
+          docker build \
+            --build-arg CC=${{ matrix.cc }} \
+            --build-arg CXX=${{ matrix.cxx }} \
+            --build-arg BUILD_TYPE=Release \
+            --build-arg USE_ASIO=ON \
+            -t loom:${{ matrix.compiler }}-asio \
+            .
+
+      - name: Run tests
+        run: |
+          docker run --rm loom:${{ matrix.compiler }}-asio
+
+  build-fedora-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image with all features
+        run: |
+          docker build \
+            --build-arg CC=clang \
+            --build-arg CXX=clang++ \
+            --build-arg BUILD_TYPE=Release \
+            --build-arg USE_STDEXEC=ON \
+            --build-arg USE_ASIO=ON \
+            -t loom:full \
+            .
+
+      - name: Run tests
+        run: |
+          docker run --rm loom:full
