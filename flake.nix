@@ -231,11 +231,11 @@
                 if isDarwin
                 then pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec; }
                 else
-                  pkgs.gcc15Stdenv.mkDerivation (mkLoom {
+                  mkLoom {
                     stdenv = pkgs.gcc15Stdenv;
                     inherit (pkgs) lib cmake ninja pkg-config rdma-core numactl;
                     inherit libfabric stdexec;
-                  });
+                  };
 
               # Clang build (for all platforms)
               loom-clang = pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec; };
@@ -245,12 +245,12 @@
                 if isDarwin
                 then pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec asio; enableAsio = true; }
                 else
-                  pkgs.gcc15Stdenv.mkDerivation (mkLoom {
+                  mkLoom {
                     stdenv = pkgs.gcc15Stdenv;
                     inherit (pkgs) lib cmake ninja pkg-config rdma-core numactl;
                     inherit libfabric stdexec asio;
                     enableAsio = true;
-                  });
+                  };
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
               loom-debug = pkgs.callPackage mkLoom {
