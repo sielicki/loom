@@ -9,8 +9,8 @@
 
 #include <array>
 
-#include <catch2/catch_test_macros.hpp>
 #include <asio/io_context.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using namespace std::literals;
 
@@ -99,8 +99,7 @@ TEST_CASE("const_registered_buffer buffer_sequence interface", "[asio][buffer]")
     std::array<std::byte, 64> storage{};
     ::asio::const_buffer asio_buf{storage.data(), storage.size()};
 
-    loom::asio::const_registered_buffer buf{
-        asio_buf, nullptr, loom::asio::registered_buffer_id{0}};
+    loom::asio::const_registered_buffer buf{asio_buf, nullptr, loom::asio::registered_buffer_id{0}};
 
     auto begin = loom::asio::buffer_sequence_begin(buf);
     auto end = loom::asio::buffer_sequence_end(buf);
@@ -148,8 +147,7 @@ TEST_CASE("buffer() returns copy of const_registered_buffer", "[asio][buffer]") 
     std::array<std::byte, 64> storage{};
     ::asio::const_buffer asio_buf{storage.data(), storage.size()};
 
-    loom::asio::const_registered_buffer buf{
-        asio_buf, nullptr, loom::asio::registered_buffer_id{5}};
+    loom::asio::const_registered_buffer buf{asio_buf, nullptr, loom::asio::registered_buffer_id{5}};
 
     auto copy = loom::asio::buffer(buf);
     REQUIRE(copy.data() == storage.data());
@@ -161,8 +159,7 @@ TEST_CASE("buffer() with size limits const_registered_buffer", "[asio][buffer]")
     std::array<std::byte, 64> storage{};
     ::asio::const_buffer asio_buf{storage.data(), storage.size()};
 
-    loom::asio::const_registered_buffer buf{
-        asio_buf, nullptr, loom::asio::registered_buffer_id{6}};
+    loom::asio::const_registered_buffer buf{asio_buf, nullptr, loom::asio::registered_buffer_id{6}};
 
     auto limited = loom::asio::buffer(buf, 16);
     REQUIRE(limited.data() == storage.data());
@@ -193,11 +190,8 @@ TEST_CASE("buffer_registration with fabric", "[asio][buffer][.integration]") {
     std::array<std::byte, 2048> buf2{};
     std::array buffers = {::asio::buffer(buf1), ::asio::buffer(buf2)};
 
-    auto reg_result =
-        loom::asio::register_buffers(ioc,
-                                     *domain_result,
-                                     buffers,
-                                     loom::mr_access_flags::send | loom::mr_access_flags::recv);
+    auto reg_result = loom::asio::register_buffers(
+        ioc, *domain_result, buffers, loom::mr_access_flags::send | loom::mr_access_flags::recv);
 
     REQUIRE(reg_result.has_value());
 
@@ -235,11 +229,8 @@ TEST_CASE("buffer_registration iteration", "[asio][buffer][.integration]") {
     std::array<std::byte, 512> buf3{};
     std::array buffers = {::asio::buffer(buf1), ::asio::buffer(buf2), ::asio::buffer(buf3)};
 
-    auto reg_result =
-        loom::asio::register_buffers(ioc,
-                                     *domain_result,
-                                     buffers,
-                                     loom::mr_access_flags::send | loom::mr_access_flags::recv);
+    auto reg_result = loom::asio::register_buffers(
+        ioc, *domain_result, buffers, loom::mr_access_flags::send | loom::mr_access_flags::recv);
 
     REQUIRE(reg_result.has_value());
 
@@ -271,11 +262,8 @@ TEST_CASE("buffer_registration move semantics", "[asio][buffer][.integration]") 
     std::array<std::byte, 256> buf{};
     std::array buffers = {::asio::buffer(buf)};
 
-    auto reg_result =
-        loom::asio::register_buffers(ioc,
-                                     *domain_result,
-                                     buffers,
-                                     loom::mr_access_flags::send | loom::mr_access_flags::recv);
+    auto reg_result = loom::asio::register_buffers(
+        ioc, *domain_result, buffers, loom::mr_access_flags::send | loom::mr_access_flags::recv);
 
     REQUIRE(reg_result.has_value());
 

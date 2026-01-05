@@ -45,7 +45,8 @@ inline auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count
     return ret == 0;
 }
 
-inline auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
+inline auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out)
+    -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
 
     auto ret =

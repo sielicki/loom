@@ -29,9 +29,9 @@ inline auto inject_write(endpoint& ep, std::span<const std::byte> data, remote_m
 }
 
 inline auto inject_write_data(endpoint& ep,
-                               std::span<const std::byte> data,
-                               remote_memory remote,
-                               std::uint64_t immediate_data) -> result<void> {
+                              std::span<const std::byte> data,
+                              remote_memory remote,
+                              std::uint64_t immediate_data) -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
 
     auto ret = fi_inject_writedata(

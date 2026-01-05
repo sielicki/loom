@@ -55,16 +55,15 @@ inline passive_endpoint::~passive_endpoint() = default;
 
 inline passive_endpoint::passive_endpoint(passive_endpoint&&) noexcept = default;
 
-inline auto passive_endpoint::operator=(passive_endpoint&&) noexcept -> passive_endpoint& =
-    default;
+inline auto passive_endpoint::operator=(passive_endpoint&&) noexcept -> passive_endpoint& = default;
 
 inline auto passive_endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->pep;
 }
 
 inline auto passive_endpoint::create(const fabric& fab,
-                                      const fabric_info& info,
-                                      memory_resource* resource) -> result<passive_endpoint> {
+                                     const fabric_info& info,
+                                     memory_resource* resource) -> result<passive_endpoint> {
     if (!fab || !info) {
         return make_error_result<passive_endpoint>(errc::invalid_argument);
     }

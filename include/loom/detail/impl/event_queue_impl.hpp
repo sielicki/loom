@@ -80,8 +80,8 @@ inline auto event_queue::impl_valid() const noexcept -> bool {
 }
 
 inline auto event_queue::create(const fabric& fab,
-                                 const event_queue_attr& attr,
-                                 memory_resource* resource) -> result<event_queue> {
+                                const event_queue_attr& attr,
+                                memory_resource* resource) -> result<event_queue> {
     if (!fab) {
         return make_error_result<event_queue>(errc::invalid_argument);
     }

@@ -55,16 +55,16 @@ inline scalable_endpoint::~scalable_endpoint() = default;
 
 inline scalable_endpoint::scalable_endpoint(scalable_endpoint&&) noexcept = default;
 
-inline auto scalable_endpoint::operator=(scalable_endpoint&&) noexcept -> scalable_endpoint& =
-    default;
+inline auto scalable_endpoint::operator=(scalable_endpoint&&) noexcept
+    -> scalable_endpoint& = default;
 
 inline auto scalable_endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->sep;
 }
 
 inline auto scalable_endpoint::create(const domain& dom,
-                                       const fabric_info& info,
-                                       memory_resource* resource) -> result<scalable_endpoint> {
+                                      const fabric_info& info,
+                                      memory_resource* resource) -> result<scalable_endpoint> {
     if (!dom || !info) {
         return make_error_result<scalable_endpoint>(errc::invalid_argument);
     }

@@ -152,8 +152,7 @@ public:
     [[nodiscard("completion queue creation result must be checked for errors")]]
     static auto create(const domain& dom,
                        const completion_queue_attr& attr = {},
-                       memory_resource* resource = nullptr)
-        -> result<completion_queue>;
+                       memory_resource* resource = nullptr) -> result<completion_queue>;
 
     [[nodiscard]] auto poll() const -> std::optional<completion_event>;
 

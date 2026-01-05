@@ -82,17 +82,17 @@ inline auto memory_region::impl_valid() const noexcept -> bool {
 }
 
 inline auto memory_region::register_memory(domain& dom,
-                                            std::span<std::byte> buffer,
-                                            mr_access access,
-                                            memory_resource* resource) -> result<memory_region> {
+                                           std::span<std::byte> buffer,
+                                           mr_access access,
+                                           memory_resource* resource) -> result<memory_region> {
     return register_memory(dom, buffer.data(), buffer.size(), access, resource);
 }
 
 inline auto memory_region::register_memory(domain& dom,
-                                            void* addr,
-                                            std::size_t length,
-                                            mr_access access,
-                                            memory_resource* resource) -> result<memory_region> {
+                                           void* addr,
+                                           std::size_t length,
+                                           mr_access access,
+                                           memory_resource* resource) -> result<memory_region> {
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fid_mr* mr = nullptr;
@@ -114,11 +114,11 @@ inline auto memory_region::register_memory(domain& dom,
 }
 
 inline auto memory_region::register_hmem(domain& dom,
-                                          void* addr,
-                                          std::size_t length,
-                                          mr_access access,
-                                          hmem_device device,
-                                          memory_resource* resource) -> result<memory_region> {
+                                         void* addr,
+                                         std::size_t length,
+                                         mr_access access,
+                                         hmem_device device,
+                                         memory_resource* resource) -> result<memory_region> {
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fi_mr_attr mr_attr{};
@@ -158,12 +158,12 @@ inline auto memory_region::register_hmem(domain& dom,
 }
 
 inline auto memory_region::register_dmabuf(domain& dom,
-                                            void* addr,
-                                            std::size_t length,
-                                            mr_access access,
-                                            int fd,
-                                            std::uint64_t offset,
-                                            memory_resource* resource) -> result<memory_region> {
+                                           void* addr,
+                                           std::size_t length,
+                                           mr_access access,
+                                           int fd,
+                                           std::uint64_t offset,
+                                           memory_resource* resource) -> result<memory_region> {
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fi_mr_dmabuf dmabuf{};

@@ -75,8 +75,8 @@ inline auto address_vector::impl_valid() const noexcept -> bool {
 }
 
 inline auto address_vector::create(const domain& dom,
-                                    const address_vector_attr& attr,
-                                    memory_resource* resource) -> result<address_vector> {
+                                   const address_vector_attr& attr,
+                                   memory_resource* resource) -> result<address_vector> {
     if (!dom) {
         return make_error_result<address_vector>(errc::invalid_argument);
     }
@@ -133,8 +133,8 @@ inline auto address_vector::insert(const address& addr, void* context) -> result
 }
 
 inline auto address_vector::insert_batch(std::span<const address> addresses,
-                                          std::span<av_handle> handles,
-                                          std::span<void*> contexts) -> result<std::size_t> {
+                                         std::span<av_handle> handles,
+                                         std::span<void*> contexts) -> result<std::size_t> {
     if (!impl_ || !impl_->av) {
         return make_error_result<std::size_t>(errc::invalid_argument);
     }

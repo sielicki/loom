@@ -3,8 +3,8 @@
 
 #include <algorithm>
 #include <chrono>
-#include <print>
 #include <numeric>
+#include <print>
 #include <vector>
 
 #include "benchmark_mpi_setup.hpp"
@@ -405,8 +405,7 @@ void benchmark_composition_overhead(const mpi_context& mpi, fabric_setup& setup)
         global_then.print("send | then");
         global_let_value.print("send | let_value");
 
-        std::print("  then overhead: +{:d}ns\n",
-                   (global_then.mean - global_bare.mean).count());
+        std::print("  then overhead: +{:d}ns\n", (global_then.mean - global_bare.mean).count());
         std::print("  let_value overhead: +{:d}ns\n",
                    (global_let_value.mean - global_bare.mean).count());
 
@@ -521,18 +520,13 @@ void benchmark_memory_overhead(const mpi_context& mpi) {
     if (mpi.is_root()) {
         std::print("\n=== Memory Overhead ===\n");
 
-        std::print("sizeof(send_sender):          {} bytes\n",
-                   sizeof(loom::async::send_sender));
-        std::print("sizeof(recv_sender):          {} bytes\n",
-                   sizeof(loom::async::recv_sender));
-        std::print("sizeof(read_sender):          {} bytes\n",
-                   sizeof(loom::async::read_sender));
-        std::print("sizeof(write_sender):         {} bytes\n",
-                   sizeof(loom::async::write_sender));
+        std::print("sizeof(send_sender):          {} bytes\n", sizeof(loom::async::send_sender));
+        std::print("sizeof(recv_sender):          {} bytes\n", sizeof(loom::async::recv_sender));
+        std::print("sizeof(read_sender):          {} bytes\n", sizeof(loom::async::read_sender));
+        std::print("sizeof(write_sender):         {} bytes\n", sizeof(loom::async::write_sender));
         std::print("sizeof(atomic_sender<u64>):   {} bytes\n",
                    sizeof(loom::async::atomic_sender<std::uint64_t>));
-        std::print("sizeof(scheduler):            {} bytes\n",
-                   sizeof(loom::scheduler));
+        std::print("sizeof(scheduler):            {} bytes\n", sizeof(loom::scheduler));
     }
 }
 

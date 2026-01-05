@@ -3,9 +3,9 @@
 #include <loom/core/address.hpp>
 #include <loom/core/error.hpp>
 
+#include <cassert>
 #include <cstring>
 #include <iostream>
-#include <cassert>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -35,7 +35,8 @@ int main() {
     // Test address_from_raw with unspecified format
     {
         int dummy = 0;
-        auto result = loom::address_from_raw(&dummy, sizeof(dummy), loom::address_format::unspecified);
+        auto result =
+            loom::address_from_raw(&dummy, sizeof(dummy), loom::address_format::unspecified);
         if (!std::holds_alternative<loom::unspecified_address>(result)) {
             std::cerr << "FAIL: unspecified format should return unspecified\n";
             ++failed;
@@ -128,12 +129,25 @@ int main() {
 
     // Test address_from_raw ib
     {
-        std::array<std::uint8_t, 16> raw_gid = {
-            0xFE, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
-        };
+        std::array<std::uint8_t, 16> raw_gid = {0xFE,
+                                                0x80,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x00,
+                                                0x01};
 
-        auto result = loom::address_from_raw(raw_gid.data(), raw_gid.size(), loom::address_format::ib);
+        auto result =
+            loom::address_from_raw(raw_gid.data(), raw_gid.size(), loom::address_format::ib);
         if (!std::holds_alternative<loom::ib_address>(result)) {
             std::cerr << "FAIL: ib should parse to ib_address\n";
             ++failed;
@@ -161,7 +175,8 @@ int main() {
     {
         std::array<std::uint8_t, 6> raw_mac = {0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E};
 
-        auto result = loom::address_from_raw(raw_mac.data(), raw_mac.size(), loom::address_format::ethernet);
+        auto result =
+            loom::address_from_raw(raw_mac.data(), raw_mac.size(), loom::address_format::ethernet);
         if (!std::holds_alternative<loom::ethernet_address>(result)) {
             std::cerr << "FAIL: ethernet should parse to ethernet_address\n";
             ++failed;
@@ -191,7 +206,8 @@ int main() {
             auto ec = loom::make_error_code(e);
             auto msg = ec.message();
             if (msg.empty()) {
-                std::cerr << "FAIL: error message for " << static_cast<int>(e) << " should not be empty\n";
+                std::cerr << "FAIL: error message for " << static_cast<int>(e)
+                          << " should not be empty\n";
                 ++failed;
             }
         };

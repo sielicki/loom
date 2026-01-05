@@ -26,8 +26,7 @@ using namespace loom;
 namespace {
 
 /// Helper to get a fabric_info for the tcp provider
-auto get_tcp_fabric_info(endpoint_type ep_type = endpoint_types::msg)
-    -> result<fabric_info> {
+auto get_tcp_fabric_info(endpoint_type ep_type = endpoint_types::msg) -> result<fabric_info> {
     fabric_hints hints{};
     hints.ep_type = ep_type;
     hints.provider_name = "tcp";
@@ -35,8 +34,7 @@ auto get_tcp_fabric_info(endpoint_type ep_type = endpoint_types::msg)
 }
 
 /// Helper to get any available fabric_info
-auto get_any_fabric_info(endpoint_type ep_type = endpoint_types::msg)
-    -> result<fabric_info> {
+auto get_any_fabric_info(endpoint_type ep_type = endpoint_types::msg) -> result<fabric_info> {
     fabric_hints hints{};
     hints.ep_type = ep_type;
     return query_fabric(hints);
@@ -410,8 +408,7 @@ TEST_CASE("endpoint enable after binding", "[endpoint][integration]") {
     REQUIRE(static_cast<bool>(av_result));
 
     // Bind resources
-    REQUIRE(static_cast<bool>(
-        ep_result->bind_cq(*cq_result, cq_bind::transmit | cq_bind::recv)));
+    REQUIRE(static_cast<bool>(ep_result->bind_cq(*cq_result, cq_bind::transmit | cq_bind::recv)));
     REQUIRE(static_cast<bool>(ep_result->bind_av(*av_result)));
 
     // Enable endpoint
@@ -439,8 +436,7 @@ TEST_CASE("memory_region::register_memory", "[memory][integration]") {
     // Register memory
     std::vector<std::byte> buffer(4096);
     auto mr_result = memory_region::register_memory(
-        *domain_result, std::span{buffer},
-        mr_access_flags::read | mr_access_flags::write);
+        *domain_result, std::span{buffer}, mr_access_flags::read | mr_access_flags::write);
 
     REQUIRE(static_cast<bool>(mr_result));
     REQUIRE(mr_result->impl_valid());
@@ -462,24 +458,21 @@ TEST_CASE("memory_region with various sizes", "[memory][integration]") {
     SECTION("small buffer") {
         std::vector<std::byte> buffer(64);
         auto mr_result = memory_region::register_memory(
-            *domain_result, std::span{buffer},
-            mr_access_flags::read | mr_access_flags::write);
+            *domain_result, std::span{buffer}, mr_access_flags::read | mr_access_flags::write);
         REQUIRE(static_cast<bool>(mr_result));
     }
 
     SECTION("medium buffer") {
         std::vector<std::byte> buffer(4096);
         auto mr_result = memory_region::register_memory(
-            *domain_result, std::span{buffer},
-            mr_access_flags::read | mr_access_flags::write);
+            *domain_result, std::span{buffer}, mr_access_flags::read | mr_access_flags::write);
         REQUIRE(static_cast<bool>(mr_result));
     }
 
     SECTION("large buffer") {
         std::vector<std::byte> buffer(1024 * 1024);  // 1 MB
         auto mr_result = memory_region::register_memory(
-            *domain_result, std::span{buffer},
-            mr_access_flags::read | mr_access_flags::write);
+            *domain_result, std::span{buffer}, mr_access_flags::read | mr_access_flags::write);
         REQUIRE(static_cast<bool>(mr_result));
     }
 }
@@ -499,8 +492,7 @@ TEST_CASE("memory_region properties", "[memory][integration]") {
 
     std::vector<std::byte> buffer(4096);
     auto mr_result = memory_region::register_memory(
-        *domain_result, std::span{buffer},
-        mr_access_flags::read | mr_access_flags::write);
+        *domain_result, std::span{buffer}, mr_access_flags::read | mr_access_flags::write);
     REQUIRE(static_cast<bool>(mr_result));
 
     // Access MR properties
@@ -542,8 +534,7 @@ TEST_CASE("full initialization chain", "[fabric][integration]") {
     REQUIRE(static_cast<bool>(ep_result));
 
     // Bind CQ and AV
-    REQUIRE(static_cast<bool>(
-        ep_result->bind_cq(*cq_result, cq_bind::transmit | cq_bind::recv)));
+    REQUIRE(static_cast<bool>(ep_result->bind_cq(*cq_result, cq_bind::transmit | cq_bind::recv)));
     REQUIRE(static_cast<bool>(ep_result->bind_av(*av_result)));
 
     // Enable endpoint
@@ -552,8 +543,7 @@ TEST_CASE("full initialization chain", "[fabric][integration]") {
     // Register memory
     std::vector<std::byte> buffer(4096);
     auto mr_result = memory_region::register_memory(
-        *domain_result, std::span{buffer},
-        mr_access_flags::read | mr_access_flags::write);
+        *domain_result, std::span{buffer}, mr_access_flags::read | mr_access_flags::write);
     REQUIRE(static_cast<bool>(mr_result));
 
     // Everything should be valid
@@ -594,8 +584,7 @@ TEST_CASE("full initialization chain with tcp provider", "[fabric][integration]"
     REQUIRE(static_cast<bool>(ep_result));
 
     // Bind CQ and AV
-    REQUIRE(static_cast<bool>(
-        ep_result->bind_cq(*cq_result, cq_bind::transmit | cq_bind::recv)));
+    REQUIRE(static_cast<bool>(ep_result->bind_cq(*cq_result, cq_bind::transmit | cq_bind::recv)));
     REQUIRE(static_cast<bool>(ep_result->bind_av(*av_result)));
 
     // Enable endpoint

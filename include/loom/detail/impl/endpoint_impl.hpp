@@ -191,8 +191,8 @@ inline auto endpoint::recvv(std::span<const iovec> iov, context_ptr<void> ctx) -
 }
 
 inline auto endpoint::tagged_send(std::span<const std::byte> data,
-                                   std::uint64_t tag,
-                                   context_ptr<void> ctx) -> void_result {
+                                  std::uint64_t tag,
+                                  context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -208,9 +208,9 @@ inline auto endpoint::tagged_send(std::span<const std::byte> data,
 }
 
 inline auto endpoint::tagged_recv(std::span<std::byte> buffer,
-                                   std::uint64_t tag,
-                                   std::uint64_t ignore,
-                                   context_ptr<void> ctx) -> void_result {
+                                  std::uint64_t tag,
+                                  std::uint64_t ignore,
+                                  context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -241,8 +241,8 @@ inline auto endpoint::inject(std::span<const std::byte> data, fabric_addr dest_a
 }
 
 inline auto endpoint::inject_data(std::span<const std::byte> data,
-                                   std::uint64_t immediate_data,
-                                   fabric_addr dest_addr) -> void_result {
+                                  std::uint64_t immediate_data,
+                                  fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -258,8 +258,8 @@ inline auto endpoint::inject_data(std::span<const std::byte> data,
 }
 
 inline auto endpoint::tagged_inject(std::span<const std::byte> data,
-                                     std::uint64_t tag,
-                                     fabric_addr dest_addr) -> void_result {
+                                    std::uint64_t tag,
+                                    fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -274,15 +274,15 @@ inline auto endpoint::tagged_inject(std::span<const std::byte> data,
 }
 
 inline auto endpoint::tagged_inject_data(std::span<const std::byte> data,
-                                          std::uint64_t tag,
-                                          std::uint64_t immediate_data,
-                                          fabric_addr dest_addr) -> void_result {
+                                         std::uint64_t tag,
+                                         std::uint64_t immediate_data,
+                                         fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    ssize_t ret = ::fi_tinjectdata(
-        impl_->ep, data.data(), data.size(), immediate_data, dest_addr.get(), tag);
+    ssize_t ret =
+        ::fi_tinjectdata(impl_->ep, data.data(), data.size(), immediate_data, dest_addr.get(), tag);
 
     if (ret < 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
@@ -370,9 +370,9 @@ inline auto endpoint::get_peer_address() const -> result<address> {
 }
 
 inline auto endpoint::read(std::span<std::byte> local_buffer,
-                            rma_addr remote_addr,
-                            mr_key key,
-                            context_ptr<void> ctx) -> void_result {
+                           rma_addr remote_addr,
+                           mr_key key,
+                           context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -394,9 +394,9 @@ inline auto endpoint::read(std::span<std::byte> local_buffer,
 }
 
 inline auto endpoint::write(std::span<const std::byte> local_buffer,
-                             rma_addr remote_addr,
-                             mr_key key,
-                             context_ptr<void> ctx) -> void_result {
+                            rma_addr remote_addr,
+                            mr_key key,
+                            context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -565,26 +565,26 @@ inline auto translate_optname(int optname) -> int {
             return FI_OPT_BUFFERED_MIN;
         case ep_opt::buffered_limit:
             return FI_OPT_BUFFERED_LIMIT;
-#ifdef FI_OPT_SHARED_MEMORY_PERMITTED
+#    ifdef FI_OPT_SHARED_MEMORY_PERMITTED
         case ep_opt::shared_memory_permitted:
             return FI_OPT_SHARED_MEMORY_PERMITTED;
-#endif
-#ifdef FI_OPT_CUDA_API_PERMITTED
+#    endif
+#    ifdef FI_OPT_CUDA_API_PERMITTED
         case ep_opt::cuda_api_permitted:
             return FI_OPT_CUDA_API_PERMITTED;
-#endif
-#ifdef FI_OPT_EFA_EMULATED_READ
+#    endif
+#    ifdef FI_OPT_EFA_EMULATED_READ
         case ep_opt::efa_emulated_read:
             return FI_OPT_EFA_EMULATED_READ;
-#endif
-#ifdef FI_OPT_EFA_EMULATED_WRITE
+#    endif
+#    ifdef FI_OPT_EFA_EMULATED_WRITE
         case ep_opt::efa_emulated_write:
             return FI_OPT_EFA_EMULATED_WRITE;
-#endif
-#ifdef FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES
+#    endif
+#    ifdef FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES
         case ep_opt::efa_write_in_order_aligned_128_bytes:
             return FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES;
-#endif
+#    endif
         default:
             return optname;
     }
@@ -592,8 +592,9 @@ inline auto translate_optname(int optname) -> int {
 
 }  // namespace
 
-inline auto set_endpoint_option(
-    endpoint& ep, int level, int optname, const void* optval, std::size_t optlen) -> result<void> {
+inline auto
+set_endpoint_option(endpoint& ep, int level, int optname, const void* optval, std::size_t optlen)
+    -> result<void> {
     if (!ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -614,8 +615,9 @@ inline auto set_endpoint_option(
     return make_success();
 }
 
-inline auto get_endpoint_option(
-    const endpoint& ep, int level, int optname, void* optval, std::size_t* optlen) -> result<void> {
+inline auto
+get_endpoint_option(const endpoint& ep, int level, int optname, void* optval, std::size_t* optlen)
+    -> result<void> {
     if (!ep) {
         return make_error_result<void>(errc::invalid_argument);
     }

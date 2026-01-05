@@ -13,23 +13,19 @@
 #include <stdexec/execution.hpp>
 
 TEST_CASE("scheduler concept", "[stdexec][senders]") {
-    static_assert(stdexec::scheduler<loom::scheduler>,
-                  "loom::scheduler must satisfy scheduler");
+    static_assert(stdexec::scheduler<loom::scheduler>, "loom::scheduler must satisfy scheduler");
 }
 
 TEST_CASE("send sender concept", "[stdexec][senders]") {
-    static_assert(stdexec::sender<loom::execution::send_sender>,
-                  "send_sender must satisfy sender");
+    static_assert(stdexec::sender<loom::execution::send_sender>, "send_sender must satisfy sender");
 }
 
 TEST_CASE("recv sender concept", "[stdexec][senders]") {
-    static_assert(stdexec::sender<loom::execution::recv_sender>,
-                  "recv_sender must satisfy sender");
+    static_assert(stdexec::sender<loom::execution::recv_sender>, "recv_sender must satisfy sender");
 }
 
 TEST_CASE("rma senders concept", "[stdexec][senders]") {
-    static_assert(stdexec::sender<loom::execution::read_sender>,
-                  "read_sender must satisfy sender");
+    static_assert(stdexec::sender<loom::execution::read_sender>, "read_sender must satisfy sender");
     static_assert(stdexec::sender<loom::execution::write_sender>,
                   "write_sender must satisfy sender");
     static_assert(stdexec::sender<loom::execution::fetch_add_sender<std::uint64_t>>,
@@ -77,9 +73,8 @@ TEST_CASE("error handling", "[stdexec][senders]") {
     loom::completion_queue cq{nullptr};
     std::array<std::byte, 64> buffer{};
 
-    auto with_error_handler =
-        loom::async(ep).send(buffer, &cq) |
-        stdexec::upon_error([](std::error_code ec) { return ec.value(); });
+    auto with_error_handler = loom::async(ep).send(buffer, &cq) |
+                              stdexec::upon_error([](std::error_code ec) { return ec.value(); });
 
     static_assert(stdexec::sender<decltype(with_error_handler)>,
                   "upon_error result must be a sender");
@@ -129,9 +124,8 @@ TEST_CASE("atomic fetch_add operations", "[stdexec][senders]") {
     loom::mr_key key{99ULL};
     loom::memory_region* result_mr = nullptr;
 
-    auto atomic_op =
-        loom::rma_async(ep).fetch_add<std::uint64_t>(addr, 1, key, result_mr, &cq) |
-        stdexec::then([](std::uint64_t old_val) { return old_val + 1; });
+    auto atomic_op = loom::rma_async(ep).fetch_add<std::uint64_t>(addr, 1, key, result_mr, &cq) |
+                     stdexec::then([](std::uint64_t old_val) { return old_val + 1; });
 
     static_assert(stdexec::sender<decltype(atomic_op)>, "fetch_add must be a sender");
 }
@@ -143,9 +137,8 @@ TEST_CASE("atomic compare_swap operations", "[stdexec][senders]") {
     loom::mr_key key{100ULL};
     loom::memory_region* result_mr = nullptr;
 
-    auto cas_op =
-        loom::rma_async(ep).compare_swap<std::uint64_t>(addr, 0, 1, key, result_mr, &cq) |
-        stdexec::then([](std::uint64_t old_val) { return old_val == 0; });
+    auto cas_op = loom::rma_async(ep).compare_swap<std::uint64_t>(addr, 0, 1, key, result_mr, &cq) |
+                  stdexec::then([](std::uint64_t old_val) { return old_val == 0; });
 
     static_assert(stdexec::sender<decltype(cas_op)>, "compare_swap must be a sender");
 }

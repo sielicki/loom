@@ -101,8 +101,7 @@ TEST_CASE("fabric_query build_hints multiple capabilities", "[fabric_query]") {
     using query = loom::fabric_query<loom::rdma_write_ops, loom::atomic_ops>;
     constexpr auto hints = query::build_hints();
 
-    constexpr auto expected =
-        loom::rdma_write_ops::required_caps | loom::atomic_ops::required_caps;
+    constexpr auto expected = loom::rdma_write_ops::required_caps | loom::atomic_ops::required_caps;
     static_assert(hints.capabilities == expected);
 }
 

@@ -95,7 +95,8 @@ template <typename T>
         auto magic = std::bit_cast<std::uint64_t>(fi_ctx->internal[1]);
         if (magic != context_magic) {
             // Context has been invalidated or corrupted
-            assert(false && "recover_safe_context: invalid or corrupted context - possible use-after-free");
+            assert(false &&
+                   "recover_safe_context: invalid or corrupted context - possible use-after-free");
             return nullptr;
         }
     }

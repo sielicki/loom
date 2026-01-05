@@ -81,8 +81,7 @@ TEST_CASE("format hmem_iface enum", "[formatters]") {
 }
 
 TEST_CASE("format ipv4_address", "[formatters]") {
-    loom::ipv4_address addr{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::ipv4_address addr{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
     auto formatted = std::format("{}", addr);
     REQUIRE(formatted == "192.168.1.1");
 }
@@ -115,8 +114,8 @@ TEST_CASE("format unspecified_address", "[formatters]") {
 }
 
 TEST_CASE("format address variant ipv4", "[formatters]") {
-    loom::address addr = loom::ipv4_address{
-        std::uint8_t{127}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}};
+    loom::address addr =
+        loom::ipv4_address{std::uint8_t{127}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}};
     auto formatted = std::format("{}", addr);
     REQUIRE(formatted == "127.0.0.1");
 }

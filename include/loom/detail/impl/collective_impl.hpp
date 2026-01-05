@@ -46,8 +46,7 @@ inline auto group::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->mc_group : nullptr;
 }
 
-inline auto create_group_impl(endpoint& ep, fabric_addr coll_addr, void* context)
-    -> result<group> {
+inline auto create_group_impl(endpoint& ep, fabric_addr coll_addr, void* context) -> result<group> {
     auto impl = std::make_unique<group::impl>();
     impl->coll_addr = coll_addr;
 

@@ -121,13 +121,11 @@ void benchmark_send_construction() {
 
     std::print("\nOverhead vs raw:\n");
     std::print("  stdexec: +{:d}ns ({:.2f}x)\n",
-                             (stdexec_stats.mean - raw_stats.mean).count(),
-                             static_cast<double>(stdexec_stats.mean.count()) /
-                                 raw_stats.mean.count());
+               (stdexec_stats.mean - raw_stats.mean).count(),
+               static_cast<double>(stdexec_stats.mean.count()) / raw_stats.mean.count());
     std::print("  ASIO callback: +{:d}ns ({:.2f}x)\n",
-                             (asio_callback_stats.mean - raw_stats.mean).count(),
-                             static_cast<double>(asio_callback_stats.mean.count()) /
-                                 raw_stats.mean.count());
+               (asio_callback_stats.mean - raw_stats.mean).count(),
+               static_cast<double>(asio_callback_stats.mean.count()) / raw_stats.mean.count());
 }
 
 void benchmark_composition() {
@@ -171,14 +169,10 @@ void benchmark_composition() {
 
     std::print("\nComposition overhead:\n");
     std::print("  then: +{:d}ns\n", (then_stats.mean - bare_stats.mean).count());
-    std::print("  then (x2): +{:d}ns\n",
-                             (chain_2_stats.mean - bare_stats.mean).count());
-    std::print("  then (x5): +{:d}ns\n",
-                             (chain_5_stats.mean - bare_stats.mean).count());
-    std::print("  let_value: +{:d}ns\n",
-                             (let_value_stats.mean - bare_stats.mean).count());
-    std::print("  Per-combinator: ~{:d}ns\n",
-                             (chain_5_stats.mean - bare_stats.mean).count() / 5);
+    std::print("  then (x2): +{:d}ns\n", (chain_2_stats.mean - bare_stats.mean).count());
+    std::print("  then (x5): +{:d}ns\n", (chain_5_stats.mean - bare_stats.mean).count());
+    std::print("  let_value: +{:d}ns\n", (let_value_stats.mean - bare_stats.mean).count());
+    std::print("  Per-combinator: ~{:d}ns\n", (chain_5_stats.mean - bare_stats.mean).count() / 5);
 }
 
 void benchmark_parallel() {
@@ -223,45 +217,41 @@ void benchmark_parallel() {
 
     std::print("\nScaling:\n");
     std::print("  2 ops: {:d}ns ({:d}ns/op)\n",
-                             parallel_2_stats.mean.count(),
-                             parallel_2_stats.mean.count() / 2);
+               parallel_2_stats.mean.count(),
+               parallel_2_stats.mean.count() / 2);
     std::print("  4 ops: {:d}ns ({:d}ns/op)\n",
-                             parallel_4_stats.mean.count(),
-                             parallel_4_stats.mean.count() / 4);
+               parallel_4_stats.mean.count(),
+               parallel_4_stats.mean.count() / 4);
     std::print("  8 ops: {:d}ns ({:d}ns/op)\n",
-                             parallel_8_stats.mean.count(),
-                             parallel_8_stats.mean.count() / 8);
+               parallel_8_stats.mean.count(),
+               parallel_8_stats.mean.count() / 8);
 }
 
 void benchmark_memory() {
     std::print("\n=== Memory Overhead ===\n");
 
-    std::print("sizeof(loom::endpoint):              {:4d} bytes\n",
-                             sizeof(loom::endpoint));
+    std::print("sizeof(loom::endpoint):              {:4d} bytes\n", sizeof(loom::endpoint));
     std::print("sizeof(loom::completion_queue):      {:4d} bytes\n",
-                             sizeof(loom::completion_queue));
+               sizeof(loom::completion_queue));
 
     std::print("\nstdexec senders:\n");
     std::print("  sizeof(send_sender):               {:4d} bytes\n",
-                             sizeof(loom::async::send_sender));
+               sizeof(loom::async::send_sender));
     std::print("  sizeof(recv_sender):               {:4d} bytes\n",
-                             sizeof(loom::async::recv_sender));
+               sizeof(loom::async::recv_sender));
     std::print("  sizeof(read_sender):               {:4d} bytes\n",
-                             sizeof(loom::async::read_sender));
+               sizeof(loom::async::read_sender));
     std::print("  sizeof(write_sender):              {:4d} bytes\n",
-                             sizeof(loom::async::write_sender));
+               sizeof(loom::async::write_sender));
     std::print("  sizeof(atomic_sender<uint64_t>):   {:4d} bytes\n",
-                             sizeof(loom::async::atomic_sender<std::uint64_t>));
-    std::print("  sizeof(scheduler):                 {:4d} bytes\n",
-                             sizeof(loom::scheduler));
+               sizeof(loom::async::atomic_sender<std::uint64_t>));
+    std::print("  sizeof(scheduler):                 {:4d} bytes\n", sizeof(loom::scheduler));
 
     std::print("\nASIO components:\n");
     std::print("  sizeof(completion_queue_service):  {:4d} bytes\n",
-                             sizeof(loom::asio_integration::completion_queue_service));
-    std::print("  sizeof(asio::io_context):          {:4d} bytes\n",
-                             sizeof(::asio::io_context));
-    std::print("  sizeof(asio::steady_timer):        {:4d} bytes\n",
-                             sizeof(::asio::steady_timer));
+               sizeof(loom::asio_integration::completion_queue_service));
+    std::print("  sizeof(asio::io_context):          {:4d} bytes\n", sizeof(::asio::io_context));
+    std::print("  sizeof(asio::steady_timer):        {:4d} bytes\n", sizeof(::asio::steady_timer));
 }
 
 void benchmark_completion_tokens() {
@@ -307,12 +297,10 @@ void benchmark_completion_tokens() {
     print_stats("Promise allocation", promise_alloc_stats);
 
     std::print("\nToken overhead comparison:\n");
-    std::print("  Callback (stack):    {:d}ns (baseline)\n",
-                             callback_stats.mean.count());
+    std::print("  Callback (stack):    {:d}ns (baseline)\n", callback_stats.mean.count());
     std::print("  Future (heap):       {:d}ns ({:.2f}x slower)\n",
-                             future_stats.mean.count(),
-                             static_cast<double>(future_stats.mean.count()) /
-                                 callback_stats.mean.count());
+               future_stats.mean.count(),
+               static_cast<double>(future_stats.mean.count()) / callback_stats.mean.count());
 }
 
 void benchmark_error_handling() {
@@ -347,11 +335,10 @@ void benchmark_error_handling() {
 
     std::print("\nError handling comparison:\n");
     std::print("  upon_error overhead: +{:d}ns\n",
-                             (error_handler_stats.mean - success_stats.mean).count());
+               (error_handler_stats.mean - success_stats.mean).count());
     std::print("  Exception cost: {:d}ns ({:.0f}x slower)\n",
-                             exception_stats.mean.count(),
-                             static_cast<double>(exception_stats.mean.count()) /
-                                 success_stats.mean.count());
+               exception_stats.mean.count(),
+               static_cast<double>(exception_stats.mean.count()) / success_stats.mean.count());
 }
 
 void benchmark_rma() {
@@ -405,11 +392,9 @@ void benchmark_atomics() {
     print_stats("std::atomic::fetch_add (local)", local_fetch_add_stats);
 
     std::print("\nAtomic overhead:\n");
-    std::print("  Remote fetch_add construction: {:d}ns\n",
-                             fetch_add_stats.mean.count());
+    std::print("  Remote fetch_add construction: {:d}ns\n", fetch_add_stats.mean.count());
     std::print("  Remote CAS construction: {:d}ns\n", cas_stats.mean.count());
-    std::print("  Local atomic (baseline): {:d}ns\n",
-                             local_fetch_add_stats.mean.count());
+    std::print("  Local atomic (baseline): {:d}ns\n", local_fetch_add_stats.mean.count());
 }
 
 void benchmark_throughput() {

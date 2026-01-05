@@ -59,16 +59,15 @@ inline completion_queue::~completion_queue() = default;
 
 inline completion_queue::completion_queue(completion_queue&&) noexcept = default;
 
-inline auto completion_queue::operator=(completion_queue&&) noexcept -> completion_queue& =
-    default;
+inline auto completion_queue::operator=(completion_queue&&) noexcept -> completion_queue& = default;
 
 inline auto completion_queue::impl_valid() const noexcept -> bool {
     return impl_ && impl_->cq != nullptr;
 }
 
 inline auto completion_queue::create(const domain& dom,
-                                      const completion_queue_attr& attr,
-                                      memory_resource* resource) -> result<completion_queue> {
+                                     const completion_queue_attr& attr,
+                                     memory_resource* resource) -> result<completion_queue> {
     if (!dom) {
         return make_error_result<completion_queue>(errc::invalid_argument);
     }

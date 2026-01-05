@@ -55,9 +55,8 @@ inline auto counter::impl_valid() const noexcept -> bool {
     return impl_ && impl_->cntr != nullptr;
 }
 
-inline auto counter::create(const domain& dom,
-                             const counter_attr& attr,
-                             memory_resource* resource) -> result<counter> {
+inline auto counter::create(const domain& dom, const counter_attr& attr, memory_resource* resource)
+    -> result<counter> {
     if (!dom) {
         return make_error_result<counter>(errc::invalid_argument);
     }

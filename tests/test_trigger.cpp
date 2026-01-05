@@ -13,10 +13,8 @@ TEST_CASE("event_type enum values", "[trigger]") {
 TEST_CASE("op_type enum values", "[trigger]") {
     static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::recv) == FI_OP_RECV);
     static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::send) == FI_OP_SEND);
-    static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::tagged_recv) ==
-                  FI_OP_TRECV);
-    static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::tagged_send) ==
-                  FI_OP_TSEND);
+    static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::tagged_recv) == FI_OP_TRECV);
+    static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::tagged_send) == FI_OP_TSEND);
     static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::read) == FI_OP_READ);
     static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::write) == FI_OP_WRITE);
     static_assert(static_cast<std::uint32_t>(loom::trigger::op_type::atomic) == FI_OP_ATOMIC);

@@ -212,8 +212,7 @@ TEST_CASE("runtime_progress_policy", "[concepts][progress_policy]") {
     using loom::progress_mode;
     using loom::runtime_progress_policy;
 
-    constexpr runtime_progress_policy manual_policy{progress_mode::manual,
-                                                    progress_mode::manual};
+    constexpr runtime_progress_policy manual_policy{progress_mode::manual, progress_mode::manual};
     static_assert(manual_policy.control_progress() == progress_mode::manual);
     static_assert(manual_policy.data_progress() == progress_mode::manual);
     static_assert(manual_policy.requires_manual_data_progress());

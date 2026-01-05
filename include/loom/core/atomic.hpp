@@ -70,15 +70,15 @@ enum class datatype {
 
 // Check for __int128 support (GCC/Clang extension)
 #if defined(__SIZEOF_INT128__)
-#define LOOM_HAS_INT128 1
+#    define LOOM_HAS_INT128 1
 // Suppress GCC's pedantic warning about __int128 not being ISO C++
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wpedantic"
 using int128_type = __int128;
 using uint128_type = unsigned __int128;
-#pragma GCC diagnostic pop
+#    pragma GCC diagnostic pop
 #else
-#define LOOM_HAS_INT128 0
+#    define LOOM_HAS_INT128 0
 // Provide stub types when __int128 is not available
 struct int128_type {};
 struct uint128_type {};

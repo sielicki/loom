@@ -10,8 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("ipv4_address construction from octets", "[address]") {
-    loom::ipv4_address addr{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::ipv4_address addr{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
     auto octets = addr.octets();
 
     REQUIRE(octets[0] == 192);
@@ -40,66 +39,59 @@ TEST_CASE("ipv4_address construction from uint32", "[address]") {
 }
 
 TEST_CASE("ipv4_address to_uint32", "[address]") {
-    loom::ipv4_address addr{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::ipv4_address addr{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
     REQUIRE(addr.to_uint32() == 0xC0A80101U);
 }
 
 TEST_CASE("ipv4_address is_loopback", "[address]") {
-    REQUIRE(
-        loom::ipv4_address{std::uint8_t{127}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}}
-            .is_loopback());
+    REQUIRE(loom::ipv4_address{std::uint8_t{127}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}}
+                .is_loopback());
     REQUIRE(loom::ipv4_address{
         std::uint8_t{127}, std::uint8_t{255}, std::uint8_t{255}, std::uint8_t{255}}
-               .is_loopback());
-    REQUIRE_FALSE(loom::ipv4_address{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}}
                 .is_loopback());
+    REQUIRE_FALSE(
+        loom::ipv4_address{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}}
+            .is_loopback());
 }
 
 TEST_CASE("ipv4_address is_private", "[address]") {
+    REQUIRE(loom::ipv4_address{std::uint8_t{10}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}}
+                .is_private());
     REQUIRE(
-        loom::ipv4_address{std::uint8_t{10}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}}
+        loom::ipv4_address{std::uint8_t{172}, std::uint8_t{16}, std::uint8_t{0}, std::uint8_t{1}}
             .is_private());
     REQUIRE(loom::ipv4_address{
-        std::uint8_t{172}, std::uint8_t{16}, std::uint8_t{0}, std::uint8_t{1}}
-               .is_private());
-    REQUIRE(loom::ipv4_address{
         std::uint8_t{172}, std::uint8_t{31}, std::uint8_t{255}, std::uint8_t{255}}
-               .is_private());
-    REQUIRE(loom::ipv4_address{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{0}, std::uint8_t{1}}
-               .is_private());
+                .is_private());
+    REQUIRE(
+        loom::ipv4_address{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{0}, std::uint8_t{1}}
+            .is_private());
     REQUIRE_FALSE(
         loom::ipv4_address{std::uint8_t{8}, std::uint8_t{8}, std::uint8_t{8}, std::uint8_t{8}}
-             .is_private());
-    REQUIRE_FALSE(loom::ipv4_address{
-        std::uint8_t{172}, std::uint8_t{32}, std::uint8_t{0}, std::uint8_t{1}}
-                .is_private());
+            .is_private());
+    REQUIRE_FALSE(
+        loom::ipv4_address{std::uint8_t{172}, std::uint8_t{32}, std::uint8_t{0}, std::uint8_t{1}}
+            .is_private());
 }
 
 TEST_CASE("ipv4_address is_multicast", "[address]") {
-    REQUIRE(
-        loom::ipv4_address{std::uint8_t{224}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}}
-            .is_multicast());
+    REQUIRE(loom::ipv4_address{std::uint8_t{224}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}}
+                .is_multicast());
     REQUIRE(loom::ipv4_address{
         std::uint8_t{239}, std::uint8_t{255}, std::uint8_t{255}, std::uint8_t{255}}
-               .is_multicast());
-    REQUIRE_FALSE(loom::ipv4_address{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}}
                 .is_multicast());
-    REQUIRE_FALSE(loom::ipv4_address{
-        std::uint8_t{240}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}}
-                .is_multicast());
+    REQUIRE_FALSE(
+        loom::ipv4_address{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}}
+            .is_multicast());
+    REQUIRE_FALSE(
+        loom::ipv4_address{std::uint8_t{240}, std::uint8_t{0}, std::uint8_t{0}, std::uint8_t{1}}
+            .is_multicast());
 }
 
 TEST_CASE("ipv4_address comparison", "[address]") {
-    loom::ipv4_address a{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
-    loom::ipv4_address b{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
-    loom::ipv4_address c{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{2}};
+    loom::ipv4_address a{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::ipv4_address b{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::ipv4_address c{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{2}};
 
     REQUIRE(a == b);
     REQUIRE(a != c);
@@ -190,8 +182,8 @@ TEST_CASE("unspecified_address comparison", "[address]") {
 }
 
 TEST_CASE("address variant holds ipv4", "[address]") {
-    loom::address addr = loom::ipv4_address{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::address addr =
+        loom::ipv4_address{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
     REQUIRE(std::holds_alternative<loom::ipv4_address>(addr));
 }
 
@@ -201,8 +193,8 @@ TEST_CASE("address variant holds unspecified", "[address]") {
 }
 
 TEST_CASE("address_ops::size", "[address]") {
-    loom::address ipv4_addr = loom::ipv4_address{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::address ipv4_addr =
+        loom::ipv4_address{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
     REQUIRE(loom::address_ops::size(ipv4_addr) == sizeof(loom::ipv4_address));
 
     loom::address ipv6_addr = [] {
@@ -217,14 +209,14 @@ TEST_CASE("address_ops::is_rdma_capable", "[address]") {
     loom::address ib_addr = loom::ib_address{std::span{gid}};
     REQUIRE(loom::address_ops::is_rdma_capable(ib_addr));
 
-    loom::address ipv4_addr = loom::ipv4_address{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::address ipv4_addr =
+        loom::ipv4_address{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
     REQUIRE_FALSE(loom::address_ops::is_rdma_capable(ipv4_addr));
 }
 
 TEST_CASE("address_ops::is_network_protocol", "[address]") {
-    loom::address ipv4_addr = loom::ipv4_address{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::address ipv4_addr =
+        loom::ipv4_address{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
     REQUIRE(loom::address_ops::is_network_protocol(ipv4_addr));
 
     std::array<std::uint16_t, 8> segs{};
@@ -252,8 +244,8 @@ TEST_CASE("predefined addresses", "[address]") {
 }
 
 TEST_CASE("get_address_format", "[address]") {
-    loom::address ipv4 = loom::ipv4_address{
-        std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
+    loom::address ipv4 =
+        loom::ipv4_address{std::uint8_t{192}, std::uint8_t{168}, std::uint8_t{1}, std::uint8_t{1}};
     REQUIRE(loom::get_address_format(ipv4) == loom::address_format::inet);
 
     std::array<std::uint16_t, 8> segs{};
@@ -334,7 +326,8 @@ TEST_CASE("address_from_raw ib too small returns unspecified", "[address]") {
 
 TEST_CASE("address_from_raw ethernet too small returns unspecified", "[address]") {
     std::array<char, 4> small{};
-    auto result = loom::address_from_raw(small.data(), small.size(), loom::address_format::ethernet);
+    auto result =
+        loom::address_from_raw(small.data(), small.size(), loom::address_format::ethernet);
     REQUIRE(std::holds_alternative<loom::unspecified_address>(result));
 }
 
@@ -405,10 +398,22 @@ TEST_CASE("address_from_raw inet6 parses loopback", "[address]") {
 }
 
 TEST_CASE("address_from_raw ib parses raw gid", "[address]") {
-    std::array<std::uint8_t, 16> raw_gid = {
-        0xFE, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
-    };
+    std::array<std::uint8_t, 16> raw_gid = {0xFE,
+                                            0x80,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x00,
+                                            0x01};
 
     auto result = loom::address_from_raw(raw_gid.data(), raw_gid.size(), loom::address_format::ib);
     REQUIRE(std::holds_alternative<loom::ib_address>(result));
@@ -425,7 +430,8 @@ TEST_CASE("address_from_raw ib parses raw gid", "[address]") {
 TEST_CASE("address_from_raw ethernet parses raw mac", "[address]") {
     std::array<std::uint8_t, 6> raw_mac = {0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E};
 
-    auto result = loom::address_from_raw(raw_mac.data(), raw_mac.size(), loom::address_format::ethernet);
+    auto result =
+        loom::address_from_raw(raw_mac.data(), raw_mac.size(), loom::address_format::ethernet);
     REQUIRE(std::holds_alternative<loom::ethernet_address>(result));
 
     const auto& eth = std::get<loom::ethernet_address>(result);
@@ -439,7 +445,8 @@ TEST_CASE("address_from_raw ethernet parses raw mac", "[address]") {
 TEST_CASE("address_from_raw ethernet parses broadcast mac", "[address]") {
     std::array<std::uint8_t, 6> broadcast_mac = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-    auto result = loom::address_from_raw(broadcast_mac.data(), broadcast_mac.size(), loom::address_format::ethernet);
+    auto result = loom::address_from_raw(
+        broadcast_mac.data(), broadcast_mac.size(), loom::address_format::ethernet);
     REQUIRE(std::holds_alternative<loom::ethernet_address>(result));
 
     const auto& eth = std::get<loom::ethernet_address>(result);
@@ -449,7 +456,8 @@ TEST_CASE("address_from_raw ethernet parses broadcast mac", "[address]") {
 TEST_CASE("address_from_raw ethernet parses multicast mac", "[address]") {
     std::array<std::uint8_t, 6> multicast_mac = {0x01, 0x00, 0x5E, 0x00, 0x00, 0x01};
 
-    auto result = loom::address_from_raw(multicast_mac.data(), multicast_mac.size(), loom::address_format::ethernet);
+    auto result = loom::address_from_raw(
+        multicast_mac.data(), multicast_mac.size(), loom::address_format::ethernet);
     REQUIRE(std::holds_alternative<loom::ethernet_address>(result));
 
     const auto& eth = std::get<loom::ethernet_address>(result);

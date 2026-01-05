@@ -25,30 +25,30 @@
 
 // Define LOOM_IMPLEMENTATION before including impl headers
 #ifndef LOOM_IMPLEMENTATION
-#define LOOM_IMPLEMENTATION
-#define LOOM_IMPLEMENTATION_DEFINED_HERE
+#    define LOOM_IMPLEMENTATION
+#    define LOOM_IMPLEMENTATION_DEFINED_HERE
 #endif
 
 // Include all implementation headers
-#include "loom/detail/impl/fabric_impl.hpp"
-#include "loom/detail/impl/domain_impl.hpp"
-#include "loom/detail/impl/endpoint_impl.hpp"
-#include "loom/detail/impl/memory_impl.hpp"
 #include "loom/detail/impl/address_impl.hpp"
 #include "loom/detail/impl/address_vector_impl.hpp"
-#include "loom/detail/impl/completion_queue_impl.hpp"
-#include "loom/detail/impl/event_queue_impl.hpp"
-#include "loom/detail/impl/counter_impl.hpp"
-#include "loom/detail/impl/rma_impl.hpp"
 #include "loom/detail/impl/atomic_impl.hpp"
 #include "loom/detail/impl/collective_impl.hpp"
-#include "loom/detail/impl/trigger_impl.hpp"
+#include "loom/detail/impl/completion_queue_impl.hpp"
+#include "loom/detail/impl/counter_impl.hpp"
+#include "loom/detail/impl/domain_impl.hpp"
+#include "loom/detail/impl/endpoint_impl.hpp"
+#include "loom/detail/impl/error_impl.hpp"
+#include "loom/detail/impl/event_queue_impl.hpp"
+#include "loom/detail/impl/fabric_impl.hpp"
+#include "loom/detail/impl/memory_impl.hpp"
 #include "loom/detail/impl/passive_endpoint_impl.hpp"
+#include "loom/detail/impl/rma_impl.hpp"
 #include "loom/detail/impl/scalable_endpoint_impl.hpp"
 #include "loom/detail/impl/shared_context_impl.hpp"
-#include "loom/detail/impl/error_impl.hpp"
+#include "loom/detail/impl/trigger_impl.hpp"
 
 #ifdef LOOM_IMPLEMENTATION_DEFINED_HERE
-#undef LOOM_IMPLEMENTATION
-#undef LOOM_IMPLEMENTATION_DEFINED_HERE
+#    undef LOOM_IMPLEMENTATION
+#    undef LOOM_IMPLEMENTATION_DEFINED_HERE
 #endif

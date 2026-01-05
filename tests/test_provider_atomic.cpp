@@ -99,13 +99,13 @@ TEST_CASE("perform_local_atomic_op bitwise_xor", "[provider_atomic]") {
 }
 
 TEST_CASE("perform_local_atomic_op atomic_write", "[provider_atomic]") {
-    REQUIRE(loom::detail::perform_local_atomic_op(
-                loom::atomic::operation::atomic_write, 100, 42) == 42);
+    REQUIRE(loom::detail::perform_local_atomic_op(loom::atomic::operation::atomic_write, 100, 42) ==
+            42);
 }
 
 TEST_CASE("perform_local_atomic_op atomic_read", "[provider_atomic]") {
-    REQUIRE(loom::detail::perform_local_atomic_op(
-                loom::atomic::operation::atomic_read, 100, 42) == 100);
+    REQUIRE(loom::detail::perform_local_atomic_op(loom::atomic::operation::atomic_read, 100, 42) ==
+            100);
 }
 
 TEST_CASE("operation types work with various atomic types", "[provider_atomic]") {

@@ -25,7 +25,6 @@
 #include "loom/core/fabric.hpp"
 #include "loom/core/memory.hpp"
 #include "loom/core/types.hpp"
-
 #include "rust/cxx.h"
 
 namespace loom::cxx_bridge {
@@ -266,17 +265,15 @@ inline auto create_completion_queue(const DomainHandle& dom, const CqAttributes&
 }
 
 /// Create an address vector
-inline auto create_address_vector(const DomainHandle& dom)
-    -> std::unique_ptr<AddressVectorHandle> {
+inline auto create_address_vector(const DomainHandle& dom) -> std::unique_ptr<AddressVectorHandle> {
     auto result = loom::address_vector::create(dom.get());
     return std::make_unique<AddressVectorHandle>(unwrap_or_throw(std::move(result)));
 }
 
 /// Register a memory region
-inline auto register_memory(const DomainHandle& dom,
-                            std::uintptr_t ptr,
-                            std::size_t len,
-                            std::uint64_t access) -> std::unique_ptr<MemoryRegionHandle> {
+inline auto
+register_memory(const DomainHandle& dom, std::uintptr_t ptr, std::size_t len, std::uint64_t access)
+    -> std::unique_ptr<MemoryRegionHandle> {
     auto span = std::span{reinterpret_cast<std::byte*>(ptr), len};
     auto result = loom::memory_region::register_memory(dom.get(), span, loom::mr_access{access});
     return std::make_unique<MemoryRegionHandle>(unwrap_or_throw(std::move(result)));
@@ -292,9 +289,8 @@ inline void endpoint_enable(EndpointHandle& ep) {
 }
 
 /// Bind a completion queue to an endpoint for transmit and/or receive
-inline void endpoint_bind_cq(EndpointHandle& ep,
-                             const CompletionQueueHandle& cq,
-                             std::uint64_t flags) {
+inline void
+endpoint_bind_cq(EndpointHandle& ep, const CompletionQueueHandle& cq, std::uint64_t flags) {
     unwrap_void_or_throw(ep.get().bind_cq(cq.get(), loom::cq_bind_flags{flags}));
 }
 
@@ -304,18 +300,15 @@ inline void endpoint_bind_av(EndpointHandle& ep, const AddressVectorHandle& av) 
 }
 
 /// Post a send operation
-inline void endpoint_send(EndpointHandle& ep,
-                          rust::Slice<const std::uint8_t> data,
-                          std::uintptr_t ctx) {
+inline void
+endpoint_send(EndpointHandle& ep, rust::Slice<const std::uint8_t> data, std::uintptr_t ctx) {
     auto span = std::span{reinterpret_cast<const std::byte*>(data.data()), data.size()};
     auto context = loom::context_ptr<void>{reinterpret_cast<void*>(ctx)};
     unwrap_void_or_throw(ep.get().send(span, context));
 }
 
 /// Post a receive operation
-inline void endpoint_recv(EndpointHandle& ep,
-                          rust::Slice<std::uint8_t> buf,
-                          std::uintptr_t ctx) {
+inline void endpoint_recv(EndpointHandle& ep, rust::Slice<std::uint8_t> buf, std::uintptr_t ctx) {
     auto span = std::span{reinterpret_cast<std::byte*>(buf.data()), buf.size()};
     auto context = loom::context_ptr<void>{reinterpret_cast<void*>(ctx)};
     unwrap_void_or_throw(ep.get().recv(span, context));
@@ -468,31 +461,63 @@ inline auto mr_descriptor(const MemoryRegionHandle& mr) -> std::uintptr_t {
 // Capability constants (exposed to Rust)
 // ============================================================================
 
-inline auto cap_msg() -> std::uint64_t { return loom::capability::msg.get(); }
-inline auto cap_rma() -> std::uint64_t { return loom::capability::rma.get(); }
-inline auto cap_tagged() -> std::uint64_t { return loom::capability::tagged.get(); }
-inline auto cap_atomic() -> std::uint64_t { return loom::capability::atomic.get(); }
-inline auto cap_read() -> std::uint64_t { return loom::capability::read.get(); }
-inline auto cap_write() -> std::uint64_t { return loom::capability::write.get(); }
-inline auto cap_recv() -> std::uint64_t { return loom::capability::recv.get(); }
-inline auto cap_send() -> std::uint64_t { return loom::capability::send.get(); }
-inline auto cap_remote_read() -> std::uint64_t { return loom::capability::remote_read.get(); }
-inline auto cap_remote_write() -> std::uint64_t { return loom::capability::remote_write.get(); }
+inline auto cap_msg() -> std::uint64_t {
+    return loom::capability::msg.get();
+}
+inline auto cap_rma() -> std::uint64_t {
+    return loom::capability::rma.get();
+}
+inline auto cap_tagged() -> std::uint64_t {
+    return loom::capability::tagged.get();
+}
+inline auto cap_atomic() -> std::uint64_t {
+    return loom::capability::atomic.get();
+}
+inline auto cap_read() -> std::uint64_t {
+    return loom::capability::read.get();
+}
+inline auto cap_write() -> std::uint64_t {
+    return loom::capability::write.get();
+}
+inline auto cap_recv() -> std::uint64_t {
+    return loom::capability::recv.get();
+}
+inline auto cap_send() -> std::uint64_t {
+    return loom::capability::send.get();
+}
+inline auto cap_remote_read() -> std::uint64_t {
+    return loom::capability::remote_read.get();
+}
+inline auto cap_remote_write() -> std::uint64_t {
+    return loom::capability::remote_write.get();
+}
 
 /// CQ bind flags
-inline auto cq_bind_transmit() -> std::uint64_t { return loom::cq_bind::transmit.get(); }
-inline auto cq_bind_recv() -> std::uint64_t { return loom::cq_bind::recv.get(); }
+inline auto cq_bind_transmit() -> std::uint64_t {
+    return loom::cq_bind::transmit.get();
+}
+inline auto cq_bind_recv() -> std::uint64_t {
+    return loom::cq_bind::recv.get();
+}
 
 /// MR access flags
-inline auto mr_access_read() -> std::uint64_t { return loom::mr_access_flags::read.get(); }
-inline auto mr_access_write() -> std::uint64_t { return loom::mr_access_flags::write.get(); }
+inline auto mr_access_read() -> std::uint64_t {
+    return loom::mr_access_flags::read.get();
+}
+inline auto mr_access_write() -> std::uint64_t {
+    return loom::mr_access_flags::write.get();
+}
 inline auto mr_access_remote_read() -> std::uint64_t {
     return loom::mr_access_flags::remote_read.get();
 }
 inline auto mr_access_remote_write() -> std::uint64_t {
     return loom::mr_access_flags::remote_write.get();
 }
-inline auto mr_access_send() -> std::uint64_t { return loom::mr_access_flags::send.get(); }
-inline auto mr_access_recv() -> std::uint64_t { return loom::mr_access_flags::recv.get(); }
+inline auto mr_access_send() -> std::uint64_t {
+    return loom::mr_access_flags::send.get();
+}
+inline auto mr_access_recv() -> std::uint64_t {
+    return loom::mr_access_flags::recv.get();
+}
 
 }  // namespace loom::cxx_bridge

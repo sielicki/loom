@@ -115,16 +115,16 @@ inline shared_tx_context::~shared_tx_context() = default;
 
 inline shared_tx_context::shared_tx_context(shared_tx_context&&) noexcept = default;
 
-inline auto shared_tx_context::operator=(shared_tx_context&&) noexcept -> shared_tx_context& =
-    default;
+inline auto shared_tx_context::operator=(shared_tx_context&&) noexcept
+    -> shared_tx_context& = default;
 
 inline auto shared_tx_context::impl_valid() const noexcept -> bool {
     return impl_ && impl_->stx;
 }
 
 inline auto shared_tx_context::create(const domain& dom,
-                                       const fabric_info& info,
-                                       memory_resource* resource) -> result<shared_tx_context> {
+                                      const fabric_info& info,
+                                      memory_resource* resource) -> result<shared_tx_context> {
     if (!dom || !info) {
         return make_error_result<shared_tx_context>(errc::invalid_argument);
     }
@@ -160,16 +160,16 @@ inline shared_rx_context::~shared_rx_context() = default;
 
 inline shared_rx_context::shared_rx_context(shared_rx_context&&) noexcept = default;
 
-inline auto shared_rx_context::operator=(shared_rx_context&&) noexcept -> shared_rx_context& =
-    default;
+inline auto shared_rx_context::operator=(shared_rx_context&&) noexcept
+    -> shared_rx_context& = default;
 
 inline auto shared_rx_context::impl_valid() const noexcept -> bool {
     return impl_ && impl_->srx;
 }
 
 inline auto shared_rx_context::create(const domain& dom,
-                                       const fabric_info& info,
-                                       memory_resource* resource) -> result<shared_rx_context> {
+                                      const fabric_info& info,
+                                      memory_resource* resource) -> result<shared_rx_context> {
     if (!dom || !info) {
         return make_error_result<shared_rx_context>(errc::invalid_argument);
     }

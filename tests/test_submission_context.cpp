@@ -60,12 +60,12 @@ TEST_CASE("submission_context set_error path", "[submission_context]") {
     bool error_called = false;
     std::error_code received_ec;
 
-    auto* ctx = new loom::default_submission_context(
-        loom::callback_receiver([](loom::completion_event&) {},
-                                [&](std::error_code ec) {
-                                    error_called = true;
-                                    received_ec = ec;
-                                }));
+    auto* ctx =
+        new loom::default_submission_context(loom::callback_receiver([](loom::completion_event&) {},
+                                                                     [&](std::error_code ec) {
+                                                                         error_called = true;
+                                                                         received_ec = ec;
+                                                                     }));
 
     loom::completion_event event{};
     event.error = std::make_error_code(std::errc::io_error);
@@ -81,10 +81,8 @@ TEST_CASE("submission_context set_error path", "[submission_context]") {
 TEST_CASE("submission_context set_stopped path", "[submission_context]") {
     bool stopped_called = false;
 
-    auto* ctx = new loom::default_submission_context(
-        loom::callback_receiver([](loom::completion_event&) {},
-                                [](std::error_code) {},
-                                [&] { stopped_called = true; }));
+    auto* ctx = new loom::default_submission_context(loom::callback_receiver(
+        [](loom::completion_event&) {}, [](std::error_code) {}, [&] { stopped_called = true; }));
 
     loom::dispatch_stopped(ctx);
 

@@ -91,9 +91,9 @@ struct atomic_ops {
  * @brief Capability descriptor for connection-oriented messaging.
  */
 struct connection_oriented_messaging {
-    static constexpr caps required_caps = capability::msg;               ///< Required caps
-    static constexpr caps optional_caps = capability::rma;               ///< Optional caps
-    static constexpr endpoint_type ep_type = endpoint_types::msg;        ///< Endpoint type
+    static constexpr caps required_caps = capability::msg;         ///< Required caps
+    static constexpr caps optional_caps = capability::rma;         ///< Optional caps
+    static constexpr endpoint_type ep_type = endpoint_types::msg;  ///< Endpoint type
     static constexpr std::string_view description =
         "Connection-oriented messaging";  ///< Description
 };
