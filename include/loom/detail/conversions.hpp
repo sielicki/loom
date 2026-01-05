@@ -3,7 +3,9 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#ifdef __clang__
 #pragma GCC diagnostic ignored "-W#pragma-messages"
+#endif
 
 #include <rdma/fabric.h>
 

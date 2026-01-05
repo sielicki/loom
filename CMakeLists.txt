@@ -19,11 +19,11 @@ option(LOOM_BUILD_RUST_BINDINGS "Build Rust bindings" OFF)
 option(LOOM_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(LOOM_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 
-# Compiler warnings
+# Compiler warnings - defined as a variable, applied per-target to avoid affecting dependencies
 if(MSVC)
-    add_compile_options(/W4 /WX)
+    set(LOOM_COMPILE_OPTIONS /W4 /WX)
 else()
-    add_compile_options(
+    set(LOOM_COMPILE_OPTIONS
         -Wall -Wextra -Wpedantic -Werror
         -Wconversion -Wsign-conversion
         -Wnon-virtual-dtor -Woverloaded-virtual
@@ -87,7 +87,7 @@ if(LOOM_USE_STDEXEC)
         FetchContent_Declare(
             stdexec
             GIT_REPOSITORY https://github.com/NVIDIA/stdexec.git
-            GIT_TAG        4b90a664736a63276d3d2efc1b70eb86e730b744
+            GIT_TAG        250f35737790392d666fd157e0af9be16d0c789f
             GIT_SHALLOW    TRUE
         )
 
@@ -309,6 +309,7 @@ target_link_libraries(loom
 )
 
 target_compile_features(loom PUBLIC cxx_std_23)
+target_compile_options(loom PRIVATE ${LOOM_COMPILE_OPTIONS})
 
 # Installation
 include(GNUInstallDirs)
