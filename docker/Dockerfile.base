@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+# Base image with build dependencies - reusable for CI and local dev
+FROM fedora:rawhide
+
+RUN dnf install -y \
+    gcc-c++ \
+    clang \
+    cmake \
+    ninja-build \
+    pkgconf-pkg-config \
+    libfabric-devel \
+    git \
+    && dnf clean all
+
+WORKDIR /src

@@ -1,13 +1,5 @@
 # SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
-#
-# CI Dockerfile - copies source and builds in a single image.
-# Used by GitHub Actions. For local development, use docker-compose.yml instead:
-#
-#   docker compose run --rm build-gcc     # Build with GCC
-#   docker compose run --rm build-clang   # Build with Clang
-#   docker compose run --rm test-full     # Build and test with all features
-#   docker compose run --rm shell         # Interactive shell
-#
+# CI Dockerfile - copies source and builds (for GitHub Actions)
 FROM fedora:rawhide
 
 RUN dnf install -y \

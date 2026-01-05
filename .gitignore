@@ -55,3 +55,6 @@ Testing/
 *.gcno
 *.gcov
 
+.claude/
+build-coverage/
+build-shared/

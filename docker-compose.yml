@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+# Docker Compose for local development - mounts source for fast iteration
+#
+# Usage:
+#   docker compose run --rm build-gcc          # Build with GCC
+#   docker compose run --rm build-clang        # Build with Clang
+#   docker compose run --rm build-stdexec      # Build with stdexec
+#   docker compose run --rm build-asio         # Build with Asio
+#   docker compose run --rm build-full         # Build with all features
+#   docker compose run --rm test-gcc           # Build and test with GCC
+#   docker compose run --rm shell              # Interactive shell
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.base
+  volumes:
+    - .:/src:ro
+    - build-cache:/build
+  working_dir: /build
+
+services:
+  build-gcc:
+    <<: *common
+    command: >
+      sh -c "cmake -S /src -B /build -G Ninja
+        -DCMAKE_C_COMPILER=gcc
+        -DCMAKE_CXX_COMPILER=g++
+        -DCMAKE_BUILD_TYPE=Release
+        -DLOOM_BUILD_TESTS=ON
+        && cmake --build /build --parallel"
+
+  build-clang:
+    <<: *common
+    command: >
+      sh -c "cmake -S /src -B /build -G Ninja
+        -DCMAKE_C_COMPILER=clang
+        -DCMAKE_CXX_COMPILER=clang++
+        -DCMAKE_BUILD_TYPE=Release
+        -DLOOM_BUILD_TESTS=ON
+        && cmake --build /build --parallel"
+
+  build-stdexec:
+    <<: *common
+    command: >
+      sh -c "cmake -S /src -B /build -G Ninja
+        -DCMAKE_C_COMPILER=clang
+        -DCMAKE_CXX_COMPILER=clang++
+        -DCMAKE_BUILD_TYPE=Release
+        -DLOOM_BUILD_TESTS=ON
+        -DLOOM_USE_STDEXEC=ON
+        -DLOOM_FETCHCONTENT_STDEXEC=ON
+        && cmake --build /build --parallel"
+
+  build-asio:
+    <<: *common
+    command: >
+      sh -c "cmake -S /src -B /build -G Ninja
+        -DCMAKE_C_COMPILER=clang
+        -DCMAKE_CXX_COMPILER=clang++
+        -DCMAKE_BUILD_TYPE=Release
+        -DLOOM_BUILD_TESTS=ON
+        -DLOOM_USE_ASIO=ON
+        -DLOOM_FETCHCONTENT_ASIO=ON
+        && cmake --build /build --parallel"
+
+  build-full:
+    <<: *common
+    command: >
+      sh -c "cmake -S /src -B /build -G Ninja
+        -DCMAKE_C_COMPILER=clang
+        -DCMAKE_CXX_COMPILER=clang++
+        -DCMAKE_BUILD_TYPE=Release
+        -DLOOM_BUILD_TESTS=ON
+        -DLOOM_USE_STDEXEC=ON
+        -DLOOM_FETCHCONTENT_STDEXEC=ON
+        -DLOOM_USE_ASIO=ON
+        -DLOOM_FETCHCONTENT_ASIO=ON
+        && cmake --build /build --parallel"
+
+  test-gcc:
+    <<: *common
+    command: >
+      sh -c "cmake -S /src -B /build -G Ninja
+        -DCMAKE_C_COMPILER=gcc
+        -DCMAKE_CXX_COMPILER=g++
+        -DCMAKE_BUILD_TYPE=Release
+        -DLOOM_BUILD_TESTS=ON
+        && cmake --build /build --parallel
+        && ctest --test-dir /build --output-on-failure"
+
+  test-clang:
+    <<: *common
+    command: >
+      sh -c "cmake -S /src -B /build -G Ninja
+        -DCMAKE_C_COMPILER=clang
+        -DCMAKE_CXX_COMPILER=clang++
+        -DCMAKE_BUILD_TYPE=Release
+        -DLOOM_BUILD_TESTS=ON
+        && cmake --build /build --parallel
+        && ctest --test-dir /build --output-on-failure"
+
+  test-full:
+    <<: *common
+    command: >
+      sh -c "cmake -S /src -B /build -G Ninja
+        -DCMAKE_C_COMPILER=clang
+        -DCMAKE_CXX_COMPILER=clang++
+        -DCMAKE_BUILD_TYPE=Release
+        -DLOOM_BUILD_TESTS=ON
+        -DLOOM_USE_STDEXEC=ON
+        -DLOOM_FETCHCONTENT_STDEXEC=ON
+        -DLOOM_USE_ASIO=ON
+        -DLOOM_FETCHCONTENT_ASIO=ON
+        && cmake --build /build --parallel
+        && ctest --test-dir /build --output-on-failure"
+
+  shell:
+    <<: *common
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+
+volumes:
+  build-cache:
