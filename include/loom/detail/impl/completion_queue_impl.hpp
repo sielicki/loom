@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
-#include "loom/async/completion_queue.hpp"
+#pragma once
 
 #include <rdma/fabric.h>
 #include <rdma/fi_domain.h>
@@ -12,13 +12,12 @@
 #include <ranges>
 #include <system_error>
 
+#include "loom/async/completion_queue.hpp"
 #include "loom/core/allocator.hpp"
 #include "loom/core/domain.hpp"
 #include "loom/core/error.hpp"
 
-namespace loom {
-
-namespace detail {
+namespace loom::detail {
 
 /// @brief Internal implementation of the completion queue.
 struct completion_queue_impl {
@@ -48,23 +47,28 @@ struct completion_queue_impl {
     auto operator=(completion_queue_impl&&) -> completion_queue_impl& = delete;
 };
 
-}  // namespace detail
+}  // namespace loom::detail
 
-completion_queue::completion_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+#ifdef LOOM_IMPLEMENTATION
 
-completion_queue::~completion_queue() = default;
+namespace loom {
 
-completion_queue::completion_queue(completion_queue&&) noexcept = default;
+inline completion_queue::completion_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-auto completion_queue::operator=(completion_queue&&) noexcept -> completion_queue& = default;
+inline completion_queue::~completion_queue() = default;
 
-auto completion_queue::impl_valid() const noexcept -> bool {
+inline completion_queue::completion_queue(completion_queue&&) noexcept = default;
+
+inline auto completion_queue::operator=(completion_queue&&) noexcept -> completion_queue& =
+    default;
+
+inline auto completion_queue::impl_valid() const noexcept -> bool {
     return impl_ && impl_->cq != nullptr;
 }
 
-auto completion_queue::create(const domain& dom,
-                              const completion_queue_attr& attr,
-                              memory_resource* resource) -> result<completion_queue> {
+inline auto completion_queue::create(const domain& dom,
+                                      const completion_queue_attr& attr,
+                                      memory_resource* resource) -> result<completion_queue> {
     if (!dom) {
         return make_error_result<completion_queue>(errc::invalid_argument);
     }
@@ -97,7 +101,7 @@ auto completion_queue::create(const domain& dom,
     return completion_queue{std::move(impl)};
 }
 
-auto completion_queue::poll() const -> std::optional<completion_event> {
+inline auto completion_queue::poll() const -> std::optional<completion_event> {
     if (!impl_ || !impl_->cq) {
         return std::nullopt;
     }
@@ -145,7 +149,7 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
     return event;
 }
 
-auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) const
+inline auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) const
     -> result<completion_event> {
     if (!impl_ || !impl_->cq) {
         return make_error_result<completion_event>(errc::invalid_argument);
@@ -196,7 +200,7 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
     return event;
 }
 
-auto completion_queue::poll_batch(std::span<completion_event> events) const -> std::size_t {
+inline auto completion_queue::poll_batch(std::span<completion_event> events) const -> std::size_t {
     if (!impl_ || !impl_->cq || events.empty()) {
         return 0;
     }
@@ -224,7 +228,7 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
     return count;
 }
 
-auto completion_queue::read() const -> result<completion_event> {
+inline auto completion_queue::read() const -> result<completion_event> {
     auto event = poll();
     if (!event) {
         return make_error_result<completion_event>(errc::again);
@@ -232,7 +236,7 @@ auto completion_queue::read() const -> result<completion_event> {
     return *event;
 }
 
-auto completion_queue::capacity() const noexcept -> std::size_t {
+inline auto completion_queue::capacity() const noexcept -> std::size_t {
     if (!impl_ || !impl_->cq) {
         return 0;
     }
@@ -240,7 +244,7 @@ auto completion_queue::capacity() const noexcept -> std::size_t {
     return 1024;
 }
 
-auto completion_queue::pending() const noexcept -> std::size_t {
+inline auto completion_queue::pending() const noexcept -> std::size_t {
     if (!impl_ || !impl_->cq) {
         return 0;
     }
@@ -255,32 +259,32 @@ auto completion_queue::pending() const noexcept -> std::size_t {
     return static_cast<std::size_t>(ret);
 }
 
-auto completion_queue::ack(const completion_event&) -> void_result {
+inline auto completion_queue::ack(const completion_event&) -> void_result {
     return make_success();
 }
 
-auto completion_queue::get_progress_policy() const noexcept -> runtime_progress_policy {
+inline auto completion_queue::get_progress_policy() const noexcept -> runtime_progress_policy {
     if (!impl_) {
         return runtime_progress_policy{};
     }
     return impl_->progress;
 }
 
-auto completion_queue::supports_blocking_wait() const noexcept -> bool {
+inline auto completion_queue::supports_blocking_wait() const noexcept -> bool {
     if (!impl_) {
         return false;
     }
     return impl_->progress.supports_blocking_wait();
 }
 
-auto completion_queue::requires_manual_progress() const noexcept -> bool {
+inline auto completion_queue::requires_manual_progress() const noexcept -> bool {
     if (!impl_) {
         return true;
     }
     return impl_->progress.requires_manual_data_progress();
 }
 
-auto completion_queue::get_wait_fd() const -> result<int> {
+inline auto completion_queue::get_wait_fd() const -> result<int> {
     if (!impl_ || !impl_->cq) {
         return make_error_result<int>(errc::invalid_argument);
     }
@@ -298,8 +302,10 @@ auto completion_queue::get_wait_fd() const -> result<int> {
     return fd;
 }
 
-auto completion_queue::impl_internal_ptr() const noexcept -> void* {
+inline auto completion_queue::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->cq : nullptr;
 }
 
 }  // namespace loom
+
+#endif  // LOOM_IMPLEMENTATION

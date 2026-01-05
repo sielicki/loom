@@ -68,6 +68,22 @@ enum class datatype {
     uint128,              ///< Unsigned 128-bit integer
 };
 
+// Check for __int128 support (GCC/Clang extension)
+#if defined(__SIZEOF_INT128__)
+#define LOOM_HAS_INT128 1
+// Suppress GCC's pedantic warning about __int128 not being ISO C++
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+using int128_type = __int128;
+using uint128_type = unsigned __int128;
+#pragma GCC diagnostic pop
+#else
+#define LOOM_HAS_INT128 0
+// Provide stub types when __int128 is not available
+struct int128_type {};
+struct uint128_type {};
+#endif
+
 /**
  * @concept atomic_type
  * @brief Concept for types that support atomic operations.
@@ -75,7 +91,11 @@ enum class datatype {
  */
 template <typename T>
 concept atomic_type =
-    std::is_arithmetic_v<T> || std::is_same_v<T, __int128> || std::is_same_v<T, unsigned __int128>;
+#if LOOM_HAS_INT128
+    std::is_arithmetic_v<T> || std::is_same_v<T, int128_type> || std::is_same_v<T, uint128_type>;
+#else
+    std::is_arithmetic_v<T>;
+#endif
 
 /**
  * @brief Gets the datatype enum for an atomic type.
@@ -104,10 +124,12 @@ consteval auto get_datatype() -> datatype {
         return datatype::float32;
     else if constexpr (std::is_same_v<T, double>)
         return datatype::double64;
-    else if constexpr (std::is_same_v<T, __int128>)
+#if LOOM_HAS_INT128
+    else if constexpr (std::is_same_v<T, int128_type>)
         return datatype::int128;
-    else if constexpr (std::is_same_v<T, unsigned __int128>)
+    else if constexpr (std::is_same_v<T, uint128_type>)
         return datatype::uint128;
+#endif
     else
         static_assert(sizeof(T) == 0, "Unsupported atomic datatype");
 }

@@ -21,6 +21,7 @@
 #include "loom/async/completion_queue.hpp"
 #include "loom/core/endpoint.hpp"
 #include "loom/core/result.hpp"
+#include "loom/core/safe_context.hpp"
 #include "loom/core/types.hpp"
 #include "loom/execution/concepts.hpp"
 #include "loom/execution/receiver.hpp"
@@ -49,11 +50,14 @@ protected:
     explicit fabric_operation_state_base(Receiver receiver) noexcept(
         std::is_nothrow_move_constructible_v<Receiver>)
         : receiver_(std::move(receiver)) {
-        // Store back-pointer for completion dispatch
-        fi_ctx_.internal[0] = static_cast<void*>(this);
+        // Store back-pointer for completion dispatch with validation support
+        store_safe_context(fi_ctx_, this);
     }
 
-    ~fabric_operation_state_base() = default;
+    ~fabric_operation_state_base() {
+        // Invalidate context to detect use-after-free in debug builds
+        invalidate_safe_context(fi_ctx_);
+    }
 
     /**
      * @brief Returns the libfabric context pointer.
@@ -345,17 +349,16 @@ private:
  * This function is used by the completion queue polling loop to dispatch
  * completions to the appropriate operation state.
  *
+ * In debug builds, this validates the context pointer to detect use-after-free.
+ * If the operation state has been destroyed, this returns nullptr.
+ *
  * @tparam OpState The operation state type.
  * @param ctx The context pointer from the completion event.
  * @return Pointer to the operation state, or nullptr if invalid.
  */
 template <typename OpState>
 [[nodiscard]] auto recover_operation_state(void* ctx) noexcept -> OpState* {
-    if (ctx == nullptr) {
-        return nullptr;
-    }
-    auto* fi_ctx = static_cast<::fi_context2*>(ctx);
-    return static_cast<OpState*>(fi_ctx->internal[0]);
+    return recover_safe_context<OpState>(ctx);
 }
 
 }  // namespace loom::execution

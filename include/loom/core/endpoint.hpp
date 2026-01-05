@@ -119,11 +119,13 @@ public:
      */
     auto operator=(endpoint&&) noexcept -> endpoint&;
 
-    [[nodiscard]] static auto create(const domain& dom,
-                                     const fabric_info& info,
-                                     memory_resource* resource = nullptr) -> result<endpoint>;
+    [[nodiscard("endpoint creation result must be checked for errors")]]
+    static auto create(const domain& dom,
+                       const fabric_info& info,
+                       memory_resource* resource = nullptr) -> result<endpoint>;
 
-    [[nodiscard]] auto enable() -> void_result;
+    [[nodiscard("endpoint enable result must be checked")]]
+    auto enable() -> void_result;
 
     [[nodiscard]] auto get_type() const -> result<endpoint_type>;
 
@@ -176,8 +178,11 @@ public:
                              mr_key key,
                              context_ptr<void> ctx = {}) -> void_result;
 
-    [[nodiscard]] auto connect(const address& peer_addr) -> void_result;
-    [[nodiscard]] auto accept() -> void_result;
+    [[nodiscard("connect result must be checked for errors")]]
+    auto connect(const address& peer_addr) -> void_result;
+
+    [[nodiscard("accept result must be checked for errors")]]
+    auto accept() -> void_result;
 
     [[nodiscard]] auto get_local_address() const -> result<address>;
     [[nodiscard]] auto get_peer_address() const -> result<address>;

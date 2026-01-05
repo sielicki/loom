@@ -89,9 +89,10 @@ public:
      */
     auto operator=(domain&&) noexcept -> domain&;
 
-    [[nodiscard]] static auto create(const fabric& fab,
-                                     const fabric_info& info,
-                                     memory_resource* resource = nullptr) -> result<domain>;
+    [[nodiscard("domain creation result must be checked for errors")]]
+    static auto create(const fabric& fab,
+                       const fabric_info& info,
+                       memory_resource* resource = nullptr) -> result<domain>;
 
     [[nodiscard]] auto get_name() const -> std::string_view;
     [[nodiscard]] auto get_threading() const -> threading_mode;
@@ -100,7 +101,8 @@ public:
 
     [[nodiscard]] auto progress_policy() const noexcept -> runtime_progress_policy;
 
-    [[nodiscard]] auto bind_eq(event_queue& eq, std::uint64_t flags = 0) -> void_result;
+    [[nodiscard("event queue binding result must be checked")]]
+    auto bind_eq(event_queue& eq, std::uint64_t flags = 0) -> void_result;
 
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;
     [[nodiscard]] auto impl_valid() const noexcept -> bool;

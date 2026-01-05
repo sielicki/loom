@@ -163,34 +163,38 @@ public:
     memory_region(memory_region&&) noexcept;
     auto operator=(memory_region&&) noexcept -> memory_region&;
 
-    [[nodiscard]] static auto register_memory(domain& dom,
-                                              std::span<std::byte> buffer,
-                                              mr_access access,
-                                              memory_resource* resource = nullptr)
+    [[nodiscard("memory registration result must be checked for errors")]]
+    static auto register_memory(domain& dom,
+                                std::span<std::byte> buffer,
+                                mr_access access,
+                                memory_resource* resource = nullptr)
         -> result<memory_region>;
 
-    [[nodiscard]] static auto register_memory(domain& dom,
-                                              void* addr,
-                                              std::size_t length,
-                                              mr_access access,
-                                              memory_resource* resource = nullptr)
+    [[nodiscard("memory registration result must be checked for errors")]]
+    static auto register_memory(domain& dom,
+                                void* addr,
+                                std::size_t length,
+                                mr_access access,
+                                memory_resource* resource = nullptr)
         -> result<memory_region>;
 
-    [[nodiscard]] static auto register_hmem(domain& dom,
-                                            void* addr,
-                                            std::size_t length,
-                                            mr_access access,
-                                            hmem_device device,
-                                            memory_resource* resource = nullptr)
+    [[nodiscard("hmem registration result must be checked for errors")]]
+    static auto register_hmem(domain& dom,
+                              void* addr,
+                              std::size_t length,
+                              mr_access access,
+                              hmem_device device,
+                              memory_resource* resource = nullptr)
         -> result<memory_region>;
 
-    [[nodiscard]] static auto register_dmabuf(domain& dom,
-                                              void* addr,
-                                              std::size_t length,
-                                              mr_access access,
-                                              int fd,
-                                              std::uint64_t offset = 0,
-                                              memory_resource* resource = nullptr)
+    [[nodiscard("dmabuf registration result must be checked for errors")]]
+    static auto register_dmabuf(domain& dom,
+                                void* addr,
+                                std::size_t length,
+                                mr_access access,
+                                int fd,
+                                std::uint64_t offset = 0,
+                                memory_resource* resource = nullptr)
         -> result<memory_region>;
 
     [[nodiscard]] auto descriptor() const noexcept -> mr_descriptor;

@@ -25,7 +25,7 @@ namespace loom {
 template <typename T>
 concept fabric_capability = requires {
     { T::required_caps } -> std::convertible_to<caps>;
-    { T::endpoint_type } -> std::convertible_to<endpoint_type>;
+    { T::ep_type } -> std::convertible_to<endpoint_type>;
     { T::optional_caps } -> std::convertible_to<caps>;
 };
 
@@ -36,7 +36,7 @@ concept fabric_capability = requires {
 struct rdm_tagged_messaging {
     static constexpr caps required_caps = capability::msg | capability::tagged;   ///< Required caps
     static constexpr caps optional_caps = capability::fence;                      ///< Optional caps
-    static constexpr endpoint_type endpoint_type = endpoint_types::rdm;           ///< Endpoint type
+    static constexpr endpoint_type ep_type = endpoint_types::rdm;                 ///< Endpoint type
     static constexpr std::string_view description = "RDM with tagged messaging";  ///< Description
 };
 
@@ -48,7 +48,7 @@ struct rdma_write_ops {
     static constexpr caps required_caps =
         capability::rma | capability::remote_write;                           ///< Required caps
     static constexpr caps optional_caps = capability::remote_read;            ///< Optional caps
-    static constexpr endpoint_type endpoint_type = endpoint_types::rdm;       ///< Endpoint type
+    static constexpr endpoint_type ep_type = endpoint_types::rdm;             ///< Endpoint type
     static constexpr std::string_view description = "RDMA write operations";  ///< Description
 };
 
@@ -60,7 +60,7 @@ struct rdma_read_ops {
     static constexpr caps required_caps =
         capability::rma | capability::remote_read;                           ///< Required caps
     static constexpr caps optional_caps = capability::remote_write;          ///< Optional caps
-    static constexpr endpoint_type endpoint_type = endpoint_types::rdm;      ///< Endpoint type
+    static constexpr endpoint_type ep_type = endpoint_types::rdm;            ///< Endpoint type
     static constexpr std::string_view description = "RDMA read operations";  ///< Description
 };
 
@@ -71,7 +71,7 @@ struct rdma_read_ops {
 struct gpu_direct_rdma {
     static constexpr caps required_caps = capability::hmem;                    ///< Required caps
     static constexpr caps optional_caps{0ULL};                                 ///< Optional caps
-    static constexpr endpoint_type endpoint_type = endpoint_types::rdm;        ///< Endpoint type
+    static constexpr endpoint_type ep_type = endpoint_types::rdm;              ///< Endpoint type
     static constexpr std::string_view description = "GPUDirect RDMA support";  ///< Description
 };
 
@@ -82,7 +82,7 @@ struct gpu_direct_rdma {
 struct atomic_ops {
     static constexpr caps required_caps = capability::atomic;             ///< Required caps
     static constexpr caps optional_caps{0ULL};                            ///< Optional caps
-    static constexpr endpoint_type endpoint_type = endpoint_types::rdm;   ///< Endpoint type
+    static constexpr endpoint_type ep_type = endpoint_types::rdm;         ///< Endpoint type
     static constexpr std::string_view description = "Atomic operations";  ///< Description
 };
 
@@ -93,7 +93,7 @@ struct atomic_ops {
 struct connection_oriented_messaging {
     static constexpr caps required_caps = capability::msg;               ///< Required caps
     static constexpr caps optional_caps = capability::rma;               ///< Optional caps
-    static constexpr endpoint_type endpoint_type = endpoint_types::msg;  ///< Endpoint type
+    static constexpr endpoint_type ep_type = endpoint_types::msg;        ///< Endpoint type
     static constexpr std::string_view description =
         "Connection-oriented messaging";  ///< Description
 };
@@ -105,7 +105,7 @@ struct connection_oriented_messaging {
 struct datagram_messaging {
     static constexpr caps required_caps = capability::msg;                 ///< Required caps
     static constexpr caps optional_caps{0ULL};                             ///< Optional caps
-    static constexpr endpoint_type endpoint_type = endpoint_types::dgram;  ///< Endpoint type
+    static constexpr endpoint_type ep_type = endpoint_types::dgram;        ///< Endpoint type
     static constexpr std::string_view description = "Datagram messaging";  ///< Description
 };
 
@@ -120,16 +120,16 @@ struct combined_capabilities {
 
     static constexpr caps optional_caps = (Caps::optional_caps | ...);  ///< Combined optional caps
 
-    static constexpr loom::endpoint_type endpoint_type = []() consteval {
+    static constexpr loom::endpoint_type ep_type = []() consteval {
         if constexpr (sizeof...(Caps) == 0) {
             return endpoint_types::msg;
         } else {
             constexpr auto get_first = []<typename First, typename... Rest>() consteval {
-                return First::endpoint_type;
+                return First::ep_type;
             };
             constexpr loom::endpoint_type first_type = get_first.template operator()<Caps...>();
 
-            static_assert(((Caps::endpoint_type == first_type) && ...),
+            static_assert(((Caps::ep_type == first_type) && ...),
                           "All combined capabilities must use the same endpoint type");
 
             return first_type;
@@ -163,7 +163,7 @@ public:
 
         if constexpr (sizeof...(RequiredCaps) > 0) {
             hints.capabilities = capabilities::required_caps;
-            hints.ep_type = capabilities::endpoint_type;
+            hints.ep_type = capabilities::ep_type;
         }
 
         return hints;
@@ -246,9 +246,9 @@ public:
      * @brief Gets the endpoint type at compile time.
      * @return The required endpoint type.
      */
-    [[nodiscard]] static consteval auto get_endpoint_type() -> endpoint_type {
+    [[nodiscard]] static consteval auto get_endpoint_type() -> loom::endpoint_type {
         if constexpr (sizeof...(RequiredCaps) > 0) {
-            return capabilities::endpoint_type;
+            return capabilities::ep_type;
         } else {
             return endpoint_types::msg;
         }

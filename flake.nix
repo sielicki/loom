@@ -88,6 +88,10 @@
               ccache
               llvmPackages_latest.clang-tools
               doxygen
+              # Coverage tools
+              lcov
+              # include-what-you-use
+              include-what-you-use
             ]
             ++ lib.optionals (!isDarwin) [
               valgrind
@@ -98,6 +102,7 @@
           testDependencies = with pkgs;
             [
               openssh
+              catch2_3
             ]
             ++ lib.optionals (!isDarwin) [
               iproute2
@@ -143,6 +148,7 @@
                 [
                   libfabric
                   stdexec
+                  pkgs.catch2_3
                 ]
                 ++ lib.optionals enableAsio [ asio ]
                 ++ lib.optionals (!stdenv.isDarwin) [
@@ -318,6 +324,14 @@
                       ''
                     }
                     echo ""
+                    echo "📊 Coverage (use: nix develop .#coverage):"
+                    echo "  configure-coverage  - Configure build with coverage"
+                    echo "  coverage-report     - Generate HTML coverage report"
+                    echo ""
+                    echo "🔍 IWYU (use: nix develop .#iwyu):"
+                    echo "  configure-iwyu  - Configure build with include-what-you-use"
+                    echo "  build-iwyu      - Build and run IWYU analysis"
+                    echo ""
 
                     # Convenient aliases
                     alias configure='cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON'
@@ -413,6 +427,96 @@
                       echo "Created symlink: compile_commands.json -> build/compile_commands.json"
                     fi
                   '';
+                };
+
+              # Include-what-you-use development shell
+              iwyu =
+                let
+                  stdenv = pkgs.llvmPackages_latest.stdenv;
+                in
+                pkgs.mkShell.override { inherit stdenv; } {
+                  name = "loom-dev-iwyu";
+
+                  inputsFrom = [
+                    self'.packages.loom-clang
+                    config.treefmt.build.devShell
+                  ];
+
+                  buildInputs = commonBuildInputs ++ devDependencies ++ testDependencies;
+
+                  shellHook = ''
+                    echo "🧵 Loom Development Environment (IWYU)"
+                    echo "======================================="
+                    echo ""
+                    echo "Platform: ${system}"
+                    echo "Compiler: $(${stdenv.cc}/bin/c++ --version | head -n1)"
+                    echo "IWYU: $(include-what-you-use --version 2>&1 | head -n1)"
+                    echo ""
+                    echo "📊 IWYU Commands:"
+                    echo "  configure-iwyu  - Configure build with IWYU enabled"
+                    echo "  build-iwyu      - Build and run IWYU analysis"
+                    echo "  iwyu-fix        - Apply IWYU suggestions (use with caution)"
+                    echo ""
+
+                    alias configure-iwyu='cmake -B build-iwyu -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLOOM_ENABLE_IWYU=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON'
+                    alias build-iwyu='cmake --build build-iwyu -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) 2>&1 | tee iwyu-output.txt'
+                    alias iwyu-fix='iwyu-fix-includes --comments --update_comments --nosafe_headers < iwyu-output.txt'
+                    alias clean-iwyu='rm -rf build-iwyu iwyu-output.txt'
+
+                    # Create symlink to compile_commands.json if build directory exists
+                    if [ -f build-iwyu/compile_commands.json ] && [ ! -e compile_commands.json ]; then
+                      ln -s build-iwyu/compile_commands.json compile_commands.json
+                      echo "Created symlink: compile_commands.json -> build-iwyu/compile_commands.json"
+                    fi
+                  '';
+                };
+
+              # Coverage development shell
+              coverage =
+                let
+                  stdenv = pkgs.llvmPackages_latest.stdenv;
+                in
+                pkgs.mkShell.override { inherit stdenv; } {
+                  name = "loom-dev-coverage";
+
+                  inputsFrom = [
+                    self'.packages.loom-clang
+                    config.treefmt.build.devShell
+                  ];
+
+                  buildInputs = commonBuildInputs ++ devDependencies ++ testDependencies ++ [
+                    pkgs.llvmPackages_latest.llvm  # For llvm-cov and llvm-profdata
+                  ];
+
+                  shellHook = ''
+                    echo "🧵 Loom Development Environment (Coverage)"
+                    echo "==========================================="
+                    echo ""
+                    echo "Platform: ${system}"
+                    echo "Compiler: $(${stdenv.cc}/bin/c++ --version | head -n1)"
+                    echo "llvm-cov: $(llvm-cov --version | head -n1)"
+                    echo ""
+                    echo "📊 Coverage Commands:"
+                    echo "  configure-coverage  - Configure build with coverage"
+                    echo "  coverage-report     - Generate HTML coverage report"
+                    echo "  coverage-summary    - Print coverage summary"
+                    echo ""
+
+                    alias configure-coverage='cmake -B build-coverage -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLOOM_ENABLE_COVERAGE=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON'
+                    alias build-coverage='cmake --build build-coverage -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)'
+                    alias coverage-report='cmake --build build-coverage --target coverage-report && echo "Report: build-coverage/coverage-report/index.html"'
+                    alias coverage-summary='cmake --build build-coverage --target coverage-summary'
+                    alias clean-coverage='rm -rf build-coverage'
+
+                    # Create symlink to compile_commands.json if build directory exists
+                    if [ -f build-coverage/compile_commands.json ] && [ ! -e compile_commands.json ]; then
+                      ln -s build-coverage/compile_commands.json compile_commands.json
+                      echo "Created symlink: compile_commands.json -> build-coverage/compile_commands.json"
+                    fi
+                  '';
+
+                  # Set environment for coverage
+                  LLVM_PROFILE_FILE = "build-coverage/coverage-profraw/%p-%m.profraw";
                 };
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {

@@ -25,6 +25,7 @@
 #include "loom/async/completion_queue.hpp"
 #include "loom/core/crtp/crtp_tags.hpp"
 #include "loom/core/endpoint.hpp"
+#include "loom/core/safe_context.hpp"
 #include "loom/core/submission_context.hpp"
 #include <asio/associated_allocator.hpp>
 #include <asio/associated_cancellation_slot.hpp>
@@ -54,8 +55,15 @@ class asio_context_base {
 public:
     using crtp_tag = crtp::asio_context_tag;
 
-    asio_context_base() { fi_ctx_.internal[0] = static_cast<void*>(static_cast<Derived*>(this)); }
-    virtual ~asio_context_base() = default;
+    asio_context_base() {
+        // Store back-pointer with validation support
+        store_safe_context(fi_ctx_, static_cast<Derived*>(this));
+    }
+
+    virtual ~asio_context_base() {
+        // Invalidate context to detect use-after-free in debug builds
+        invalidate_safe_context(fi_ctx_);
+    }
 
     asio_context_base(const asio_context_base&) = delete;
     auto operator=(const asio_context_base&) -> asio_context_base& = delete;
@@ -76,17 +84,14 @@ public:
 
     /**
      * @brief Recovers the derived context from a libfabric context pointer.
+     *
+     * In debug builds, this validates the context to detect use-after-free.
+     *
      * @param ctx The libfabric context pointer from a completion event.
      * @return Pointer to the derived context, or nullptr if invalid.
-     *
-     * Uses the internal[0] field of fi_context2 as a back-pointer.
      */
     [[nodiscard]] static auto from_fi_context(void* ctx) noexcept -> Derived* {
-        if (ctx == nullptr) {
-            return nullptr;
-        }
-        auto* fi_ctx = static_cast<::fi_context2*>(ctx);
-        return static_cast<Derived*>(fi_ctx->internal[0]);
+        return recover_safe_context<Derived>(ctx);
     }
 
     /**

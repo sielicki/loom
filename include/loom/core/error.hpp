@@ -3,6 +3,7 @@
 
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 /**
  * @namespace loom
@@ -88,7 +89,7 @@ inline auto loom_category() noexcept -> const error_category& {
  * @return A std::error_code in the loom category.
  */
 inline auto make_error_code(errc e) noexcept -> std::error_code {
-    return {static_cast<int>(e), loom_category()};
+    return {std::to_underlying(e), loom_category()};
 }
 
 /**

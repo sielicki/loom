@@ -240,7 +240,7 @@ public:
      * @return The base address, or nullptr.
      */
     [[nodiscard]] auto base_address() const noexcept -> void* {
-        return entry_ ? reinterpret_cast<void*>(entry_->base_addr) : nullptr;
+        return entry_ ? std::bit_cast<void*>(entry_->base_addr) : nullptr;
     }
 
     /**
@@ -362,7 +362,7 @@ public:
      */
     [[nodiscard]] auto lookup(void* addr, std::size_t length, mr_access access)
         -> result<handle_type> {
-        auto uaddr = reinterpret_cast<std::uintptr_t>(addr);
+        auto uaddr = std::bit_cast<std::uintptr_t>(addr);
 
         {
             std::shared_lock lock(mutex_);
@@ -388,7 +388,7 @@ public:
             std::make_unique<detail::mr_cache_entry_base>(aligned_base, aligned_length, access);
 
         auto mr_result = memory_region::register_memory(
-            *domain_, reinterpret_cast<void*>(aligned_base), aligned_length, access, resource_);
+            *domain_, std::bit_cast<void*>(aligned_base), aligned_length, access, resource_);
 
         if (!mr_result) {
             return std::unexpected(mr_result.error());
@@ -431,7 +431,7 @@ public:
                                      mr_access access,
                                      int fd,
                                      std::uint64_t offset = 0) -> result<handle_type> {
-        auto uaddr = reinterpret_cast<std::uintptr_t>(addr);
+        auto uaddr = std::bit_cast<std::uintptr_t>(addr);
 
         std::unique_lock lock(mutex_);
 
@@ -442,7 +442,7 @@ public:
             std::make_unique<detail::mr_cache_entry_base>(aligned_base, aligned_length, access);
 
         auto mr_result = memory_region::register_dmabuf(*domain_,
-                                                        reinterpret_cast<void*>(aligned_base),
+                                                        std::bit_cast<void*>(aligned_base),
                                                         aligned_length,
                                                         access,
                                                         fd,
@@ -476,7 +476,7 @@ public:
     [[nodiscard]] auto
     lookup_hmem(void* addr, std::size_t length, mr_access access, hmem_device device)
         -> result<handle_type> {
-        auto uaddr = reinterpret_cast<std::uintptr_t>(addr);
+        auto uaddr = std::bit_cast<std::uintptr_t>(addr);
 
         std::unique_lock lock(mutex_);
 
@@ -487,7 +487,7 @@ public:
             std::make_unique<detail::mr_cache_entry_base>(aligned_base, aligned_length, access);
 
         auto mr_result = memory_region::register_hmem(*domain_,
-                                                      reinterpret_cast<void*>(aligned_base),
+                                                      std::bit_cast<void*>(aligned_base),
                                                       aligned_length,
                                                       access,
                                                       device,
@@ -515,7 +515,7 @@ public:
      * @param length Length of the range.
      */
     void invalidate(void* addr, std::size_t length) {
-        auto uaddr = reinterpret_cast<std::uintptr_t>(addr);
+        auto uaddr = std::bit_cast<std::uintptr_t>(addr);
 
         std::unique_lock lock(mutex_);
 

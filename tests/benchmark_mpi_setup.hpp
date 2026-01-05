@@ -6,9 +6,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <format>
 #include <memory>
 #include <numeric>
+#include <print>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -110,7 +110,7 @@ struct fabric_setup {
         }
 
         if (mpi.is_root()) {
-            std::cout << std::format("Using provider: {}\n", infos[0].get_provider_name());
+            std::print("Using provider: {}\n", infos[0].get_provider_name());
         }
 
         setup.fabric = loom::fabric::create(infos[0]);
@@ -230,15 +230,15 @@ struct benchmark_result {
     }
 
     void print(std::string_view name) const {
-        std::cout << std::format("{:50s}: mean={:8d}ns, median={:8d}ns, "
-                                 "p99={:8d}ns, min={:8d}ns, max={:8d}ns, stddev={:8d}ns\n",
-                                 name,
-                                 mean.count(),
-                                 median.count(),
-                                 p99.count(),
-                                 min.count(),
-                                 max.count(),
-                                 stddev.count());
+        std::print("{:50s}: mean={:8d}ns, median={:8d}ns, "
+                   "p99={:8d}ns, min={:8d}ns, max={:8d}ns, stddev={:8d}ns\n",
+                   name,
+                   mean.count(),
+                   median.count(),
+                   p99.count(),
+                   min.count(),
+                   max.count(),
+                   stddev.count());
     }
 };
 

@@ -781,4 +781,3 @@ if constexpr (loom::execution::features::has_when_all) {
 - builds/ci, mostly targeting manylinux targets.
 - convert doxygen to html or markdown.
 - rust bindings via [cxx](https://docs.rs/cxx/latest/cxx/) which compete with libfabric-sys in upstream libfabric but work better with tokio.
-- zig bindings and integration with their new async stuff.

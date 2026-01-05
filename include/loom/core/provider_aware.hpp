@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
+#include <bit>
 #include <cstddef>
 #include <span>
 #include <utility>
@@ -59,7 +60,7 @@ struct provider_remote_memory : provider_aware_remote_memory_base<provider_remot
      */
     static auto from_mr(const memory_region& mr) -> provider_remote_memory {
         return provider_remote_memory{
-            reinterpret_cast<std::uint64_t>(mr.address()), mr.key(), mr.length()};
+            std::bit_cast<std::uint64_t>(mr.address()), mr.key(), mr.length()};
     }
 
     /**

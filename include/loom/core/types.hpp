@@ -45,15 +45,13 @@ public:
         : value_(std::forward<U>(value)) {}
 
     /**
-     * @brief Returns a const reference to the underlying value.
-     * @return Const reference to the wrapped value.
+     * @brief Returns a reference to the underlying value.
+     * @return Reference to the wrapped value (const or mutable based on context).
      */
-    [[nodiscard]] constexpr auto get() const noexcept -> const T& { return value_; }
-    /**
-     * @brief Returns a mutable reference to the underlying value.
-     * @return Mutable reference to the wrapped value.
-     */
-    [[nodiscard]] constexpr auto get() noexcept -> T& { return value_; }
+    template <typename Self>
+    [[nodiscard]] constexpr auto get(this Self&& self) noexcept -> decltype(auto) {
+        return std::forward<Self>(self).value_;
+    }
 
     /**
      * @brief Explicit conversion to the underlying type.

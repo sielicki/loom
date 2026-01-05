@@ -149,19 +149,22 @@ public:
      */
     auto operator=(completion_queue&&) noexcept -> completion_queue&;
 
-    [[nodiscard]] static auto create(const domain& dom,
-                                     const completion_queue_attr& attr = {},
-                                     memory_resource* resource = nullptr)
+    [[nodiscard("completion queue creation result must be checked for errors")]]
+    static auto create(const domain& dom,
+                       const completion_queue_attr& attr = {},
+                       memory_resource* resource = nullptr)
         -> result<completion_queue>;
 
-    [[nodiscard]] auto poll() -> std::optional<completion_event>;
+    [[nodiscard]] auto poll() const -> std::optional<completion_event>;
 
-    [[nodiscard]] auto wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt)
+    [[nodiscard("wait result must be checked for errors or timeout")]]
+    auto wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt) const
         -> result<completion_event>;
 
-    [[nodiscard]] auto poll_batch(std::span<completion_event> events) -> std::size_t;
+    [[nodiscard]] auto poll_batch(std::span<completion_event> events) const -> std::size_t;
 
-    [[nodiscard]] auto read() -> result<completion_event>;
+    [[nodiscard("read result must be checked for errors")]]
+    auto read() const -> result<completion_event>;
 
     [[nodiscard]] auto capacity() const noexcept -> std::size_t;
 
@@ -174,6 +177,17 @@ public:
     [[nodiscard]] auto supports_blocking_wait() const noexcept -> bool;
 
     [[nodiscard]] auto requires_manual_progress() const noexcept -> bool;
+
+    /**
+     * @brief Returns the wait object file descriptor for async I/O integration.
+     *
+     * This method returns the file descriptor that can be used with epoll, kqueue,
+     * io_uring, or similar mechanisms to wait for completions without busy-polling.
+     *
+     * @return The file descriptor, or an error if not supported.
+     * @note The completion queue must have been created with wait_obj=true.
+     */
+    [[nodiscard]] auto get_wait_fd() const -> result<int>;
 
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;
     [[nodiscard]] auto impl_valid() const noexcept -> bool;

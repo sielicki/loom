@@ -244,7 +244,8 @@ public:
     fabric(fabric&&) noexcept;
     auto operator=(fabric&&) noexcept -> fabric&;
 
-    [[nodiscard]] static auto create(const fabric_info& info, memory_resource* resource = nullptr)
+    [[nodiscard("fabric creation result must be checked for errors")]]
+    static auto create(const fabric_info& info, memory_resource* resource = nullptr)
         -> result<fabric>;
 
     [[nodiscard]] auto get_name() const -> std::string_view;
@@ -265,7 +266,8 @@ private:
  * @param resource Optional memory resource for allocations.
  * @return Result containing fabric_info or an error.
  */
-[[nodiscard]] auto query_fabric(const fabric_hints& hints = {}, memory_resource* resource = nullptr)
+[[nodiscard("fabric query result must be checked for errors")]]
+auto query_fabric(const fabric_hints& hints = {}, memory_resource* resource = nullptr)
     -> result<fabric_info>;
 
 /**

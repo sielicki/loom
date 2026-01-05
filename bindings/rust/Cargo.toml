@@ -1,0 +1,38 @@
+[package]
+name = "loom-fabric"
+version = "0.1.0"
+edition = "2021"
+authors = ["loom contributors"]
+license = "BSD-2-Clause OR GPL-2.0-only"
+description = "Rust bindings for loom - modern C++23 libfabric bindings"
+repository = "https://github.com/sielicki/loom"
+keywords = ["rdma", "libfabric", "hpc", "networking", "async"]
+categories = ["network-programming", "asynchronous", "api-bindings"]
+readme = "README.md"
+
+[lib]
+name = "loom_fabric"
+path = "src/lib.rs"
+
+[dependencies]
+cxx = "1.0"
+thiserror = "1.0"
+bitflags = "2.4"
+
+# Async/tokio support (optional)
+tokio = { version = "1.0", features = ["net", "sync", "rt"], optional = true }
+futures = { version = "0.3", optional = true }
+
+[build-dependencies]
+cxx-build = "1.0"
+pkg-config = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
+
+[features]
+default = []
+tokio = ["dep:tokio", "dep:futures"]
+
+[package.metadata.docs.rs]
+features = ["tokio"]

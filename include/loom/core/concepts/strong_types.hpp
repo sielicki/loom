@@ -151,7 +151,7 @@ template <typename T>
 concept strong_type_concept = requires(const T& t) {
     typename T::value_type;
     typename T::tag_type;
-    { t.get() } noexcept -> std::same_as<const typename T::value_type&>;
+    { t.get() } noexcept -> std::convertible_to<typename T::value_type>;
 };
 
 /**

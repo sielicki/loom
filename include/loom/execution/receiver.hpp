@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "loom/async/completion_queue.hpp"
+#include "loom/core/safe_context.hpp"
 #include "loom/core/submission_context.hpp"
 #include "loom/execution/concepts.hpp"
 
@@ -60,15 +61,21 @@ public:
     explicit fabric_receiver(Receiver receiver) noexcept(
         std::is_nothrow_move_constructible_v<Receiver>)
         : receiver_(std::move(receiver)) {
-        // Store back-pointer in fi_context for recovery
-        fi_ctx_.internal[0] = static_cast<void*>(this);
+        // Store back-pointer in fi_context for recovery with validation support
+        store_safe_context(fi_ctx_, this);
     }
 
     fabric_receiver(const fabric_receiver&) = delete;
     auto operator=(const fabric_receiver&) -> fabric_receiver& = delete;
-    fabric_receiver(fabric_receiver&&) = default;
-    auto operator=(fabric_receiver&&) -> fabric_receiver& = default;
-    ~fabric_receiver() = default;
+    // Move operations are deleted because once this pointer is stored in
+    // fi_ctx_.internal[0], the object cannot safely change address.
+    fabric_receiver(fabric_receiver&&) = delete;
+    auto operator=(fabric_receiver&&) -> fabric_receiver& = delete;
+
+    ~fabric_receiver() {
+        // Invalidate context to detect use-after-free in debug builds
+        invalidate_safe_context(fi_ctx_);
+    }
 
     /**
      * @brief Returns the libfabric context pointer.
@@ -78,15 +85,14 @@ public:
 
     /**
      * @brief Recovers the fabric_receiver from a libfabric context.
+     *
+     * In debug builds, this validates the context to detect use-after-free.
+     *
      * @param ctx The context pointer from a completion event.
      * @return Pointer to the fabric_receiver, or nullptr if invalid.
      */
     [[nodiscard]] static auto from_fi_context(void* ctx) noexcept -> fabric_receiver* {
-        if (ctx == nullptr) {
-            return nullptr;
-        }
-        auto* fi_ctx = static_cast<::fi_context2*>(ctx);
-        return static_cast<fabric_receiver*>(fi_ctx->internal[0]);
+        return recover_safe_context<fabric_receiver>(ctx);
     }
 
     /**
