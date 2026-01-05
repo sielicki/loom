@@ -2,9 +2,7 @@
 #include <loom/core/concepts/provider_traits.hpp>
 #include <loom/core/memory.hpp>
 
-#include "ut.hpp"
-
-using namespace boost::ut;
+#include <catch2/catch_test_macros.hpp>
 
 namespace loom {
 
@@ -31,121 +29,114 @@ struct provider_remote_memory_test {
 
 }  // namespace loom
 
-suite provider_aware_suite = [] {
-    "provider_remote_memory default construction"_test = [] {
-        loom::provider_remote_memory_test<loom::provider::verbs_tag> rm;
+TEST_CASE("provider_remote_memory default construction", "[provider_aware]") {
+    loom::provider_remote_memory_test<loom::provider::verbs_tag> rm;
 
-        expect(rm.addr == 0UL);
-        expect(rm.key == 0UL);
-        expect(rm.length == 0UL);
-    };
+    REQUIRE(rm.addr == 0UL);
+    REQUIRE(rm.key == 0UL);
+    REQUIRE(rm.length == 0UL);
+}
 
-    "provider_remote_memory value construction"_test = [] {
-        loom::provider_remote_memory_test<loom::provider::verbs_tag> rm{0x1000, 0xABCD, 4096};
+TEST_CASE("provider_remote_memory value construction", "[provider_aware]") {
+    loom::provider_remote_memory_test<loom::provider::verbs_tag> rm{0x1000, 0xABCD, 4096};
 
-        expect(rm.addr == 0x1000UL);
-        expect(rm.key == 0xABCDUL);
-        expect(rm.length == 4096UL);
-    };
+    REQUIRE(rm.addr == 0x1000UL);
+    REQUIRE(rm.key == 0xABCDUL);
+    REQUIRE(rm.length == 4096UL);
+}
 
-    "provider_remote_memory from generic"_test = [] {
-        loom::remote_memory generic{0x2000, 0x5678, 8192};
-        loom::provider_remote_memory_test<loom::provider::efa_tag> rm{generic};
+TEST_CASE("provider_remote_memory from generic", "[provider_aware]") {
+    loom::remote_memory generic{0x2000, 0x5678, 8192};
+    loom::provider_remote_memory_test<loom::provider::efa_tag> rm{generic};
 
-        expect(rm.addr == 0x2000UL);
-        expect(rm.key == 0x5678UL);
-        expect(rm.length == 8192UL);
-    };
+    REQUIRE(rm.addr == 0x2000UL);
+    REQUIRE(rm.key == 0x5678UL);
+    REQUIRE(rm.length == 8192UL);
+}
 
-    "provider_remote_memory to_generic"_test = [] {
-        loom::provider_remote_memory_test<loom::provider::slingshot_tag> rm{0x3000, 0xDEAD, 16384};
-        auto generic = rm.to_generic();
+TEST_CASE("provider_remote_memory to_generic", "[provider_aware]") {
+    loom::provider_remote_memory_test<loom::provider::slingshot_tag> rm{0x3000, 0xDEAD, 16384};
+    auto generic = rm.to_generic();
 
-        expect(generic.addr == 0x3000UL);
-        expect(generic.key == 0xDEADUL);
-        expect(generic.length == 16384UL);
-    };
+    REQUIRE(generic.addr == 0x3000UL);
+    REQUIRE(generic.key == 0xDEADUL);
+    REQUIRE(generic.length == 16384UL);
+}
 
-    "provider_traits static properties verbs"_test = [] {
-        using traits = loom::provider_traits<loom::provider::verbs_tag>;
+TEST_CASE("provider_traits static properties verbs", "[provider_aware]") {
+    using traits = loom::provider_traits<loom::provider::verbs_tag>;
 
-        expect(traits::max_inject_size > 0UL) << "verbs should have inject size";
-        expect(traits::supports_native_atomics) << "verbs should support native atomics";
-        expect(!traits::uses_staged_atomics) << "verbs should not require staged atomics";
+    REQUIRE(traits::max_inject_size > 0UL);
+    REQUIRE(traits::supports_native_atomics);
+    REQUIRE_FALSE(traits::uses_staged_atomics);
 
-        expect(std::string_view{traits::provider_name()} == "verbs");
-    };
+    REQUIRE(std::string_view{traits::provider_name()} == "verbs");
+}
 
-    "provider_traits static properties efa"_test = [] {
-        using traits = loom::provider_traits<loom::provider::efa_tag>;
+TEST_CASE("provider_traits static properties efa", "[provider_aware]") {
+    using traits = loom::provider_traits<loom::provider::efa_tag>;
 
-        expect(traits::max_inject_size > 0UL) << "efa should have inject size";
-        expect(!traits::supports_native_atomics) << "efa should not support native atomics";
-        expect(traits::uses_staged_atomics) << "efa should use staged atomics";
+    REQUIRE(traits::max_inject_size > 0UL);
+    REQUIRE_FALSE(traits::supports_native_atomics);
+    REQUIRE(traits::uses_staged_atomics);
 
-        expect(std::string_view{traits::provider_name()} == "efa");
-    };
+    REQUIRE(std::string_view{traits::provider_name()} == "efa");
+}
 
-    "provider_traits static properties slingshot"_test = [] {
-        using traits = loom::provider_traits<loom::provider::slingshot_tag>;
+TEST_CASE("provider_traits static properties slingshot", "[provider_aware]") {
+    using traits = loom::provider_traits<loom::provider::slingshot_tag>;
 
-        expect(traits::max_inject_size > 0UL) << "slingshot should have inject size";
-        expect(traits::supports_native_atomics) << "slingshot should support native atomics";
+    REQUIRE(traits::max_inject_size > 0UL);
+    REQUIRE(traits::supports_native_atomics);
 
-        expect(std::string_view{traits::provider_name()} == "cxi");
-    };
+    REQUIRE(std::string_view{traits::provider_name()} == "cxi");
+}
 
-    "provider_traits static properties shm"_test = [] {
-        using traits = loom::provider_traits<loom::provider::shm_tag>;
+TEST_CASE("provider_traits static properties shm", "[provider_aware]") {
+    using traits = loom::provider_traits<loom::provider::shm_tag>;
 
-        expect(traits::max_inject_size > 0UL) << "shm should have inject size";
-        expect(traits::supports_native_atomics) << "shm should support native atomics";
-        expect(!traits::uses_staged_atomics) << "shm should not require staged atomics";
+    REQUIRE(traits::max_inject_size > 0UL);
+    REQUIRE(traits::supports_native_atomics);
+    REQUIRE_FALSE(traits::uses_staged_atomics);
 
-        expect(std::string_view{traits::provider_name()} == "shm");
-    };
+    REQUIRE(std::string_view{traits::provider_name()} == "shm");
+}
 
-    "provider_traits static properties tcp"_test = [] {
-        using traits = loom::provider_traits<loom::provider::tcp_tag>;
+TEST_CASE("provider_traits static properties tcp", "[provider_aware]") {
+    using traits = loom::provider_traits<loom::provider::tcp_tag>;
 
-        expect(!traits::supports_native_atomics) << "tcp should not support native atomics";
-        expect(traits::uses_staged_atomics) << "tcp should require staged atomics";
+    REQUIRE_FALSE(traits::supports_native_atomics);
+    REQUIRE(traits::uses_staged_atomics);
 
-        expect(std::string_view{traits::provider_name()} == "tcp");
-    };
+    REQUIRE(std::string_view{traits::provider_name()} == "tcp");
+}
 
-    "can_inject helper"_test = [] {
-        expect(loom::can_inject<loom::provider::verbs_tag>(64))
-            << "verbs should be able to inject 64 bytes";
-        expect(loom::can_inject<loom::provider::efa_tag>(32))
-            << "efa should be able to inject 32 bytes";
-        expect(!loom::can_inject<loom::provider::efa_tag>(64))
-            << "efa should not inject 64 bytes (max is 32)";
+TEST_CASE("can_inject helper", "[provider_aware]") {
+    REQUIRE(loom::can_inject<loom::provider::verbs_tag>(64));
+    REQUIRE(loom::can_inject<loom::provider::efa_tag>(32));
+    REQUIRE_FALSE(loom::can_inject<loom::provider::efa_tag>(64));
 
-        expect(!loom::can_inject<loom::provider::verbs_tag>(1000000)) << "should not inject 1MB";
-    };
+    REQUIRE_FALSE(loom::can_inject<loom::provider::verbs_tag>(1000000));
+}
 
-    "provider_remote_memory roundtrip"_test = [] {
-        loom::remote_memory original{0x12345678, 0xDEADBEEF, 65536};
+TEST_CASE("provider_remote_memory roundtrip", "[provider_aware]") {
+    loom::remote_memory original{0x12345678, 0xDEADBEEF, 65536};
 
-        loom::provider_remote_memory_test<loom::provider::verbs_tag> typed{original};
-        auto back = typed.to_generic();
+    loom::provider_remote_memory_test<loom::provider::verbs_tag> typed{original};
+    auto back = typed.to_generic();
 
-        expect(back.addr == original.addr);
-        expect(back.key == original.key);
-        expect(back.length == original.length);
-    };
+    REQUIRE(back.addr == original.addr);
+    REQUIRE(back.key == original.key);
+    REQUIRE(back.length == original.length);
+}
 
-    "provider_tag concept"_test = [] {
-        static_assert(loom::provider_tag<loom::provider::verbs_tag>);
-        static_assert(loom::provider_tag<loom::provider::efa_tag>);
-        static_assert(loom::provider_tag<loom::provider::slingshot_tag>);
-        static_assert(loom::provider_tag<loom::provider::shm_tag>);
-        static_assert(loom::provider_tag<loom::provider::tcp_tag>);
+TEST_CASE("provider_tag concept", "[provider_aware]") {
+    static_assert(loom::provider_tag<loom::provider::verbs_tag>);
+    static_assert(loom::provider_tag<loom::provider::efa_tag>);
+    static_assert(loom::provider_tag<loom::provider::slingshot_tag>);
+    static_assert(loom::provider_tag<loom::provider::shm_tag>);
+    static_assert(loom::provider_tag<loom::provider::tcp_tag>);
 
-        static_assert(!loom::provider_tag<int>);
-        static_assert(!loom::provider_tag<void>);
-    };
-};
-
-auto main() -> int {}
+    static_assert(!loom::provider_tag<int>);
+    static_assert(!loom::provider_tag<void>);
+}

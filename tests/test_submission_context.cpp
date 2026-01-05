@@ -6,227 +6,221 @@
 #include <future>
 #include <thread>
 
-#include "ut.hpp"
+#include <catch2/catch_test_macros.hpp>
 
-using namespace boost::ut;
+TEST_CASE("callback_receiver satisfies full_receiver", "[submission_context]") {
+    static_assert(loom::full_receiver<loom::callback_receiver>);
+}
 
-suite submission_context_suite = [] {
-    "callback_receiver satisfies full_receiver"_test = [] {
-        static_assert(loom::full_receiver<loom::callback_receiver>);
-    };
+TEST_CASE("coroutine_receiver satisfies full_receiver", "[submission_context]") {
+    static_assert(loom::full_receiver<loom::coroutine_receiver>);
+}
 
-    "coroutine_receiver satisfies full_receiver"_test = [] {
-        static_assert(loom::full_receiver<loom::coroutine_receiver>);
-    };
+TEST_CASE("promise_receiver satisfies full_receiver", "[submission_context]") {
+    static_assert(loom::full_receiver<loom::promise_receiver>);
+}
 
-    "promise_receiver satisfies full_receiver"_test = [] {
-        static_assert(loom::full_receiver<loom::promise_receiver>);
-    };
+TEST_CASE("submission_context with callback_receiver", "[submission_context]") {
+    bool called = false;
+    std::size_t received_bytes = 0;
 
-    "submission_context with callback_receiver"_test = [] {
-        bool called = false;
-        std::size_t received_bytes = 0;
+    auto* ctx = loom::make_callback_context([&](loom::completion_event& event) {
+        called = true;
+        received_bytes = event.bytes_transferred;
+    });
 
-        auto* ctx = loom::make_callback_context([&](loom::completion_event& event) {
-            called = true;
-            received_bytes = event.bytes_transferred;
-        });
+    loom::completion_event event{};
+    event.bytes_transferred = 42;
 
+    loom::dispatch_completion(ctx, event);
+
+    REQUIRE(called);
+    REQUIRE(received_bytes == 42UL);
+
+    delete ctx;
+}
+
+TEST_CASE("submission_context with promise_receiver", "[submission_context]") {
+    auto [ctx, future] = loom::make_promise_context();
+
+    std::thread worker([ctx] {
         loom::completion_event event{};
-        event.bytes_transferred = 42;
-
+        event.bytes_transferred = 100;
         loom::dispatch_completion(ctx, event);
-
-        expect(called) << "callback should have been invoked";
-        expect(received_bytes == 42UL) << "should receive correct bytes";
-
         delete ctx;
+    });
+
+    auto result = future.get();
+    REQUIRE(result.bytes_transferred == 100UL);
+
+    worker.join();
+}
+
+TEST_CASE("submission_context set_error path", "[submission_context]") {
+    bool error_called = false;
+    std::error_code received_ec;
+
+    auto* ctx = new loom::default_submission_context(
+        loom::callback_receiver([](loom::completion_event&) {},
+                                [&](std::error_code ec) {
+                                    error_called = true;
+                                    received_ec = ec;
+                                }));
+
+    loom::completion_event event{};
+    event.error = std::make_error_code(std::errc::io_error);
+
+    loom::dispatch_completion(ctx, event);
+
+    REQUIRE(error_called);
+    REQUIRE(received_ec == std::make_error_code(std::errc::io_error));
+
+    delete ctx;
+}
+
+TEST_CASE("submission_context set_stopped path", "[submission_context]") {
+    bool stopped_called = false;
+
+    auto* ctx = new loom::default_submission_context(
+        loom::callback_receiver([](loom::completion_event&) {},
+                                [](std::error_code) {},
+                                [&] { stopped_called = true; }));
+
+    loom::dispatch_stopped(ctx);
+
+    REQUIRE(stopped_called);
+
+    delete ctx;
+}
+
+TEST_CASE("as_context returns valid pointer", "[submission_context]") {
+    auto* ctx = loom::make_callback_context([](loom::completion_event&) {});
+
+    auto* raw = ctx->as_context();
+    REQUIRE(raw != nullptr);
+
+    auto* recovered = loom::default_submission_context::from_context(raw);
+    REQUIRE(recovered == ctx);
+
+    delete ctx;
+}
+
+TEST_CASE("handler_index returns correct variant index", "[submission_context]") {
+    auto* callback_ctx = loom::make_callback_context([](loom::completion_event&) {});
+    REQUIRE(callback_ctx->handler_index() == 0UL);
+    delete callback_ctx;
+
+    loom::completion_event result{};
+    auto* coro_ctx = loom::make_coroutine_context(std::noop_coroutine(), &result);
+    REQUIRE(coro_ctx->handler_index() == 1UL);
+    delete coro_ctx;
+
+    auto [promise_ctx, future] = loom::make_promise_context();
+    REQUIRE(promise_ctx->handler_index() == 2UL);
+    delete promise_ctx;
+}
+
+TEST_CASE("custom receiver type", "[submission_context]") {
+    struct custom_receiver {
+        int* counter;
+
+        void set_value(loom::completion_event&) { ++(*counter); }
+        void set_error(std::error_code) { *counter += 10; }
+        void set_stopped() { *counter += 100; }
     };
 
-    "submission_context with promise_receiver"_test = [] {
-        auto [ctx, future] = loom::make_promise_context();
+    static_assert(loom::full_receiver<custom_receiver>);
 
-        std::thread worker([ctx] {
-            loom::completion_event event{};
-            event.bytes_transferred = 100;
-            loom::dispatch_completion(ctx, event);
-            delete ctx;
-        });
+    using custom_context = loom::submission_context<custom_receiver>;
 
-        auto result = future.get();
-        expect(result.bytes_transferred == 100UL);
+    int counter = 0;
+    auto* ctx = new custom_context(custom_receiver{&counter});
 
-        worker.join();
+    loom::completion_event event{};
+    ctx->set_value(event);
+    REQUIRE(counter == 1);
+
+    ctx->set_error(std::error_code{});
+    REQUIRE(counter == 11);
+
+    ctx->set_stopped();
+    REQUIRE(counter == 111);
+
+    delete ctx;
+}
+
+TEST_CASE("multiple receiver types in variant", "[submission_context]") {
+    struct receiver_a {
+        int* value;
+        void set_value(loom::completion_event&) { *value = 1; }
+        void set_error(std::error_code) { *value = -1; }
+        void set_stopped() { *value = 0; }
     };
 
-    "submission_context set_error path"_test = [] {
-        bool error_called = false;
-        std::error_code received_ec;
+    struct receiver_b {
+        int* value;
+        void set_value(loom::completion_event&) { *value = 2; }
+        void set_error(std::error_code) { *value = -2; }
+        void set_stopped() { *value = 0; }
+    };
 
-        auto* ctx = new loom::default_submission_context(
-            loom::callback_receiver([](loom::completion_event&) {},
-                                    [&](std::error_code ec) {
-                                        error_called = true;
-                                        received_ec = ec;
-                                    }));
+    static_assert(loom::full_receiver<receiver_a>);
+    static_assert(loom::full_receiver<receiver_b>);
 
-        loom::completion_event event{};
-        event.error = std::make_error_code(std::errc::io_error);
+    using multi_context = loom::submission_context<receiver_a, receiver_b>;
 
-        loom::dispatch_completion(ctx, event);
+    int value = 0;
 
-        expect(error_called) << "error handler should have been invoked";
-        expect(received_ec == std::make_error_code(std::errc::io_error));
+    auto* ctx_a = new multi_context(receiver_a{&value});
+    loom::completion_event event{};
+    ctx_a->set_value(event);
+    REQUIRE(value == 1);
+    delete ctx_a;
 
+    auto* ctx_b = new multi_context(receiver_b{&value});
+    ctx_b->set_value(event);
+    REQUIRE(value == 2);
+    delete ctx_b;
+}
+
+TEST_CASE("promise_receiver throws on error", "[submission_context]") {
+    auto [ctx, future] = loom::make_promise_context();
+
+    std::thread worker([ctx] {
+        ctx->set_error(std::make_error_code(std::errc::io_error));
         delete ctx;
-    };
+    });
 
-    "submission_context set_stopped path"_test = [] {
-        bool stopped_called = false;
+    bool caught_exception = false;
+    try {
+        future.get();
+    } catch (const std::system_error& e) {
+        caught_exception = true;
+        REQUIRE(e.code() == std::make_error_code(std::errc::io_error));
+    }
 
-        auto* ctx = new loom::default_submission_context(
-            loom::callback_receiver([](loom::completion_event&) {},
-                                    [](std::error_code) {},
-                                    [&] { stopped_called = true; }));
+    REQUIRE(caught_exception);
 
-        loom::dispatch_stopped(ctx);
+    worker.join();
+}
 
-        expect(stopped_called) << "stopped handler should have been invoked";
+TEST_CASE("promise_receiver throws on stopped", "[submission_context]") {
+    auto [ctx, future] = loom::make_promise_context();
 
-        delete ctx;
-    };
-
-    "as_context returns valid pointer"_test = [] {
-        auto* ctx = loom::make_callback_context([](loom::completion_event&) {});
-
-        auto* raw = ctx->as_context();
-        expect(raw != nullptr);
-
-        auto* recovered = loom::default_submission_context::from_context(raw);
-        expect(recovered == ctx);
-
-        delete ctx;
-    };
-
-    "handler_index returns correct variant index"_test = [] {
-        auto* callback_ctx = loom::make_callback_context([](loom::completion_event&) {});
-        expect(callback_ctx->handler_index() == 0UL);
-        delete callback_ctx;
-
-        loom::completion_event result{};
-        auto* coro_ctx = loom::make_coroutine_context(std::noop_coroutine(), &result);
-        expect(coro_ctx->handler_index() == 1UL);
-        delete coro_ctx;
-
-        auto [promise_ctx, future] = loom::make_promise_context();
-        expect(promise_ctx->handler_index() == 2UL);
-        delete promise_ctx;
-    };
-
-    "custom receiver type"_test = [] {
-        struct custom_receiver {
-            int* counter;
-
-            void set_value(loom::completion_event&) { ++(*counter); }
-            void set_error(std::error_code) { *counter += 10; }
-            void set_stopped() { *counter += 100; }
-        };
-
-        static_assert(loom::full_receiver<custom_receiver>);
-
-        using custom_context = loom::submission_context<custom_receiver>;
-
-        int counter = 0;
-        auto* ctx = new custom_context(custom_receiver{&counter});
-
-        loom::completion_event event{};
-        ctx->set_value(event);
-        expect(counter == 1);
-
-        ctx->set_error(std::error_code{});
-        expect(counter == 11);
-
+    std::thread worker([ctx] {
         ctx->set_stopped();
-        expect(counter == 111);
-
         delete ctx;
-    };
+    });
 
-    "multiple receiver types in variant"_test = [] {
-        struct receiver_a {
-            int* value;
-            void set_value(loom::completion_event&) { *value = 1; }
-            void set_error(std::error_code) { *value = -1; }
-            void set_stopped() { *value = 0; }
-        };
+    bool caught_exception = false;
+    try {
+        future.get();
+    } catch (const std::system_error& e) {
+        caught_exception = true;
+        REQUIRE(e.code() == std::make_error_code(std::errc::operation_canceled));
+    }
 
-        struct receiver_b {
-            int* value;
-            void set_value(loom::completion_event&) { *value = 2; }
-            void set_error(std::error_code) { *value = -2; }
-            void set_stopped() { *value = 0; }
-        };
+    REQUIRE(caught_exception);
 
-        static_assert(loom::full_receiver<receiver_a>);
-        static_assert(loom::full_receiver<receiver_b>);
-
-        using multi_context = loom::submission_context<receiver_a, receiver_b>;
-
-        int value = 0;
-
-        auto* ctx_a = new multi_context(receiver_a{&value});
-        loom::completion_event event{};
-        ctx_a->set_value(event);
-        expect(value == 1);
-        delete ctx_a;
-
-        auto* ctx_b = new multi_context(receiver_b{&value});
-        ctx_b->set_value(event);
-        expect(value == 2);
-        delete ctx_b;
-    };
-
-    "promise_receiver throws on error"_test = [] {
-        auto [ctx, future] = loom::make_promise_context();
-
-        std::thread worker([ctx] {
-            ctx->set_error(std::make_error_code(std::errc::io_error));
-            delete ctx;
-        });
-
-        bool caught_exception = false;
-        try {
-            future.get();
-        } catch (const std::system_error& e) {
-            caught_exception = true;
-            expect(e.code() == std::make_error_code(std::errc::io_error));
-        }
-
-        expect(caught_exception) << "should throw system_error on error path";
-
-        worker.join();
-    };
-
-    "promise_receiver throws on stopped"_test = [] {
-        auto [ctx, future] = loom::make_promise_context();
-
-        std::thread worker([ctx] {
-            ctx->set_stopped();
-            delete ctx;
-        });
-
-        bool caught_exception = false;
-        try {
-            future.get();
-        } catch (const std::system_error& e) {
-            caught_exception = true;
-            expect(e.code() == std::make_error_code(std::errc::operation_canceled));
-        }
-
-        expect(caught_exception) << "should throw system_error on stopped path";
-
-        worker.join();
-    };
-};
-
-auto main() -> int {}
+    worker.join();
+}

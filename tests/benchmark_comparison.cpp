@@ -5,9 +5,8 @@
 
 #include <algorithm>
 #include <chrono>
-#include <format>
-#include <iostream>
 #include <numeric>
+#include <print>
 #include <vector>
 
 #include <asio.hpp>
@@ -47,15 +46,15 @@ auto calculate_stats(std::vector<duration_type>& timings) -> statistics {
 }
 
 void print_stats(std::string_view name, const statistics& stats) {
-    std::cout << std::format("{:50s}: mean={:8d}ns, median={:8d}ns, "
-                             "p99={:8d}ns, min={:8d}ns, max={:8d}ns, stddev={:8d}ns\n",
-                             name,
-                             stats.mean.count(),
-                             stats.median.count(),
-                             stats.p99.count(),
-                             stats.min.count(),
-                             stats.max.count(),
-                             stats.stddev.count());
+    std::print("{:50s}: mean={:8d}ns, median={:8d}ns, "
+               "p99={:8d}ns, min={:8d}ns, max={:8d}ns, stddev={:8d}ns\n",
+               name,
+               stats.mean.count(),
+               stats.median.count(),
+               stats.p99.count(),
+               stats.min.count(),
+               stats.max.count(),
+               stats.stddev.count());
 }
 
 template <typename Func>
@@ -78,7 +77,7 @@ auto benchmark(Func&& func, std::size_t iterations) -> statistics {
 }
 
 void benchmark_send_construction() {
-    std::cout << "\n=== Send Operation Construction Overhead ===\n";
+    std::print("\n=== Send Operation Construction Overhead ===\n");
 
     loom::endpoint ep{nullptr};
     loom::completion_queue cq{nullptr};
@@ -120,19 +119,19 @@ void benchmark_send_construction() {
         100000);
     print_stats("ASIO future overhead", asio_future_stats);
 
-    std::cout << "\nOverhead vs raw:\n";
-    std::cout << std::format("  stdexec: +{:d}ns ({:.2f}x)\n",
+    std::print("\nOverhead vs raw:\n");
+    std::print("  stdexec: +{:d}ns ({:.2f}x)\n",
                              (stdexec_stats.mean - raw_stats.mean).count(),
                              static_cast<double>(stdexec_stats.mean.count()) /
                                  raw_stats.mean.count());
-    std::cout << std::format("  ASIO callback: +{:d}ns ({:.2f}x)\n",
+    std::print("  ASIO callback: +{:d}ns ({:.2f}x)\n",
                              (asio_callback_stats.mean - raw_stats.mean).count(),
                              static_cast<double>(asio_callback_stats.mean.count()) /
                                  raw_stats.mean.count());
 }
 
 void benchmark_composition() {
-    std::cout << "\n=== Sender Composition Overhead ===\n";
+    std::print("\n=== Sender Composition Overhead ===\n");
 
     loom::endpoint ep{nullptr};
     loom::completion_queue cq{nullptr};
@@ -170,20 +169,20 @@ void benchmark_composition() {
         100000);
     print_stats("sender | let_value", let_value_stats);
 
-    std::cout << "\nComposition overhead:\n";
-    std::cout << std::format("  then: +{:d}ns\n", (then_stats.mean - bare_stats.mean).count());
-    std::cout << std::format("  then (x2): +{:d}ns\n",
+    std::print("\nComposition overhead:\n");
+    std::print("  then: +{:d}ns\n", (then_stats.mean - bare_stats.mean).count());
+    std::print("  then (x2): +{:d}ns\n",
                              (chain_2_stats.mean - bare_stats.mean).count());
-    std::cout << std::format("  then (x5): +{:d}ns\n",
+    std::print("  then (x5): +{:d}ns\n",
                              (chain_5_stats.mean - bare_stats.mean).count());
-    std::cout << std::format("  let_value: +{:d}ns\n",
+    std::print("  let_value: +{:d}ns\n",
                              (let_value_stats.mean - bare_stats.mean).count());
-    std::cout << std::format("  Per-combinator: ~{:d}ns\n",
+    std::print("  Per-combinator: ~{:d}ns\n",
                              (chain_5_stats.mean - bare_stats.mean).count() / 5);
 }
 
 void benchmark_parallel() {
-    std::cout << "\n=== Parallel Operations (when_all) ===\n";
+    std::print("\n=== Parallel Operations (when_all) ===\n");
 
     loom::endpoint ep{nullptr};
     loom::completion_queue cq{nullptr};
@@ -222,51 +221,51 @@ void benchmark_parallel() {
         50000);
     print_stats("when_all (8 ops)", parallel_8_stats);
 
-    std::cout << "\nScaling:\n";
-    std::cout << std::format("  2 ops: {:d}ns ({:d}ns/op)\n",
+    std::print("\nScaling:\n");
+    std::print("  2 ops: {:d}ns ({:d}ns/op)\n",
                              parallel_2_stats.mean.count(),
                              parallel_2_stats.mean.count() / 2);
-    std::cout << std::format("  4 ops: {:d}ns ({:d}ns/op)\n",
+    std::print("  4 ops: {:d}ns ({:d}ns/op)\n",
                              parallel_4_stats.mean.count(),
                              parallel_4_stats.mean.count() / 4);
-    std::cout << std::format("  8 ops: {:d}ns ({:d}ns/op)\n",
+    std::print("  8 ops: {:d}ns ({:d}ns/op)\n",
                              parallel_8_stats.mean.count(),
                              parallel_8_stats.mean.count() / 8);
 }
 
 void benchmark_memory() {
-    std::cout << "\n=== Memory Overhead ===\n";
+    std::print("\n=== Memory Overhead ===\n");
 
-    std::cout << std::format("sizeof(loom::endpoint):              {:4d} bytes\n",
+    std::print("sizeof(loom::endpoint):              {:4d} bytes\n",
                              sizeof(loom::endpoint));
-    std::cout << std::format("sizeof(loom::completion_queue):      {:4d} bytes\n",
+    std::print("sizeof(loom::completion_queue):      {:4d} bytes\n",
                              sizeof(loom::completion_queue));
 
-    std::cout << "\nstdexec senders:\n";
-    std::cout << std::format("  sizeof(send_sender):               {:4d} bytes\n",
+    std::print("\nstdexec senders:\n");
+    std::print("  sizeof(send_sender):               {:4d} bytes\n",
                              sizeof(loom::async::send_sender));
-    std::cout << std::format("  sizeof(recv_sender):               {:4d} bytes\n",
+    std::print("  sizeof(recv_sender):               {:4d} bytes\n",
                              sizeof(loom::async::recv_sender));
-    std::cout << std::format("  sizeof(read_sender):               {:4d} bytes\n",
+    std::print("  sizeof(read_sender):               {:4d} bytes\n",
                              sizeof(loom::async::read_sender));
-    std::cout << std::format("  sizeof(write_sender):              {:4d} bytes\n",
+    std::print("  sizeof(write_sender):              {:4d} bytes\n",
                              sizeof(loom::async::write_sender));
-    std::cout << std::format("  sizeof(atomic_sender<uint64_t>):   {:4d} bytes\n",
+    std::print("  sizeof(atomic_sender<uint64_t>):   {:4d} bytes\n",
                              sizeof(loom::async::atomic_sender<std::uint64_t>));
-    std::cout << std::format("  sizeof(scheduler):                 {:4d} bytes\n",
+    std::print("  sizeof(scheduler):                 {:4d} bytes\n",
                              sizeof(loom::scheduler));
 
-    std::cout << "\nASIO components:\n";
-    std::cout << std::format("  sizeof(completion_queue_service):  {:4d} bytes\n",
+    std::print("\nASIO components:\n");
+    std::print("  sizeof(completion_queue_service):  {:4d} bytes\n",
                              sizeof(loom::asio_integration::completion_queue_service));
-    std::cout << std::format("  sizeof(asio::io_context):          {:4d} bytes\n",
+    std::print("  sizeof(asio::io_context):          {:4d} bytes\n",
                              sizeof(::asio::io_context));
-    std::cout << std::format("  sizeof(asio::steady_timer):        {:4d} bytes\n",
+    std::print("  sizeof(asio::steady_timer):        {:4d} bytes\n",
                              sizeof(::asio::steady_timer));
 }
 
 void benchmark_completion_tokens() {
-    std::cout << "\n=== ASIO Completion Token Overhead ===\n";
+    std::print("\n=== ASIO Completion Token Overhead ===\n");
 
     ::asio::io_context ioc;
     loom::endpoint ep{nullptr};
@@ -307,17 +306,17 @@ void benchmark_completion_tokens() {
         100000);
     print_stats("Promise allocation", promise_alloc_stats);
 
-    std::cout << "\nToken overhead comparison:\n";
-    std::cout << std::format("  Callback (stack):    {:d}ns (baseline)\n",
+    std::print("\nToken overhead comparison:\n");
+    std::print("  Callback (stack):    {:d}ns (baseline)\n",
                              callback_stats.mean.count());
-    std::cout << std::format("  Future (heap):       {:d}ns ({:.2f}x slower)\n",
+    std::print("  Future (heap):       {:d}ns ({:.2f}x slower)\n",
                              future_stats.mean.count(),
                              static_cast<double>(future_stats.mean.count()) /
                                  callback_stats.mean.count());
 }
 
 void benchmark_error_handling() {
-    std::cout << "\n=== Error Handling Overhead ===\n";
+    std::print("\n=== Error Handling Overhead ===\n");
 
     loom::endpoint ep{nullptr};
     loom::completion_queue cq{nullptr};
@@ -346,17 +345,17 @@ void benchmark_error_handling() {
         10000);
     print_stats("Exception throw/catch", exception_stats);
 
-    std::cout << "\nError handling comparison:\n";
-    std::cout << std::format("  upon_error overhead: +{:d}ns\n",
+    std::print("\nError handling comparison:\n");
+    std::print("  upon_error overhead: +{:d}ns\n",
                              (error_handler_stats.mean - success_stats.mean).count());
-    std::cout << std::format("  Exception cost: {:d}ns ({:.0f}x slower)\n",
+    std::print("  Exception cost: {:d}ns ({:.0f}x slower)\n",
                              exception_stats.mean.count(),
                              static_cast<double>(exception_stats.mean.count()) /
                                  success_stats.mean.count());
 }
 
 void benchmark_rma() {
-    std::cout << "\n=== RMA Operation Overhead ===\n";
+    std::print("\n=== RMA Operation Overhead ===\n");
 
     loom::endpoint ep{nullptr};
     loom::completion_queue cq{nullptr};
@@ -384,7 +383,7 @@ void benchmark_rma() {
 }
 
 void benchmark_atomics() {
-    std::cout << "\n=== Atomic Operation Overhead ===\n";
+    std::print("\n=== Atomic Operation Overhead ===\n");
 
     loom::endpoint ep{nullptr};
     loom::completion_queue cq{nullptr};
@@ -405,16 +404,16 @@ void benchmark_atomics() {
         benchmark([&] { local_counter.fetch_add(1, std::memory_order_relaxed); }, 100000);
     print_stats("std::atomic::fetch_add (local)", local_fetch_add_stats);
 
-    std::cout << "\nAtomic overhead:\n";
-    std::cout << std::format("  Remote fetch_add construction: {:d}ns\n",
+    std::print("\nAtomic overhead:\n");
+    std::print("  Remote fetch_add construction: {:d}ns\n",
                              fetch_add_stats.mean.count());
-    std::cout << std::format("  Remote CAS construction: {:d}ns\n", cas_stats.mean.count());
-    std::cout << std::format("  Local atomic (baseline): {:d}ns\n",
+    std::print("  Remote CAS construction: {:d}ns\n", cas_stats.mean.count());
+    std::print("  Local atomic (baseline): {:d}ns\n",
                              local_fetch_add_stats.mean.count());
 }
 
 void benchmark_throughput() {
-    std::cout << "\n=== Throughput Simulation ===\n";
+    std::print("\n=== Throughput Simulation ===\n");
 
     loom::endpoint ep{nullptr};
     loom::completion_queue cq{nullptr};
@@ -432,95 +431,95 @@ void benchmark_throughput() {
 
     auto ops_per_sec_stdexec = (num_ops * 1'000'000) / duration_stdexec.count();
 
-    std::cout << std::format("stdexec submission:\n");
-    std::cout << std::format("  Time: {} us for {} ops\n", duration_stdexec.count(), num_ops);
-    std::cout << std::format("  Throughput: {} ops/sec\n", ops_per_sec_stdexec);
-    std::cout << std::format("  Per-op: {} ns\n", duration_stdexec.count() * 1000 / num_ops);
+    std::print("stdexec submission:\n");
+    std::print("  Time: {} us for {} ops\n", duration_stdexec.count(), num_ops);
+    std::print("  Throughput: {} ops/sec\n", ops_per_sec_stdexec);
+    std::print("  Per-op: {} ns\n", duration_stdexec.count() * 1000 / num_ops);
 }
 
 void print_summary() {
-    std::cout << "\n" << std::string(80, '=') << "\n";
-    std::cout << "PERFORMANCE ANALYSIS SUMMARY\n";
-    std::cout << std::string(80, '=') << "\n\n";
+    std::print("\n{}\n", std::string(80, '='));
+    std::print("PERFORMANCE ANALYSIS SUMMARY\n");
+    std::print("{}\n\n", std::string(80, '='));
 
-    std::cout << "Key Findings:\n\n";
+    std::print("Key Findings:\n\n");
 
-    std::cout << "1. CONSTRUCTION OVERHEAD:\n";
-    std::cout << "   - stdexec senders: Near-zero overhead (inline construction)\n";
-    std::cout << "   - ASIO callbacks: Minimal overhead (stack-based handlers)\n";
-    std::cout << "   - ASIO futures: Higher overhead due to heap allocation\n";
-    std::cout << "   → Recommendation: Use callbacks or coroutines for hot path\n\n";
+    std::print("1. CONSTRUCTION OVERHEAD:\n");
+    std::print("   - stdexec senders: Near-zero overhead (inline construction)\n");
+    std::print("   - ASIO callbacks: Minimal overhead (stack-based handlers)\n");
+    std::print("   - ASIO futures: Higher overhead due to heap allocation\n");
+    std::print("   → Recommendation: Use callbacks or coroutines for hot path\n\n");
 
-    std::cout << "2. COMPOSITION OVERHEAD:\n";
-    std::cout << "   - Sender combinators (then, let_value): Compile-time composition\n";
-    std::cout << "   - Linear scaling with composition depth\n";
-    std::cout << "   - Per-combinator: ~5-10ns construction overhead\n";
-    std::cout << "   → Recommendation: Composition is cheap, use freely\n\n";
+    std::print("2. COMPOSITION OVERHEAD:\n");
+    std::print("   - Sender combinators (then, let_value): Compile-time composition\n");
+    std::print("   - Linear scaling with composition depth\n");
+    std::print("   - Per-combinator: ~5-10ns construction overhead\n");
+    std::print("   → Recommendation: Composition is cheap, use freely\n\n");
 
-    std::cout << "3. PARALLEL OPERATIONS:\n";
-    std::cout << "   - when_all scales linearly with operation count\n";
-    std::cout << "   - Per-operation overhead remains constant\n";
-    std::cout << "   → Recommendation: Batch parallel operations with when_all\n\n";
+    std::print("3. PARALLEL OPERATIONS:\n");
+    std::print("   - when_all scales linearly with operation count\n");
+    std::print("   - Per-operation overhead remains constant\n");
+    std::print("   → Recommendation: Batch parallel operations with when_all\n\n");
 
-    std::cout << "4. MEMORY FOOTPRINT:\n";
-    std::cout << "   - Senders: Small (typically 32-64 bytes)\n";
-    std::cout << "   - Operation states: Inline storage, no heap allocation\n";
-    std::cout << "   - ASIO: Handler allocators allow stack-based allocation\n";
-    std::cout << "   → Recommendation: Both approaches are memory-efficient\n\n";
+    std::print("4. MEMORY FOOTPRINT:\n");
+    std::print("   - Senders: Small (typically 32-64 bytes)\n");
+    std::print("   - Operation states: Inline storage, no heap allocation\n");
+    std::print("   - ASIO: Handler allocators allow stack-based allocation\n");
+    std::print("   → Recommendation: Both approaches are memory-efficient\n\n");
 
-    std::cout << "5. ERROR HANDLING:\n";
-    std::cout << "   - upon_error: Minimal overhead on success path\n";
-    std::cout << "   - Exceptions: 100-1000x slower than error codes\n";
-    std::cout << "   → Recommendation: Use structured error handling, avoid exceptions\n\n";
+    std::print("5. ERROR HANDLING:\n");
+    std::print("   - upon_error: Minimal overhead on success path\n");
+    std::print("   - Exceptions: 100-1000x slower than error codes\n");
+    std::print("   → Recommendation: Use structured error handling, avoid exceptions\n\n");
 
-    std::cout << "6. WHEN TO USE EACH APPROACH:\n\n";
+    std::print("6. WHEN TO USE EACH APPROACH:\n\n");
 
-    std::cout << "   ASIO Integration:\n";
-    std::cout << "   ✓ Existing ASIO codebase\n";
-    std::cout << "   ✓ Need coroutine support (co_await)\n";
-    std::cout << "   ✓ Callback-based code\n";
-    std::cout << "   ✓ Integration with other ASIO services (timers, sockets)\n";
-    std::cout << "   ✓ Want futures for occasional sync operations\n\n";
+    std::print("   ASIO Integration:\n");
+    std::print("   ✓ Existing ASIO codebase\n");
+    std::print("   ✓ Need coroutine support (co_await)\n");
+    std::print("   ✓ Callback-based code\n");
+    std::print("   ✓ Integration with other ASIO services (timers, sockets)\n");
+    std::print("   ✓ Want futures for occasional sync operations\n\n");
 
-    std::cout << "   stdexec Integration:\n";
-    std::cout << "   ✓ New code prioritizing composition\n";
-    std::cout << "   ✓ Complex pipelines with transformations\n";
-    std::cout << "   ✓ Type-safe completion signatures\n";
-    std::cout << "   ✓ Static analysis and optimization opportunities\n";
-    std::cout << "   ✓ Lowest possible overhead\n\n";
+    std::print("   stdexec Integration:\n");
+    std::print("   ✓ New code prioritizing composition\n");
+    std::print("   ✓ Complex pipelines with transformations\n");
+    std::print("   ✓ Type-safe completion signatures\n");
+    std::print("   ✓ Static analysis and optimization opportunities\n");
+    std::print("   ✓ Lowest possible overhead\n\n");
 
-    std::cout << "   Raw libfabric:\n";
-    std::cout << "   ✓ Absolute minimum overhead (no abstraction)\n";
-    std::cout << "   ✓ Custom completion handling\n";
-    std::cout << "   ✓ Specialized use cases\n";
-    std::cout << "   ✗ Manual resource management\n";
-    std::cout << "   ✗ No composability\n\n";
+    std::print("   Raw libfabric:\n");
+    std::print("   ✓ Absolute minimum overhead (no abstraction)\n");
+    std::print("   ✓ Custom completion handling\n");
+    std::print("   ✓ Specialized use cases\n");
+    std::print("   ✗ Manual resource management\n");
+    std::print("   ✗ No composability\n\n");
 
-    std::cout << "7. PERFORMANCE CHARACTERISTICS:\n\n";
+    std::print("7. PERFORMANCE CHARACTERISTICS:\n\n");
 
-    std::cout << "   Latency (construction overhead):\n";
-    std::cout << "     Raw libfabric < stdexec < ASIO callback < ASIO future\n\n";
+    std::print("   Latency (construction overhead):\n");
+    std::print("     Raw libfabric < stdexec < ASIO callback < ASIO future\n\n");
 
-    std::cout << "   Throughput (sustained operations/sec):\n";
-    std::cout << "     stdexec ≈ Raw libfabric > ASIO (polling overhead)\n\n";
+    std::print("   Throughput (sustained operations/sec):\n");
+    std::print("     stdexec ≈ Raw libfabric > ASIO (polling overhead)\n\n");
 
-    std::cout << "   Memory efficiency:\n";
-    std::cout << "     stdexec ≈ Raw libfabric > ASIO (io_context overhead)\n\n";
+    std::print("   Memory efficiency:\n");
+    std::print("     stdexec ≈ Raw libfabric > ASIO (io_context overhead)\n\n");
 
-    std::cout << "   Composability:\n";
-    std::cout << "     stdexec > ASIO > Raw libfabric\n\n";
+    std::print("   Composability:\n");
+    std::print("     stdexec > ASIO > Raw libfabric\n\n");
 
-    std::cout << "   Ease of use:\n";
-    std::cout << "     ASIO coroutines ≈ stdexec senders > Raw libfabric\n\n";
+    std::print("   Ease of use:\n");
+    std::print("     ASIO coroutines ≈ stdexec senders > Raw libfabric\n\n");
 
-    std::cout << std::string(80, '=') << "\n";
+    std::print("{}\n", std::string(80, '='));
 }
 
 auto main() -> int {
-    std::cout << "=== Loom Performance Comparison ===\n";
-    std::cout << "Comparing ASIO, stdexec, and raw libfabric approaches\n";
-    std::cout << "\nNote: These benchmarks measure construction/composition overhead.\n";
-    std::cout << "Actual network latency requires live fabric connections.\n";
+    std::print("=== Loom Performance Comparison ===\n");
+    std::print("Comparing ASIO, stdexec, and raw libfabric approaches\n");
+    std::print("\nNote: These benchmarks measure construction/composition overhead.\n");
+    std::print("Actual network latency requires live fabric connections.\n");
 
     benchmark_send_construction();
     benchmark_composition();

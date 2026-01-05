@@ -3,8 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
-#include <format>
-#include <iostream>
+#include <print>
 #include <numeric>
 #include <vector>
 
@@ -36,7 +35,7 @@ auto benchmark_operation(Func&& func, std::size_t iterations) -> benchmark_resul
 
 void benchmark_send_latency(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== Send Operation Latency ===\n";
+        std::print("\n=== Send Operation Latency ===\n");
     }
 
     std::array<std::byte, 64> buffer{};
@@ -69,7 +68,7 @@ void benchmark_send_latency(const mpi_context& mpi, fabric_setup& setup) {
 
 void benchmark_recv_latency(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== Recv Operation Latency ===\n";
+        std::print("\n=== Recv Operation Latency ===\n");
     }
 
     std::array<std::byte, 64> buffer{};
@@ -105,7 +104,7 @@ void benchmark_recv_latency(const mpi_context& mpi, fabric_setup& setup) {
 
 void benchmark_ping_pong(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== Ping-Pong Round-Trip Latency ===\n";
+        std::print("\n=== Ping-Pong Round-Trip Latency ===\n");
     }
 
     std::array<std::byte, 64> buffer{};
@@ -144,7 +143,7 @@ void benchmark_ping_pong(const mpi_context& mpi, fabric_setup& setup) {
 
 void benchmark_rdma_read(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== RDMA Read Latency ===\n";
+        std::print("\n=== RDMA Read Latency ===\n");
     }
 
     std::vector<std::size_t> sizes = {64, 256, 1024, 4096};
@@ -209,7 +208,7 @@ void benchmark_rdma_read(const mpi_context& mpi, fabric_setup& setup) {
 
 void benchmark_rdma_write(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== RDMA Write Latency ===\n";
+        std::print("\n=== RDMA Write Latency ===\n");
     }
 
     std::vector<std::size_t> sizes = {64, 256, 1024, 4096};
@@ -275,7 +274,7 @@ void benchmark_rdma_write(const mpi_context& mpi, fabric_setup& setup) {
 
 void benchmark_atomic_ops(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== Atomic Operation Latency ===\n";
+        std::print("\n=== Atomic Operation Latency ===\n");
     }
 
     auto local_addr = setup.mr->get_base_address();
@@ -369,7 +368,7 @@ void benchmark_atomic_ops(const mpi_context& mpi, fabric_setup& setup) {
 
 void benchmark_composition_overhead(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== Sender Composition Overhead ===\n";
+        std::print("\n=== Sender Composition Overhead ===\n");
     }
 
     std::array<std::byte, 64> buffer{};
@@ -406,10 +405,10 @@ void benchmark_composition_overhead(const mpi_context& mpi, fabric_setup& setup)
         global_then.print("send | then");
         global_let_value.print("send | let_value");
 
-        std::cout << std::format("  then overhead: +{:d}ns\n",
-                                 (global_then.mean - global_bare.mean).count());
-        std::cout << std::format("  let_value overhead: +{:d}ns\n",
-                                 (global_let_value.mean - global_bare.mean).count());
+        std::print("  then overhead: +{:d}ns\n",
+                   (global_then.mean - global_bare.mean).count());
+        std::print("  let_value overhead: +{:d}ns\n",
+                   (global_let_value.mean - global_bare.mean).count());
 
     } else if (mpi.rank() == 1) {
         for (int i = 0; i < 3; ++i) {
@@ -428,7 +427,7 @@ void benchmark_composition_overhead(const mpi_context& mpi, fabric_setup& setup)
 
 void benchmark_throughput(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== Throughput Benchmark ===\n";
+        std::print("\n=== Throughput Benchmark ===\n");
     }
 
     constexpr std::size_t num_ops = 10000;
@@ -446,9 +445,9 @@ void benchmark_throughput(const mpi_context& mpi, fabric_setup& setup) {
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         auto ops_per_sec = (num_ops * 1'000'000) / duration.count();
 
-        std::cout << std::format(
+        std::print(
             "Throughput: {} ops/sec ({} us for {} ops)\n", ops_per_sec, duration.count(), num_ops);
-        std::cout << std::format("Per-op: {} ns\n", duration.count() * 1000 / num_ops);
+        std::print("Per-op: {} ns\n", duration.count() * 1000 / num_ops);
 
     } else if (mpi.rank() == 1) {
         for (std::size_t i = 0; i < num_ops; ++i) {
@@ -462,7 +461,7 @@ void benchmark_throughput(const mpi_context& mpi, fabric_setup& setup) {
 
 void benchmark_parallel_ops(const mpi_context& mpi, fabric_setup& setup) {
     if (mpi.is_root()) {
-        std::cout << "\n=== Parallel Operations (when_all) ===\n";
+        std::print("\n=== Parallel Operations (when_all) ===\n");
     }
 
     std::array<std::byte, 64> buf1{}, buf2{}, buf3{}, buf4{};
@@ -499,7 +498,7 @@ void benchmark_parallel_ops(const mpi_context& mpi, fabric_setup& setup) {
         global_par.print("4 sends (when_all)");
 
         auto speedup = static_cast<double>(global_seq.mean.count()) / global_par.mean.count();
-        std::cout << std::format("  Speedup: {:.2f}x\n", speedup);
+        std::print("  Speedup: {:.2f}x\n", speedup);
 
     } else if (mpi.rank() == 1) {
         for (int bench = 0; bench < 2; ++bench) {
@@ -520,20 +519,20 @@ void benchmark_parallel_ops(const mpi_context& mpi, fabric_setup& setup) {
 
 void benchmark_memory_overhead(const mpi_context& mpi) {
     if (mpi.is_root()) {
-        std::cout << "\n=== Memory Overhead ===\n";
+        std::print("\n=== Memory Overhead ===\n");
 
-        std::cout << std::format("sizeof(send_sender):          {} bytes\n",
-                                 sizeof(loom::async::send_sender));
-        std::cout << std::format("sizeof(recv_sender):          {} bytes\n",
-                                 sizeof(loom::async::recv_sender));
-        std::cout << std::format("sizeof(read_sender):          {} bytes\n",
-                                 sizeof(loom::async::read_sender));
-        std::cout << std::format("sizeof(write_sender):         {} bytes\n",
-                                 sizeof(loom::async::write_sender));
-        std::cout << std::format("sizeof(atomic_sender<u64>):   {} bytes\n",
-                                 sizeof(loom::async::atomic_sender<std::uint64_t>));
-        std::cout << std::format("sizeof(scheduler):            {} bytes\n",
-                                 sizeof(loom::scheduler));
+        std::print("sizeof(send_sender):          {} bytes\n",
+                   sizeof(loom::async::send_sender));
+        std::print("sizeof(recv_sender):          {} bytes\n",
+                   sizeof(loom::async::recv_sender));
+        std::print("sizeof(read_sender):          {} bytes\n",
+                   sizeof(loom::async::read_sender));
+        std::print("sizeof(write_sender):         {} bytes\n",
+                   sizeof(loom::async::write_sender));
+        std::print("sizeof(atomic_sender<u64>):   {} bytes\n",
+                   sizeof(loom::async::atomic_sender<std::uint64_t>));
+        std::print("sizeof(scheduler):            {} bytes\n",
+                   sizeof(loom::scheduler));
     }
 }
 
@@ -552,9 +551,9 @@ auto main(int argc, char** argv) -> int {
         auto setup = fabric_setup::create(mpi);
 
         if (mpi.is_root()) {
-            std::cout << "=== Loom Async Performance Benchmarks ===\n";
-            std::cout << std::format("Running on {} MPI ranks\n", mpi.size());
-            std::cout << "Measuring actual network operations\n\n";
+            std::print("=== Loom Async Performance Benchmarks ===\n");
+            std::print("Running on {} MPI ranks\n", mpi.size());
+            std::print("Measuring actual network operations\n\n");
         }
 
         benchmark_send_latency(mpi, setup);
@@ -569,13 +568,13 @@ auto main(int argc, char** argv) -> int {
         benchmark_memory_overhead(mpi);
 
         if (mpi.is_root()) {
-            std::cout << "\n=== Benchmarks Complete ===\n";
-            std::cout << "\nKey Observations:\n";
-            std::cout << "- Send/recv latency depends on fabric provider and network\n";
-            std::cout << "- RDMA operations bypass CPU on target (one-sided)\n";
-            std::cout << "- Atomics provide lock-free synchronization\n";
-            std::cout << "- Sender composition adds minimal overhead\n";
-            std::cout << "- when_all enables parallel operation submission\n";
+            std::print("\n=== Benchmarks Complete ===\n");
+            std::print("\nKey Observations:\n");
+            std::print("- Send/recv latency depends on fabric provider and network\n");
+            std::print("- RDMA operations bypass CPU on target (one-sided)\n");
+            std::print("- Atomics provide lock-free synchronization\n");
+            std::print("- Sender composition adds minimal overhead\n");
+            std::print("- when_all enables parallel operation submission\n");
         }
 
     } catch (const std::exception& e) {

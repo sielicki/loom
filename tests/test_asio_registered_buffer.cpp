@@ -9,275 +9,280 @@
 
 #include <array>
 
-#include "ut.hpp"
+#include <catch2/catch_test_macros.hpp>
 #include <asio/io_context.hpp>
 
-using namespace boost::ut;
 using namespace std::literals;
 
-suite registered_buffer_id_suite = [] {
-    "registered_buffer_id default is invalid"_test = [] {
-        loom::asio::registered_buffer_id id;
-        expect(!id.is_valid());
-    };
+// =============================================================================
+// registered_buffer_id tests
+// =============================================================================
 
-    "registered_buffer_id with value is valid"_test = [] {
-        loom::asio::registered_buffer_id id{42};
-        expect(id.is_valid());
-        expect(id.native_handle() == 42_ul);
-    };
+TEST_CASE("registered_buffer_id default is invalid", "[asio][buffer]") {
+    loom::asio::registered_buffer_id id;
+    REQUIRE(!id.is_valid());
+}
 
-    "registered_buffer_id equality"_test = [] {
-        loom::asio::registered_buffer_id id1{1};
-        loom::asio::registered_buffer_id id2{1};
-        loom::asio::registered_buffer_id id3{2};
+TEST_CASE("registered_buffer_id with value is valid", "[asio][buffer]") {
+    loom::asio::registered_buffer_id id{42};
+    REQUIRE(id.is_valid());
+    REQUIRE(id.native_handle() == 42);
+}
 
-        expect(id1 == id2);
-        expect(id1 != id3);
-    };
-};
+TEST_CASE("registered_buffer_id equality", "[asio][buffer]") {
+    loom::asio::registered_buffer_id id1{1};
+    loom::asio::registered_buffer_id id2{1};
+    loom::asio::registered_buffer_id id3{2};
 
-suite mutable_registered_buffer_suite = [] {
-    "mutable_registered_buffer default construction"_test = [] {
-        loom::asio::mutable_registered_buffer buf;
-        expect(buf.data() == nullptr);
-        expect(buf.size() == 0_ul);
-        expect(buf.memory_region() == nullptr);
-        expect(!buf.id().is_valid());
-    };
+    REQUIRE(id1 == id2);
+    REQUIRE(id1 != id3);
+}
 
-    "mutable_registered_buffer offset operator"_test = [] {
-        std::array<std::byte, 64> storage{};
-        ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
+// =============================================================================
+// mutable_registered_buffer tests
+// =============================================================================
 
-        loom::asio::mutable_registered_buffer buf{
-            asio_buf, nullptr, loom::asio::registered_buffer_id{0}};
+TEST_CASE("mutable_registered_buffer default construction", "[asio][buffer]") {
+    loom::asio::mutable_registered_buffer buf;
+    REQUIRE(buf.data() == nullptr);
+    REQUIRE(buf.size() == 0);
+    REQUIRE(buf.memory_region() == nullptr);
+    REQUIRE(!buf.id().is_valid());
+}
 
-        auto offset_buf = buf + 16;
-        expect(offset_buf.size() == 48_ul);
-        expect(offset_buf.data() == storage.data() + 16);
-    };
+TEST_CASE("mutable_registered_buffer offset operator", "[asio][buffer]") {
+    std::array<std::byte, 64> storage{};
+    ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
 
-    "mutable_registered_buffer buffer_sequence interface"_test = [] {
-        std::array<std::byte, 64> storage{};
-        ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
+    loom::asio::mutable_registered_buffer buf{
+        asio_buf, nullptr, loom::asio::registered_buffer_id{0}};
 
-        loom::asio::mutable_registered_buffer buf{
-            asio_buf, nullptr, loom::asio::registered_buffer_id{0}};
+    auto offset_buf = buf + 16;
+    REQUIRE(offset_buf.size() == 48);
+    REQUIRE(offset_buf.data() == storage.data() + 16);
+}
 
-        auto begin = loom::asio::buffer_sequence_begin(buf);
-        auto end = loom::asio::buffer_sequence_end(buf);
+TEST_CASE("mutable_registered_buffer buffer_sequence interface", "[asio][buffer]") {
+    std::array<std::byte, 64> storage{};
+    ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
 
-        expect(end - begin == 1);
-        expect(begin->data() == storage.data());
-        expect(begin->size() == 64_ul);
-    };
-};
+    loom::asio::mutable_registered_buffer buf{
+        asio_buf, nullptr, loom::asio::registered_buffer_id{0}};
 
-suite const_registered_buffer_suite = [] {
-    "const_registered_buffer from mutable"_test = [] {
-        std::array<std::byte, 64> storage{};
-        ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
+    auto begin = loom::asio::buffer_sequence_begin(buf);
+    auto end = loom::asio::buffer_sequence_end(buf);
 
-        loom::asio::mutable_registered_buffer mut_buf{
-            asio_buf, nullptr, loom::asio::registered_buffer_id{5}};
+    REQUIRE(end - begin == 1);
+    REQUIRE(begin->data() == storage.data());
+    REQUIRE(begin->size() == 64);
+}
 
-        loom::asio::const_registered_buffer const_buf{mut_buf};
+// =============================================================================
+// const_registered_buffer tests
+// =============================================================================
 
-        expect(const_buf.data() == storage.data());
-        expect(const_buf.size() == 64_ul);
-        expect(const_buf.id().native_handle() == 5_ul);
-    };
+TEST_CASE("const_registered_buffer from mutable", "[asio][buffer]") {
+    std::array<std::byte, 64> storage{};
+    ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
 
-    "const_registered_buffer buffer_sequence interface"_test = [] {
-        std::array<std::byte, 64> storage{};
-        ::asio::const_buffer asio_buf{storage.data(), storage.size()};
+    loom::asio::mutable_registered_buffer mut_buf{
+        asio_buf, nullptr, loom::asio::registered_buffer_id{5}};
 
-        loom::asio::const_registered_buffer buf{
-            asio_buf, nullptr, loom::asio::registered_buffer_id{0}};
+    loom::asio::const_registered_buffer const_buf{mut_buf};
 
-        auto begin = loom::asio::buffer_sequence_begin(buf);
-        auto end = loom::asio::buffer_sequence_end(buf);
+    REQUIRE(const_buf.data() == storage.data());
+    REQUIRE(const_buf.size() == 64);
+    REQUIRE(const_buf.id().native_handle() == 5);
+}
 
-        expect(end - begin == 1);
-        expect(begin->data() == storage.data());
-        expect(begin->size() == 64_ul);
-    };
-};
+TEST_CASE("const_registered_buffer buffer_sequence interface", "[asio][buffer]") {
+    std::array<std::byte, 64> storage{};
+    ::asio::const_buffer asio_buf{storage.data(), storage.size()};
 
-suite buffer_free_functions_suite = [] {
-    "buffer() returns copy of mutable_registered_buffer"_test = [] {
-        std::array<std::byte, 64> storage{};
-        ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
+    loom::asio::const_registered_buffer buf{
+        asio_buf, nullptr, loom::asio::registered_buffer_id{0}};
 
-        loom::asio::mutable_registered_buffer buf{
-            asio_buf, nullptr, loom::asio::registered_buffer_id{3}};
+    auto begin = loom::asio::buffer_sequence_begin(buf);
+    auto end = loom::asio::buffer_sequence_end(buf);
 
-        auto copy = loom::asio::buffer(buf);
-        expect(copy.data() == storage.data());
-        expect(copy.size() == 64_ul);
-        expect(copy.id().native_handle() == 3_ul);
-    };
+    REQUIRE(end - begin == 1);
+    REQUIRE(begin->data() == storage.data());
+    REQUIRE(begin->size() == 64);
+}
 
-    "buffer() with size limits mutable_registered_buffer"_test = [] {
-        std::array<std::byte, 64> storage{};
-        ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
+// =============================================================================
+// buffer free functions tests
+// =============================================================================
 
-        loom::asio::mutable_registered_buffer buf{
-            asio_buf, nullptr, loom::asio::registered_buffer_id{4}};
+TEST_CASE("buffer() returns copy of mutable_registered_buffer", "[asio][buffer]") {
+    std::array<std::byte, 64> storage{};
+    ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
 
-        auto limited = loom::asio::buffer(buf, 32);
-        expect(limited.data() == storage.data());
-        expect(limited.size() == 32_ul);
-        expect(limited.id().native_handle() == 4_ul);
+    loom::asio::mutable_registered_buffer buf{
+        asio_buf, nullptr, loom::asio::registered_buffer_id{3}};
 
-        // Should not exceed original size
-        auto overlimit = loom::asio::buffer(buf, 100);
-        expect(overlimit.size() == 64_ul);
-    };
+    auto copy = loom::asio::buffer(buf);
+    REQUIRE(copy.data() == storage.data());
+    REQUIRE(copy.size() == 64);
+    REQUIRE(copy.id().native_handle() == 3);
+}
 
-    "buffer() returns copy of const_registered_buffer"_test = [] {
-        std::array<std::byte, 64> storage{};
-        ::asio::const_buffer asio_buf{storage.data(), storage.size()};
+TEST_CASE("buffer() with size limits mutable_registered_buffer", "[asio][buffer]") {
+    std::array<std::byte, 64> storage{};
+    ::asio::mutable_buffer asio_buf{storage.data(), storage.size()};
 
-        loom::asio::const_registered_buffer buf{
-            asio_buf, nullptr, loom::asio::registered_buffer_id{5}};
+    loom::asio::mutable_registered_buffer buf{
+        asio_buf, nullptr, loom::asio::registered_buffer_id{4}};
 
-        auto copy = loom::asio::buffer(buf);
-        expect(copy.data() == storage.data());
-        expect(copy.size() == 64_ul);
-        expect(copy.id().native_handle() == 5_ul);
-    };
+    auto limited = loom::asio::buffer(buf, 32);
+    REQUIRE(limited.data() == storage.data());
+    REQUIRE(limited.size() == 32);
+    REQUIRE(limited.id().native_handle() == 4);
 
-    "buffer() with size limits const_registered_buffer"_test = [] {
-        std::array<std::byte, 64> storage{};
-        ::asio::const_buffer asio_buf{storage.data(), storage.size()};
+    // Should not exceed original size
+    auto overlimit = loom::asio::buffer(buf, 100);
+    REQUIRE(overlimit.size() == 64);
+}
 
-        loom::asio::const_registered_buffer buf{
-            asio_buf, nullptr, loom::asio::registered_buffer_id{6}};
+TEST_CASE("buffer() returns copy of const_registered_buffer", "[asio][buffer]") {
+    std::array<std::byte, 64> storage{};
+    ::asio::const_buffer asio_buf{storage.data(), storage.size()};
 
-        auto limited = loom::asio::buffer(buf, 16);
-        expect(limited.data() == storage.data());
-        expect(limited.size() == 16_ul);
-        expect(limited.id().native_handle() == 6_ul);
-    };
-};
+    loom::asio::const_registered_buffer buf{
+        asio_buf, nullptr, loom::asio::registered_buffer_id{5}};
 
-suite buffer_registration_suite = [] {
-    skip / "buffer_registration with fabric"_test = [] {
-        loom::fabric_hints hints{};
-        hints.ep_type = loom::endpoint_types::rdm;
+    auto copy = loom::asio::buffer(buf);
+    REQUIRE(copy.data() == storage.data());
+    REQUIRE(copy.size() == 64);
+    REQUIRE(copy.id().native_handle() == 5);
+}
 
-        auto info_result = loom::query_fabric(hints);
-        expect(static_cast<bool>(info_result)) << "No fabric provider available";
+TEST_CASE("buffer() with size limits const_registered_buffer", "[asio][buffer]") {
+    std::array<std::byte, 64> storage{};
+    ::asio::const_buffer asio_buf{storage.data(), storage.size()};
 
-        auto fabric_result = loom::fabric::create(*info_result);
-        expect(static_cast<bool>(fabric_result)) << "Failed to create fabric";
+    loom::asio::const_registered_buffer buf{
+        asio_buf, nullptr, loom::asio::registered_buffer_id{6}};
 
-        auto domain_result = loom::domain::create(*fabric_result, *info_result);
-        expect(static_cast<bool>(domain_result)) << "Failed to create domain";
+    auto limited = loom::asio::buffer(buf, 16);
+    REQUIRE(limited.data() == storage.data());
+    REQUIRE(limited.size() == 16);
+    REQUIRE(limited.id().native_handle() == 6);
+}
 
-        ::asio::io_context ioc;
+// =============================================================================
+// buffer_registration tests (require fabric provider)
+// =============================================================================
 
-        std::array<std::byte, 1024> buf1{};
-        std::array<std::byte, 2048> buf2{};
-        std::array buffers = {::asio::buffer(buf1), ::asio::buffer(buf2)};
+TEST_CASE("buffer_registration with fabric", "[asio][buffer][.integration]") {
+    loom::fabric_hints hints{};
+    hints.ep_type = loom::endpoint_types::rdm;
 
-        auto reg_result =
-            loom::asio::register_buffers(ioc,
-                                         *domain_result,
-                                         buffers,
-                                         loom::mr_access_flags::send | loom::mr_access_flags::recv);
+    auto info_result = loom::query_fabric(hints);
+    REQUIRE(info_result.has_value());
 
-        expect(static_cast<bool>(reg_result)) << "Failed to register buffers";
+    auto fabric_result = loom::fabric::create(*info_result);
+    REQUIRE(fabric_result.has_value());
 
-        auto& reg = *reg_result;
-        expect(reg.size() == 2_ul);
+    auto domain_result = loom::domain::create(*fabric_result, *info_result);
+    REQUIRE(domain_result.has_value());
 
-        expect(reg[0].data() == buf1.data());
-        expect(reg[0].size() == 1024_ul);
-        expect(reg[0].memory_region() != nullptr);
-        expect(reg[0].id().native_handle() == 0_ul);
+    ::asio::io_context ioc;
 
-        expect(reg[1].data() == buf2.data());
-        expect(reg[1].size() == 2048_ul);
-        expect(reg[1].memory_region() != nullptr);
-        expect(reg[1].id().native_handle() == 1_ul);
-    };
+    std::array<std::byte, 1024> buf1{};
+    std::array<std::byte, 2048> buf2{};
+    std::array buffers = {::asio::buffer(buf1), ::asio::buffer(buf2)};
 
-    skip / "buffer_registration iteration"_test = [] {
-        loom::fabric_hints hints{};
-        hints.ep_type = loom::endpoint_types::rdm;
+    auto reg_result =
+        loom::asio::register_buffers(ioc,
+                                     *domain_result,
+                                     buffers,
+                                     loom::mr_access_flags::send | loom::mr_access_flags::recv);
 
-        auto info_result = loom::query_fabric(hints);
-        expect(static_cast<bool>(info_result)) << "No fabric provider available";
+    REQUIRE(reg_result.has_value());
 
-        auto fabric_result = loom::fabric::create(*info_result);
-        expect(static_cast<bool>(fabric_result)) << "Failed to create fabric";
+    auto& reg = *reg_result;
+    REQUIRE(reg.size() == 2);
 
-        auto domain_result = loom::domain::create(*fabric_result, *info_result);
-        expect(static_cast<bool>(domain_result)) << "Failed to create domain";
+    REQUIRE(reg[0].data() == buf1.data());
+    REQUIRE(reg[0].size() == 1024);
+    REQUIRE(reg[0].memory_region() != nullptr);
+    REQUIRE(reg[0].id().native_handle() == 0);
 
-        ::asio::io_context ioc;
+    REQUIRE(reg[1].data() == buf2.data());
+    REQUIRE(reg[1].size() == 2048);
+    REQUIRE(reg[1].memory_region() != nullptr);
+    REQUIRE(reg[1].id().native_handle() == 1);
+}
 
-        std::array<std::byte, 512> buf1{};
-        std::array<std::byte, 512> buf2{};
-        std::array<std::byte, 512> buf3{};
-        std::array buffers = {::asio::buffer(buf1), ::asio::buffer(buf2), ::asio::buffer(buf3)};
+TEST_CASE("buffer_registration iteration", "[asio][buffer][.integration]") {
+    loom::fabric_hints hints{};
+    hints.ep_type = loom::endpoint_types::rdm;
 
-        auto reg_result =
-            loom::asio::register_buffers(ioc,
-                                         *domain_result,
-                                         buffers,
-                                         loom::mr_access_flags::send | loom::mr_access_flags::recv);
+    auto info_result = loom::query_fabric(hints);
+    REQUIRE(info_result.has_value());
 
-        expect(static_cast<bool>(reg_result)) << "Failed to register buffers";
+    auto fabric_result = loom::fabric::create(*info_result);
+    REQUIRE(fabric_result.has_value());
 
-        auto& reg = *reg_result;
-        std::size_t count = 0;
-        for (const auto& buf : reg) {
-            expect(buf.size() == 512_ul);
-            expect(buf.id().native_handle() == count);
-            ++count;
-        }
-        expect(count == 3_ul);
-    };
+    auto domain_result = loom::domain::create(*fabric_result, *info_result);
+    REQUIRE(domain_result.has_value());
 
-    skip / "buffer_registration move semantics"_test = [] {
-        loom::fabric_hints hints{};
-        hints.ep_type = loom::endpoint_types::rdm;
+    ::asio::io_context ioc;
 
-        auto info_result = loom::query_fabric(hints);
-        expect(static_cast<bool>(info_result)) << "No fabric provider available";
+    std::array<std::byte, 512> buf1{};
+    std::array<std::byte, 512> buf2{};
+    std::array<std::byte, 512> buf3{};
+    std::array buffers = {::asio::buffer(buf1), ::asio::buffer(buf2), ::asio::buffer(buf3)};
 
-        auto fabric_result = loom::fabric::create(*info_result);
-        expect(static_cast<bool>(fabric_result)) << "Failed to create fabric";
+    auto reg_result =
+        loom::asio::register_buffers(ioc,
+                                     *domain_result,
+                                     buffers,
+                                     loom::mr_access_flags::send | loom::mr_access_flags::recv);
 
-        auto domain_result = loom::domain::create(*fabric_result, *info_result);
-        expect(static_cast<bool>(domain_result)) << "Failed to create domain";
+    REQUIRE(reg_result.has_value());
 
-        ::asio::io_context ioc;
+    auto& reg = *reg_result;
+    std::size_t count = 0;
+    for (const auto& buf : reg) {
+        REQUIRE(buf.size() == 512);
+        REQUIRE(buf.id().native_handle() == count);
+        ++count;
+    }
+    REQUIRE(count == 3);
+}
 
-        std::array<std::byte, 256> buf{};
-        std::array buffers = {::asio::buffer(buf)};
+TEST_CASE("buffer_registration move semantics", "[asio][buffer][.integration]") {
+    loom::fabric_hints hints{};
+    hints.ep_type = loom::endpoint_types::rdm;
 
-        auto reg_result =
-            loom::asio::register_buffers(ioc,
-                                         *domain_result,
-                                         buffers,
-                                         loom::mr_access_flags::send | loom::mr_access_flags::recv);
+    auto info_result = loom::query_fabric(hints);
+    REQUIRE(info_result.has_value());
 
-        expect(static_cast<bool>(reg_result)) << "Failed to register buffers";
+    auto fabric_result = loom::fabric::create(*info_result);
+    REQUIRE(fabric_result.has_value());
 
-        auto reg1 = std::move(*reg_result);
-        expect(reg1.size() == 1_ul);
+    auto domain_result = loom::domain::create(*fabric_result, *info_result);
+    REQUIRE(domain_result.has_value());
 
-        auto reg2 = std::move(reg1);
-        expect(reg2.size() == 1_ul);
-        expect(reg2[0].data() == buf.data());
-    };
-};
+    ::asio::io_context ioc;
 
-auto main() -> int {
-    return 0;
+    std::array<std::byte, 256> buf{};
+    std::array buffers = {::asio::buffer(buf)};
+
+    auto reg_result =
+        loom::asio::register_buffers(ioc,
+                                     *domain_result,
+                                     buffers,
+                                     loom::mr_access_flags::send | loom::mr_access_flags::recv);
+
+    REQUIRE(reg_result.has_value());
+
+    auto reg1 = std::move(*reg_result);
+    REQUIRE(reg1.size() == 1);
+
+    auto reg2 = std::move(reg1);
+    REQUIRE(reg2.size() == 1);
+    REQUIRE(reg2[0].data() == buf.data());
 }
