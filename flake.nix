@@ -7,6 +7,8 @@
     systems.url = "github:nix-systems/default";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
+    libfabric.url = "github:sielicki/libfabric";
+    libfabric.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -47,15 +49,8 @@
             ./cmake
           ]);
 
-          # Use our custom libfabric derivation
-          libfabric = pkgs.callPackage ./nix/pkgs/libfabric {
-            # Enable appropriate providers based on platform
-            enableProvVerbs = !isDarwin;
-            enableProvEfa = !isDarwin;
-            enableProvTcp = true;
-            enableProvSockets = true;
-            enableProvShm = !isDarwin;
-          };
+          # Use libfabric from external flake
+          libfabric = inputs'.libfabric.packages.default;
 
           # Use our custom stdexec derivation (header-only)
           stdexec = pkgs.callPackage ./nix/pkgs/stdexec { };
@@ -485,7 +480,7 @@
                   ];
 
                   buildInputs = commonBuildInputs ++ devDependencies ++ testDependencies ++ [
-                    pkgs.llvmPackages_latest.llvm  # For llvm-cov and llvm-profdata
+                    pkgs.llvmPackages_latest.llvm # For llvm-cov and llvm-profdata
                   ];
 
                   shellHook = ''
