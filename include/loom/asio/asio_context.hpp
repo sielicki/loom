@@ -492,16 +492,12 @@ inline void finish_asio_submission(owned_asio_context context, void_result resul
  * @param ctx The context pointer from the completion event.
  * @param event The completion event.
  *
- * Uses loom's receiver pattern (set_value/set_error) for dispatch.
+ * Preserve the full event, including partial receive lengths on failure.
  */
 inline void dispatch_asio_completion(void* ctx, const completion_event& event) {
     if (auto* asio_ctx = asio_context_erased::from_fi_context(ctx)) {
         completion_event mutable_event = event;
-        if (mutable_event.has_error()) {
-            asio_ctx->set_error(mutable_event.error);
-        } else {
-            asio_ctx->set_value(mutable_event);
-        }
+        asio_ctx->set_value(mutable_event);
     }
 }
 

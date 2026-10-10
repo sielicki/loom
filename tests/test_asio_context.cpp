@@ -159,6 +159,42 @@ TEST_CASE("asio_context creation and handler invocation", "[asio][context]") {
     REQUIRE(!received_ec);
 }
 
+TEST_CASE("Asio preserves partial receive lengths on failure", "[asio][context]") {
+    ::asio::io_context ioc;
+    bool completed{};
+    auto* ctx = loom::asio::make_asio_context(
+        [&](std::error_code error, std::size_t bytes) {
+            REQUIRE(error == loom::make_error_code_from_fi_errno(FI_ETRUNC));
+            REQUIRE(bytes == 3);
+            completed = true;
+        },
+        ioc.get_executor());
+    loom::completion_event event;
+    event.bytes_transferred = 3;
+    event.error = loom::make_error_code_from_fi_errno(FI_ETRUNC);
+    loom::asio::dispatch_asio_completion(ctx->as_fi_context(), event);
+    ioc.run();
+    REQUIRE(completed);
+}
+
+TEST_CASE("Asio transfer failure does not report a successful send", "[asio][context]") {
+    ::asio::io_context ioc;
+    bool completed{};
+    auto* ctx = loom::asio::make_asio_context(
+        [&](std::error_code error, std::size_t bytes) {
+            REQUIRE(error == loom::errc::io_error);
+            REQUIRE(bytes == 0);
+            completed = true;
+        },
+        ioc.get_executor());
+    ctx->set_transfer_size(42);
+    loom::completion_event event;
+    event.error = loom::make_error_code(loom::errc::io_error);
+    loom::asio::dispatch_asio_completion(ctx->as_fi_context(), event);
+    ioc.run();
+    REQUIRE(completed);
+}
+
 TEST_CASE("asio_context failure handler", "[asio][context]") {
     ::asio::io_context ioc;
     std::atomic<bool> handler_called{false};
