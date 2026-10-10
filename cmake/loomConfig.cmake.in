@@ -14,6 +14,12 @@ if(PKG_CONFIG_FOUND)
     pkg_check_modules(LIBFABRIC QUIET IMPORTED_TARGET libfabric)
 endif()
 
+if(@LOOM_HAS_STDEXEC@)
+    find_dependency(stdexec CONFIG)
+elseif(@LOOM_HAS_BEMAN_EXECUTION@)
+    find_dependency(beman.execution CONFIG)
+endif()
+
 # Include the targets file
 include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
 

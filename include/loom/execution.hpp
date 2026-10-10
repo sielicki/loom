@@ -11,7 +11,7 @@
  *
  * - stdexec (NVIDIA's reference implementation)
  * - beman::execution (Beman project implementation)
- * - std::execution (future C++26 standard)
+ * - std::execution (C++26 standard)
  *
  * The implementation is designed to be generic so that code written against
  * this interface will work with any conforming P2300 implementation with
@@ -21,7 +21,6 @@
  *
  * ```cpp
  * #include <loom/execution.hpp>
- * #include <stdexec/execution.hpp>  // Or beman::execution
  *
  * // Create senders for fabric operations
  * auto send_op = loom::async(ep).send(buffer, &cq);
@@ -49,7 +48,7 @@
  * auto cq_ptr = std::make_shared<loom::completion_queue>(std::move(cq));
  * loom::scheduler sched{cq_ptr};
  *
- * // Schedule work on the CQ context
+ * // Run work inline when started
  * auto work = loom::execution::schedule(sched)
  *           | loom::execution::then([] { return 42; });
  * ```
@@ -72,11 +71,13 @@
  */
 
 #include "loom/execution/concepts.hpp"
-#include "loom/execution/operation_state.hpp"
-#include "loom/execution/receiver.hpp"
-#include "loom/execution/rma.hpp"
-#include "loom/execution/scheduler.hpp"
-#include "loom/execution/send_recv.hpp"
+#if !defined(LOOM_EXECUTION_BACKEND_NONE)
+#    include "loom/execution/operation_state.hpp"
+#    include "loom/execution/receiver.hpp"
+#    include "loom/execution/rma.hpp"
+#    include "loom/execution/scheduler.hpp"
+#    include "loom/execution/send_recv.hpp"
+#endif
 
 /**
  * @namespace loom::execution
@@ -88,7 +89,7 @@
  *
  * ## Key Types
  *
- * - `scheduler` - Schedules work on a completion queue's context
+ * - `scheduler` - Runs scheduled work inline while retaining a completion queue
  * - `send_sender` - Sender for async send operations
  * - `recv_sender` - Sender for async receive operations
  * - `read_sender` - Sender for RMA read operations

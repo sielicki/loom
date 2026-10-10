@@ -68,9 +68,14 @@ namespace loom::execution {
  */
 class send_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures = loom::execution::
         completion_signatures<set_value_t(), set_error_t(std::error_code), set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     /**
      * @brief Constructs a send sender.
@@ -117,11 +122,16 @@ private:
  */
 class recv_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures =
         loom::execution::completion_signatures<set_value_t(std::size_t),
                                                set_error_t(std::error_code),
                                                set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     /**
      * @brief Constructs a recv sender.
@@ -159,9 +169,14 @@ private:
  */
 class tagged_send_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures = loom::execution::
         completion_signatures<set_value_t(), set_error_t(std::error_code), set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     tagged_send_sender(endpoint* ep,
                        std::span<const std::byte> buffer,
@@ -197,11 +212,16 @@ private:
  */
 class tagged_recv_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures =
         loom::execution::completion_signatures<set_value_t(std::size_t),
                                                set_error_t(std::error_code),
                                                set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     tagged_recv_sender(endpoint* ep,
                        std::span<std::byte> buffer,

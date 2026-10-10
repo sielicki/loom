@@ -16,8 +16,10 @@ struct completion_state {
     std::error_code error;
 };
 
+struct empty_env {};
+
 struct receiver {
-    using receiver_concept = stdexec::receiver_t;
+    using receiver_concept = loom::execution::receiver_tag;
     completion_state* state;
     void set_value() noexcept { ++state->calls; }
     void set_value(std::size_t bytes) noexcept {
@@ -32,7 +34,7 @@ struct receiver {
         state->error = loom::errc::canceled;
         ++state->calls;
     }
-    auto get_env() const noexcept { return stdexec::env{}; }
+    auto get_env() const noexcept { return empty_env{}; }
 };
 
 struct provider {
@@ -45,6 +47,64 @@ struct provider {
             return static_cast<provider*>(ep->fid.context)->post(ctx);
         },
         .send = [](fid_ep* ep, const void*, std::size_t, void*, fi_addr_t, void* ctx) -> ssize_t {
+            return static_cast<provider*>(ep->fid.context)->post(ctx);
+        },
+    };
+    fi_ops_rma rma{
+        .size = sizeof(fi_ops_rma),
+        .read = [](fid_ep* ep,
+                   void*,
+                   std::size_t,
+                   void*,
+                   fi_addr_t,
+                   std::uint64_t,
+                   std::uint64_t,
+                   void* ctx) -> ssize_t {
+            return static_cast<provider*>(ep->fid.context)->post(ctx);
+        },
+        .write = [](fid_ep* ep,
+                    const void*,
+                    std::size_t,
+                    void*,
+                    fi_addr_t,
+                    std::uint64_t,
+                    std::uint64_t,
+                    void* ctx) -> ssize_t {
+            return static_cast<provider*>(ep->fid.context)->post(ctx);
+        },
+    };
+    fi_ops_atomic atomics{
+        .size = sizeof(fi_ops_atomic),
+        .readwrite = [](fid_ep* ep,
+                        const void*,
+                        std::size_t,
+                        void*,
+                        void* result,
+                        void*,
+                        fi_addr_t,
+                        std::uint64_t,
+                        std::uint64_t,
+                        fi_datatype,
+                        fi_op,
+                        void* ctx) -> ssize_t {
+            *static_cast<std::uint64_t*>(result) = 42;
+            return static_cast<provider*>(ep->fid.context)->post(ctx);
+        },
+        .compwrite = [](fid_ep* ep,
+                        const void*,
+                        std::size_t,
+                        void*,
+                        const void*,
+                        void*,
+                        void* result,
+                        void*,
+                        fi_addr_t,
+                        std::uint64_t,
+                        std::uint64_t,
+                        fi_datatype,
+                        fi_op,
+                        void* ctx) -> ssize_t {
+            *static_cast<std::uint64_t*>(result) = 42;
             return static_cast<provider*>(ep->fid.context)->post(ctx);
         },
     };
@@ -67,7 +127,8 @@ struct provider {
         },
     };
     fid_cq cq_handle{.fid = {.context = this, .ops = &ops}, .ops = &completions};
-    fid_ep ep_handle{.fid = {.context = this, .ops = &ops}, .msg = &messages};
+    fid_ep ep_handle{
+        .fid = {.context = this, .ops = &ops}, .msg = &messages, .rma = &rma, .atomic = &atomics};
     loom::completion_queue cq{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
         loom::get_default_resource(), &cq_handle)};
     loom::endpoint ep{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
@@ -90,15 +151,15 @@ struct provider {
 };
 }  // namespace
 
-TEST_CASE("execution progress completes composed fabric operations", "[stdexec][progress]") {
+TEST_CASE("execution progress completes composed fabric operations", "[execution][progress]") {
     provider fabric;
     completion_state state;
     std::array<std::byte, 16> outgoing{}, incoming{};
-    auto operation =
-        stdexec::connect(stdexec::when_all(loom::async(fabric.ep).send(outgoing, &fabric.cq),
-                                           loom::async(fabric.ep).recv(incoming, &fabric.cq)),
-                         receiver{&state});
-    stdexec::start(operation);
+    auto operation = loom::execution::connect(
+        loom::execution::when_all(loom::async(fabric.ep).send(outgoing, &fabric.cq),
+                                  loom::async(fabric.ep).recv(incoming, &fabric.cq)),
+        receiver{&state});
+    loom::execution::start(operation);
     REQUIRE(state.calls == 0);
     REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 2);
     REQUIRE(state.calls == 1);
@@ -107,16 +168,57 @@ TEST_CASE("execution progress completes composed fabric operations", "[stdexec][
     REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 0);
 }
 
-TEST_CASE("execution progress delivers operation failures", "[stdexec][progress]") {
+TEST_CASE("execution progress delivers operation failures", "[execution][progress]") {
     provider fabric;
     fabric.fail = true;
     completion_state state;
     std::array<std::byte, 16> data{};
     auto operation =
-        stdexec::connect(loom::async(fabric.ep).send(data, &fabric.cq), receiver{&state});
-    stdexec::start(operation);
+        loom::execution::connect(loom::async(fabric.ep).send(data, &fabric.cq), receiver{&state});
+    loom::execution::start(operation);
     REQUIRE(state.calls == 0);
     REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
     REQUIRE(state.calls == 1);
     REQUIRE(state.error == loom::errc::canceled);
+}
+
+TEST_CASE("execution progress delivers RMA completions", "[execution][progress]") {
+    provider fabric;
+    completion_state state;
+    std::array<std::byte, 16> data{};
+    auto operations = loom::rma_async(fabric.ep);
+    auto operation = loom::execution::connect(
+        loom::execution::when_all(
+            operations.read(data, loom::rma_addr{0x1000}, loom::mr_key{1}, &fabric.cq),
+            operations.write(data, loom::rma_addr{0x1000}, loom::mr_key{1}, &fabric.cq)),
+        receiver{&state});
+    static_assert(loom::execution::operation_state<decltype(operation)>);
+    loom::execution::start(operation);
+    REQUIRE(state.calls == 0);
+    REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 2);
+    REQUIRE(state.calls == 1);
+    REQUIRE(state.bytes == 7);
+}
+
+TEST_CASE("execution progress delivers atomic results", "[execution][progress]") {
+    provider fabric;
+    completion_state state;
+    auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        static_assert(loom::execution::operation_state<decltype(operation)>);
+        loom::execution::start(operation);
+        REQUIRE(state.calls == 0);
+        REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+        REQUIRE(state.calls == 1);
+        REQUIRE(state.bytes == 42);
+        REQUIRE_FALSE(state.error);
+    };
+    SECTION("fetch add") {
+        run(loom::rma_async(fabric.ep).fetch_add<std::uint64_t>(
+            loom::rma_addr{0x1000}, 1, loom::mr_key{1}, nullptr, &fabric.cq));
+    }
+    SECTION("compare swap") {
+        run(loom::rma_async(fabric.ep).compare_swap<std::uint64_t>(
+            loom::rma_addr{0x1000}, 42, 43, loom::mr_key{1}, nullptr, &fabric.cq));
+    }
 }

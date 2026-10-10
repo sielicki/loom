@@ -56,7 +56,7 @@ struct fabric_env {
 template <typename Receiver, typename... ValueTypes>
 class fabric_receiver {
 public:
-    using receiver_concept = receiver_t;
+    using receiver_concept = receiver_tag;
 
     /**
      * @brief Constructs a fabric receiver wrapping the given receiver.
@@ -201,21 +201,6 @@ template <typename... ValueTypes, typename Receiver>
 [[nodiscard]] auto make_fabric_receiver(Receiver&& receiver)
     -> fabric_receiver<std::decay_t<Receiver>, ValueTypes...> {
     return fabric_receiver<std::decay_t<Receiver>, ValueTypes...>(std::forward<Receiver>(receiver));
-}
-
-}  // namespace loom::execution
-
-// ADL customization points for P2300
-namespace loom::execution {
-
-/**
- * @brief ADL customization of get_env for fabric_receiver.
- */
-template <typename Receiver, typename... ValueTypes>
-[[nodiscard]] auto tag_invoke([[maybe_unused]] decltype(loom::execution::get_env) tag,
-                              const fabric_receiver<Receiver, ValueTypes...>& r) noexcept
-    -> fabric_env {
-    return r.get_env();
 }
 
 }  // namespace loom::execution

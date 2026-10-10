@@ -3,11 +3,11 @@
 
 /**
  * @file scheduler.hpp
- * @brief P2300 scheduler for loom completion queue-based execution.
+ * @brief P2300 inline scheduler retaining a loom completion queue.
  *
- * This header provides a scheduler type that integrates loom's completion
- * queue polling with the P2300 scheduler concept. The scheduler allows
- * work to be scheduled on a completion queue's execution context.
+ * This scheduler completes inline on the thread calling start. It retains
+ * a completion queue but does not drive progress or dispatch work to a
+ * separate CQ polling thread.
  *
  * ## Usage
  *
@@ -15,10 +15,10 @@
  * #include <loom/execution.hpp>
  *
  * // Create a scheduler from a completion queue
- * auto cq_ptr = std::make_shared<loom::completion_queue>(cq);
+ * auto cq_ptr = std::make_shared<loom::completion_queue>(std::move(cq));
  * loom::scheduler sched{cq_ptr};
  *
- * // Schedule work on the completion queue's context
+ * // Run work inline when started
  * auto work = loom::execution::schedule(sched)
  *           | loom::execution::then([] { return 42; });
  * ```
@@ -42,14 +42,18 @@ namespace execution {
 /**
  * @brief Sender returned by scheduler::schedule().
  *
- * This sender represents work that will execute on the scheduler's
- * execution context (completion queue polling thread).
+ * This sender completes inline on the thread calling start.
  */
 class schedule_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures = loom::execution::
         completion_signatures<set_value_t(), set_error_t(std::error_code), set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     explicit schedule_sender(std::shared_ptr<completion_queue> cq) noexcept : cq_(std::move(cq)) {}
 
@@ -59,6 +63,7 @@ public:
     template <typename Receiver>
     class operation_state {
     public:
+        using operation_state_concept = execution::operation_state_tag;
         operation_state(std::shared_ptr<completion_queue> cq, Receiver receiver) noexcept
             : cq_(std::move(cq)), receiver_(std::move(receiver)) {}
 
@@ -94,8 +99,9 @@ public:
     struct environment {
         std::shared_ptr<completion_queue> cq;
 
-        [[nodiscard]] auto query(decltype(loom::execution::get_completion_scheduler<set_value_t>))
-            const noexcept -> loom::scheduler;
+        [[nodiscard]] auto
+        query(decltype(loom::execution::get_completion_scheduler<set_value_t>)) const noexcept
+            -> loom::scheduler;
     };
 
     [[nodiscard]] auto get_env() const noexcept -> environment { return {cq_}; }
@@ -114,9 +120,8 @@ private:
 /**
  * @brief P2300-compatible scheduler for loom completion queues.
  *
- * This scheduler allows work to be scheduled on the execution context
- * associated with a loom completion queue. It satisfies the P2300
- * scheduler concept.
+ * This scheduler retains a completion queue and satisfies the P2300
+ * scheduler concept. Scheduled work runs inline on the initiating thread.
  *
  * ## Usage
  *
@@ -131,10 +136,17 @@ private:
  */
 class scheduler {
 public:
+    using scheduler_concept = execution::scheduler_tag;
     /**
      * @brief Default constructor creates an empty scheduler.
      */
     scheduler() noexcept = default;
+
+    [[nodiscard]] static constexpr auto
+    query(decltype(execution::get_forward_progress_guarantee)) noexcept
+        -> execution::forward_progress_guarantee {
+        return execution::forward_progress_guarantee::weakly_parallel;
+    }
 
     /**
      * @brief Constructs a scheduler from a shared completion queue.
@@ -166,7 +178,7 @@ public:
 
     /**
      * @brief Schedules work on this scheduler.
-     * @return A sender that completes on this scheduler's execution context.
+     * @return A sender that completes inline when started.
      */
     [[nodiscard]] auto schedule() const noexcept -> execution::schedule_sender {
         return execution::schedule_sender(cq_);
@@ -214,18 +226,3 @@ inline auto schedule_sender::get_completion_scheduler() const noexcept -> loom::
 }  // namespace execution
 
 }  // namespace loom
-
-// Tag invoke customization points for scheduler
-namespace loom::execution {
-
-/**
- * @brief Customization of schedule for loom::scheduler.
- */
-template <typename Tag>
-    requires std::same_as<Tag, decltype(loom::execution::schedule)>
-[[nodiscard]] inline auto tag_invoke([[maybe_unused]] Tag tag,
-                                     const loom::scheduler& sched) noexcept -> schedule_sender {
-    return sched.schedule();
-}
-
-}  // namespace loom::execution

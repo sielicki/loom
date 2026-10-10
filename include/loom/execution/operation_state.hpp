@@ -78,6 +78,7 @@ static_assert(std::is_pointer_interconvertible_with_class(&operation_completion_
 template <typename Derived, typename Receiver, typename... ValueTypes>
 class fabric_operation_state_base {
 public:
+    using operation_state_concept = execution::operation_state_tag;
     fabric_operation_state_base(const fabric_operation_state_base&) = delete;
     auto operator=(const fabric_operation_state_base&) -> fabric_operation_state_base& = delete;
     fabric_operation_state_base(fabric_operation_state_base&&) = delete;

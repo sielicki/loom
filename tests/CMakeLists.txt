@@ -84,11 +84,11 @@ loom_add_test(test_trigger)
 loom_add_test(test_fabric_integration)
 
 # =============================================================================
-# stdexec/P2300 integration tests
+# P2300 integration tests
 # =============================================================================
 
-if(LOOM_HAS_STDEXEC)
-    message(STATUS "Building stdexec/P2300 integration tests")
+if(TARGET loom::execution)
+    message(STATUS "Building P2300 integration tests")
 
     loom_add_test(test_async_senders
         LIBRARY loom::execution
@@ -97,7 +97,7 @@ if(LOOM_HAS_STDEXEC)
         LIBRARY loom::execution
     )
 else()
-    message(STATUS "Skipping stdexec integration tests (LOOM_USE_STDEXEC=OFF)")
+    message(STATUS "Skipping P2300 integration tests (no backend selected)")
 endif()
 
 # =============================================================================

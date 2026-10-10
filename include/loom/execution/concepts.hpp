@@ -9,7 +9,7 @@
  * that works with multiple implementations:
  * - stdexec (NVIDIA's reference implementation)
  * - beman::execution (Beman project implementation)
- * - std::execution (future C++26 standard)
+ * - std::execution (C++26 standard)
  *
  * The detection is done at compile time through feature macros and header
  * availability. User code should use the types in the loom::execution
@@ -29,7 +29,7 @@
  *
  * The backend is selected in this priority order:
  * 1. std::execution (if available in C++26+)
- * 2. stdexec (if LOOM_USE_STDEXEC is defined or <stdexec/execution.hpp> exists)
+ * 2. stdexec (if <stdexec/execution.hpp> exists)
  * 3. beman::execution (if <beman/execution/execution.hpp> exists)
  *
  * You can force a specific backend by defining one of:
@@ -47,7 +47,7 @@
 // Priority: std::execution > stdexec > beman::execution
 
 // Check for C++26 std::execution
-#if defined(__cpp_lib_execution) && __cpp_lib_execution >= 202302L
+#if defined(__cpp_lib_senders) && __cpp_lib_senders >= 202406L
 #    define LOOM_HAS_STD_EXECUTION 1
 #else
 #    define LOOM_HAS_STD_EXECUTION 0
@@ -67,12 +67,26 @@
 #    define LOOM_HAS_BEMAN_EXECUTION 0
 #endif
 
-// Determine which backend to use
-#if defined(LOOM_EXECUTION_USE_STD) && LOOM_HAS_STD_EXECUTION
+// An explicit selection must never silently choose another implementation.
+#if (defined(LOOM_EXECUTION_USE_STD) + defined(LOOM_EXECUTION_USE_STDEXEC) +                       \
+     defined(LOOM_EXECUTION_USE_BEMAN)) > 1
+#    error "Select only one loom execution backend"
+#endif
+
+#if defined(LOOM_EXECUTION_USE_STD)
+#    if !LOOM_HAS_STD_EXECUTION
+#        error "Selected std::execution requires __cpp_lib_senders >= 202406L"
+#    endif
 #    define LOOM_EXECUTION_BACKEND_STD 1
-#elif defined(LOOM_EXECUTION_USE_STDEXEC) && LOOM_HAS_STDEXEC
+#elif defined(LOOM_EXECUTION_USE_STDEXEC)
+#    if !LOOM_HAS_STDEXEC
+#        error "Selected stdexec backend requires <stdexec/execution.hpp>"
+#    endif
 #    define LOOM_EXECUTION_BACKEND_STDEXEC 1
-#elif defined(LOOM_EXECUTION_USE_BEMAN) && LOOM_HAS_BEMAN_EXECUTION
+#elif defined(LOOM_EXECUTION_USE_BEMAN)
+#    if !LOOM_HAS_BEMAN_EXECUTION
+#        error "Selected Beman backend requires <beman/execution/execution.hpp>"
+#    endif
 #    define LOOM_EXECUTION_BACKEND_BEMAN 1
 #elif LOOM_HAS_STD_EXECUTION
 #    define LOOM_EXECUTION_BACKEND_STD 1
@@ -103,143 +117,72 @@
 namespace loom::execution {
 
 #if defined(LOOM_EXECUTION_BACKEND_STD)
-
-// Forward std::execution types
 namespace impl = std::execution;
-
-using std::execution::operation_state;
-using std::execution::receiver;
-using std::execution::scheduler;
-using std::execution::sender;
-
-using std::execution::connect;
-using std::execution::schedule;
-using std::execution::set_error;
-using std::execution::set_stopped;
-using std::execution::set_value;
-using std::execution::start;
-
-using std::execution::get_completion_scheduler;
-using std::execution::get_env;
-using std::execution::get_scheduler;
-using std::execution::get_stop_token;
-
-using std::execution::receiver_t;
-using std::execution::sender_t;
-
-template <typename... Sigs>
-using completion_signatures = std::execution::completion_signatures<Sigs...>;
-
-using std::execution::set_error_t;
-using std::execution::set_stopped_t;
-using std::execution::set_value_t;
-
 #elif defined(LOOM_EXECUTION_BACKEND_STDEXEC)
-
-// Forward stdexec types
 namespace impl = stdexec;
-
-template <typename T>
-concept sender = stdexec::sender<T>;
-
-template <typename T>
-concept receiver = stdexec::receiver<T>;
-
-template <typename T>
-concept scheduler = stdexec::scheduler<T>;
-
-template <typename T>
-concept operation_state = stdexec::operation_state<T>;
-
-using stdexec::connect;
-using stdexec::schedule;
-using stdexec::set_error;
-using stdexec::set_stopped;
-using stdexec::set_value;
-using stdexec::start;
-
-using stdexec::get_completion_scheduler;
-using stdexec::get_env;
-using stdexec::get_scheduler;
-using stdexec::get_stop_token;
-
-using sender_t = stdexec::sender_t;
-using receiver_t = stdexec::receiver_t;
-
-template <typename... Sigs>
-using completion_signatures = stdexec::completion_signatures<Sigs...>;
-
-using set_value_t = stdexec::set_value_t;
-using set_error_t = stdexec::set_error_t;
-using set_stopped_t = stdexec::set_stopped_t;
-
-// Algorithms
-using stdexec::bulk;
-using stdexec::continues_on;
-using stdexec::just;
-using stdexec::just_error;
-using stdexec::just_stopped;
-using stdexec::let_error;
-using stdexec::let_stopped;
-using stdexec::let_value;
-using stdexec::split;
-using stdexec::starts_on;
-using stdexec::sync_wait;
-using stdexec::then;
-using stdexec::upon_error;
-using stdexec::upon_stopped;
-using stdexec::when_all;
-
 #elif defined(LOOM_EXECUTION_BACKEND_BEMAN)
-
-// Forward beman::execution types
 namespace impl = beman::execution;
+#endif
 
-template <typename T>
-concept sender = beman::execution::sender<T>;
+#if !defined(LOOM_EXECUTION_BACKEND_NONE)
 
-template <typename T>
-concept receiver = beman::execution::receiver<T>;
+// The pinned stdexec predates the C++26 concept-tag renames (P4154).
+#    if defined(LOOM_EXECUTION_BACKEND_STDEXEC)
+using sender_tag = impl::sender_t;
+using receiver_tag = impl::receiver_t;
+using scheduler_tag = impl::scheduler_t;
+using operation_state_tag = impl::operation_state_t;
+#    else
+using impl::operation_state_tag;
+using impl::receiver_tag;
+using impl::scheduler_tag;
+using impl::sender_tag;
+#    endif
 
-template <typename T>
-concept scheduler = beman::execution::scheduler<T>;
+// Preserve the original loom aliases while using standard tag names internally.
+using sender_t = sender_tag;
+using receiver_t = receiver_tag;
 
-template <typename T>
-concept operation_state = beman::execution::operation_state<T>;
+// Keep the public surface identical across P2300 implementations.
+using impl::bulk;
+using impl::completion_signatures;
+using impl::connect;
+using impl::continues_on;
+using impl::forward_progress_guarantee;
+using impl::get_completion_scheduler;
+using impl::get_env;
+using impl::get_forward_progress_guarantee;
+using impl::get_scheduler;
+using impl::get_stop_token;
+using impl::just;
+using impl::just_error;
+using impl::just_stopped;
+using impl::let_error;
+using impl::let_stopped;
+using impl::let_value;
+using impl::operation_state;
+using impl::receiver;
+using impl::schedule;
+using impl::scheduler;
+using impl::sender;
+using impl::set_error;
+using impl::set_error_t;
+using impl::set_stopped;
+using impl::set_stopped_t;
+using impl::set_value;
+using impl::set_value_t;
+using impl::start;
+using impl::starts_on;
+using impl::then;
+using impl::upon_error;
+using impl::upon_stopped;
+using impl::when_all;
 
-using beman::execution::connect;
-using beman::execution::schedule;
-using beman::execution::set_error;
-using beman::execution::set_stopped;
-using beman::execution::set_value;
-using beman::execution::start;
-
-using beman::execution::get_completion_scheduler;
-using beman::execution::get_env;
-using beman::execution::get_scheduler;
-using beman::execution::get_stop_token;
-
-using sender_t = beman::execution::sender_t;
-using receiver_t = beman::execution::receiver_t;
-
-template <typename... Sigs>
-using completion_signatures = beman::execution::completion_signatures<Sigs...>;
-
-using set_value_t = beman::execution::set_value_t;
-using set_error_t = beman::execution::set_error_t;
-using set_stopped_t = beman::execution::set_stopped_t;
-
-// Algorithms
-using beman::execution::bulk;
-using beman::execution::continues_on;
-using beman::execution::just;
-using beman::execution::let_error;
-using beman::execution::let_stopped;
-using beman::execution::let_value;
-using beman::execution::starts_on;
-using beman::execution::sync_wait;
-using beman::execution::then;
-using beman::execution::when_all;
+#    if defined(LOOM_EXECUTION_BACKEND_STD)
+using std::this_thread::sync_wait;
+#    else
+using impl::sync_wait;
+#    endif
 
 #else
 

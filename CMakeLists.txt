@@ -52,6 +52,18 @@ option(LOOM_LIBFABRIC_STATIC "Link libfabric statically" OFF)
 option(LOOM_USE_STDEXEC "Enable stdexec integration" OFF)
 option(LOOM_USE_ASIO "Enable Asio integration" OFF)
 option(LOOM_USE_BEMAN_EXECUTION "Enable beman::execution integration" OFF)
+option(LOOM_USE_STD_EXECUTION "Enable C++26 std::execution integration" OFF)
+
+set(LOOM_EXECUTION_BACKENDS "")
+foreach(backend STDEXEC BEMAN_EXECUTION STD_EXECUTION)
+    if(LOOM_USE_${backend})
+        list(APPEND LOOM_EXECUTION_BACKENDS ${backend})
+    endif()
+endforeach()
+list(LENGTH LOOM_EXECUTION_BACKENDS LOOM_EXECUTION_BACKEND_COUNT)
+if(LOOM_EXECUTION_BACKEND_COUNT GREATER 1)
+    message(FATAL_ERROR "Select only one execution backend per build")
+endif()
 
 # FetchContent options (for when dependencies aren't found)
 option(LOOM_FETCHCONTENT_STDEXEC "Allow FetchContent for stdexec if not found" OFF)
@@ -215,7 +227,10 @@ set(LOOM_STDEXEC_TARGET "")
 if(LOOM_USE_STDEXEC)
     find_package(stdexec QUIET)
 
-    if(stdexec_FOUND)
+    if(TARGET STDEXEC::stdexec)
+        set(LOOM_HAS_STDEXEC ON)
+        set(LOOM_STDEXEC_TARGET STDEXEC::stdexec)
+    elseif(TARGET stdexec::stdexec)
         message(STATUS "Found stdexec via find_package")
         set(LOOM_HAS_STDEXEC ON)
         set(LOOM_STDEXEC_TARGET stdexec::stdexec)
@@ -226,8 +241,7 @@ if(LOOM_USE_STDEXEC)
         FetchContent_Declare(
             stdexec
             GIT_REPOSITORY https://github.com/NVIDIA/stdexec.git
-            GIT_TAG        250f35737790392d666fd157e0af9be16d0c789f
-            GIT_SHALLOW    TRUE
+            GIT_TAG        a1c78ecfc2cdc38d5f435c688036955d1e18117d
         )
 
         FetchContent_MakeAvailable(stdexec)
@@ -245,7 +259,7 @@ if(LOOM_USE_STDEXEC)
             endif()
         endif()
     else()
-        message(STATUS "stdexec not found and FetchContent disabled")
+        message(FATAL_ERROR "stdexec requested but not found; install it or enable LOOM_FETCHCONTENT_STDEXEC")
     endif()
 endif()
 
@@ -313,9 +327,9 @@ endif()
 set(LOOM_HAS_BEMAN_EXECUTION OFF)
 
 if(LOOM_USE_BEMAN_EXECUTION)
-    find_package(beman_execution QUIET)
+    find_package(beman.execution CONFIG QUIET)
 
-    if(beman_execution_FOUND)
+    if(TARGET beman::execution)
         message(STATUS "Found beman::execution via find_package")
         set(LOOM_HAS_BEMAN_EXECUTION ON)
     elseif(LOOM_FETCHCONTENT_BEMAN_EXECUTION)
@@ -324,15 +338,15 @@ if(LOOM_USE_BEMAN_EXECUTION)
 
         FetchContent_Declare(
             beman_execution
-            GIT_REPOSITORY https://github.com/beman-project/execution26.git
-            GIT_TAG        6a0bc94ec2497ad04289f24d0a57501d447afa8b
-            GIT_SHALLOW    TRUE
+            GIT_REPOSITORY https://github.com/bemanproject/execution.git
+            GIT_TAG        8e358c01f4f4435e06b0691de433f4b2a07367be
+            SYSTEM
         )
 
         FetchContent_MakeAvailable(beman_execution)
         set(LOOM_HAS_BEMAN_EXECUTION ON)
     else()
-        message(STATUS "beman::execution not found and FetchContent disabled")
+        message(FATAL_ERROR "Beman execution requested but not found; install it or enable LOOM_FETCHCONTENT_BEMAN_EXECUTION")
     endif()
 endif()
 
@@ -504,44 +518,38 @@ if(BUILD_SHARED_LIBS)
 endif()
 
 # =============================================================================
-# Optional library: loom::execution (stdexec integration)
+# Optional library: loom::execution (P2300 integration)
 # =============================================================================
 
-if(LOOM_HAS_STDEXEC)
-    add_library(loom_execution INTERFACE)
-    add_library(loom::execution ALIAS loom_execution)
-
-    target_link_libraries(loom_execution
-        INTERFACE
-            loom::loom
-            ${LOOM_STDEXEC_TARGET}
-    )
-
-    target_compile_definitions(loom_execution
-        INTERFACE
-            LOOM_HAS_STDEXEC=1
-    )
-
-    target_compile_features(loom_execution INTERFACE cxx_std_26)
+if(LOOM_USE_STD_EXECUTION)
+    include(CheckCXXSourceCompiles)
+    check_cxx_source_compiles("        #include <version>
+        #if !defined(__cpp_lib_senders) || __cpp_lib_senders < 202406L
+        #error Missing C++26 sender/receiver support
+        #endif
+        #include <execution>
+        int main() { std::this_thread::sync_wait(std::execution::just()); }
+    " LOOM_HAS_STD_EXECUTION)
+    if(NOT LOOM_HAS_STD_EXECUTION)
+        message(FATAL_ERROR "The selected standard library does not provide C++26 std::execution")
+    endif()
 endif()
 
-# Also support beman::execution as an alternative
-if(LOOM_HAS_BEMAN_EXECUTION AND NOT TARGET loom::execution)
+if(LOOM_EXECUTION_BACKEND_COUNT EQUAL 1)
     add_library(loom_execution INTERFACE)
     add_library(loom::execution ALIAS loom_execution)
-
-    target_link_libraries(loom_execution
-        INTERFACE
-            loom::loom
-            beman::execution
-    )
-
-    target_compile_definitions(loom_execution
-        INTERFACE
-            LOOM_HAS_BEMAN_EXECUTION=1
-    )
-
+    set_target_properties(loom_execution PROPERTIES EXPORT_NAME execution)
+    target_link_libraries(loom_execution INTERFACE loom::loom)
     target_compile_features(loom_execution INTERFACE cxx_std_26)
+    if(LOOM_HAS_STDEXEC)
+        target_link_libraries(loom_execution INTERFACE ${LOOM_STDEXEC_TARGET})
+        target_compile_definitions(loom_execution INTERFACE LOOM_EXECUTION_USE_STDEXEC=1)
+    elseif(LOOM_HAS_BEMAN_EXECUTION)
+        target_link_libraries(loom_execution INTERFACE beman::execution)
+        target_compile_definitions(loom_execution INTERFACE LOOM_EXECUTION_USE_BEMAN=1)
+    else()
+        target_compile_definitions(loom_execution INTERFACE LOOM_EXECUTION_USE_STD=1)
+    endif()
 endif()
 
 # =============================================================================

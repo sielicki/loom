@@ -73,11 +73,16 @@ namespace loom::execution {
  */
 class read_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures =
         loom::execution::completion_signatures<set_value_t(std::size_t),
                                                set_error_t(std::error_code),
                                                set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     read_sender(endpoint* ep,
                 std::span<std::byte> buffer,
@@ -115,9 +120,14 @@ private:
  */
 class write_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures = loom::execution::
         completion_signatures<set_value_t(), set_error_t(std::error_code), set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     write_sender(endpoint* ep,
                  std::span<const std::byte> buffer,
@@ -186,7 +196,7 @@ public:
                                     nullptr,
                                     result_mr_,
                                     remote,
-                                    this->context());
+                                    this->as_fi_context());
 
         if (!result) {
             this->complete_error(result.error());
@@ -222,9 +232,14 @@ template <typename T>
     requires atomic::atomic_type<T>
 class fetch_add_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures = loom::execution::
         completion_signatures<set_value_t(T), set_error_t(std::error_code), set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     fetch_add_sender(endpoint* ep,
                      rma_addr remote_addr,
@@ -296,7 +311,7 @@ public:
                                            nullptr,
                                            result_mr_,
                                            remote,
-                                           this->context());
+                                           this->as_fi_context());
 
         if (!result) {
             this->complete_error(result.error());
@@ -334,9 +349,14 @@ template <typename T>
     requires atomic::atomic_type<T>
 class compare_swap_sender {
 public:
-    using sender_concept = sender_t;
+    using sender_concept = sender_tag;
     using completion_signatures = loom::execution::
         completion_signatures<set_value_t(T), set_error_t(std::error_code), set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
 
     compare_swap_sender(endpoint* ep,
                         rma_addr remote_addr,
