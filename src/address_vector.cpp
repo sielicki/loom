@@ -110,8 +110,8 @@ auto address_vector::create(const domain& dom,
     }
 
     if (resource) {
-        auto impl =
-            detail::make_pmr_unique<detail::address_vector_impl>(resource, av, static_cast<av_type>(av_attr.type), format);
+        auto impl = detail::make_pmr_unique<detail::address_vector_impl>(
+            resource, av, static_cast<av_type>(av_attr.type), format);
         return address_vector{std::move(impl)};
     }
 
@@ -325,8 +325,7 @@ auto address_vector::address_to_string(av_handle handle) const -> result<std::st
     std::string text(256, '\0');
     for (;;) {
         auto length = text.size();
-        const auto* converted =
-            ::fi_av_straddr(impl_->av, addr_buf.data(), text.data(), &length);
+        const auto* converted = ::fi_av_straddr(impl_->av, addr_buf.data(), text.data(), &length);
         if (length > text.size()) {
             text.resize(length);
             continue;

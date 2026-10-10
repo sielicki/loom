@@ -3,8 +3,8 @@
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <vector>
 
@@ -29,11 +29,12 @@ struct provider {
     fi_ops ops{
         .size = sizeof(fi_ops),
         .close = [](fid*) { return 0; },
-        .bind = [](fid* ep, fid* av, std::uint64_t) {
-            auto& self = *static_cast<provider*>(ep->context);
-            self.bound_address_vector = av;
-            return self.bind_result;
-        },
+        .bind =
+            [](fid* ep, fid* av, std::uint64_t) {
+                auto& self = *static_cast<provider*>(ep->context);
+                self.bound_address_vector = av;
+                return self.bind_result;
+            },
     };
     fi_ops_cm cm{
         .size = sizeof(fi_ops_cm),
@@ -61,21 +62,23 @@ struct provider {
                 }
                 return static_cast<int>(count - (self.fail_middle && count > 1 ? 1 : 0));
             },
-        .lookup = [](fid_av* av, fi_addr_t, void* address, std::size_t* length) {
-            auto& self = *static_cast<provider*>(av->fid.context);
-            ++self.lookup_calls;
-            const auto capacity = *length;
-            std::memcpy(address, self.stored_address.data(),
-                        std::min(capacity, self.stored_address.size()));
-            *length = self.stored_address.size();
-            return self.report_small_buffer && capacity < *length ? -FI_ETOOSMALL : 0;
-        },
-        .straddr = [](fid_av* av, const void* address, char* output,
-                      std::size_t* length) -> const char* {
+        .lookup =
+            [](fid_av* av, fi_addr_t, void* address, std::size_t* length) {
+                auto& self = *static_cast<provider*>(av->fid.context);
+                ++self.lookup_calls;
+                const auto capacity = *length;
+                std::memcpy(address,
+                            self.stored_address.data(),
+                            std::min(capacity, self.stored_address.size()));
+                *length = self.stored_address.size();
+                return self.report_small_buffer && capacity < *length ? -FI_ETOOSMALL : 0;
+            },
+        .straddr =
+            [](fid_av* av, const void* address, char* output, std::size_t* length) -> const char* {
             auto& self = *static_cast<provider*>(av->fid.context);
             ++self.straddr_calls;
-            REQUIRE(std::memcmp(address, self.stored_address.data(),
-                                self.stored_address.size()) == 0);
+            REQUIRE(std::memcmp(address, self.stored_address.data(), self.stored_address.size()) ==
+                    0);
             const auto count = std::min(*length - 1, self.printable_address.size());
             std::memcpy(output, self.printable_address.data(), count);
             output[count] = '\0';
@@ -87,14 +90,15 @@ struct provider {
     fid_av av_handle{.fid = {.context = this, .ops = &ops}, .ops = &av_ops};
     fi_ops_domain domain_ops{
         .size = sizeof(fi_ops_domain),
-        .av_open = [](fid_domain* dom, fi_av_attr* attr, fid_av** av, void*) {
-            auto& self = *static_cast<provider*>(dom->fid.context);
-            ++self.open_calls;
-            self.open_flags = attr->flags;
-            attr->type = FI_AV_TABLE;
-            *av = &self.av_handle;
-            return 0;
-        },
+        .av_open =
+            [](fid_domain* dom, fi_av_attr* attr, fid_av** av, void*) {
+                auto& self = *static_cast<provider*>(dom->fid.context);
+                ++self.open_calls;
+                self.open_flags = attr->flags;
+                attr->type = FI_AV_TABLE;
+                *av = &self.av_handle;
+                return 0;
+            },
     };
     fid_domain domain_handle{.fid = {.context = this, .ops = &ops}, .ops = &domain_ops};
 
@@ -129,8 +133,12 @@ TEST_CASE("address lookup retries provider-sized buffers", "[address]") {
     expected.sin_addr.s_addr = htonl(0xC0000201U);
     std::memcpy(native.stored_address.data(), &expected, sizeof(expected));
     auto av = native.vector(loom::address_format::inet);
-    SECTION("truncated success") { native.report_small_buffer = false; }
-    SECTION("buffer-size error") { native.report_small_buffer = true; }
+    SECTION("truncated success") {
+        native.report_small_buffer = false;
+    }
+    SECTION("buffer-size error") {
+        native.report_small_buffer = true;
+    }
     REQUIRE(av.lookup(loom::av_handle{100}).value() ==
             loom::address{loom::ipv4_address{0xC0000201U, 4321}});
     REQUIRE(native.lookup_calls == 2);
@@ -140,8 +148,12 @@ TEST_CASE("address formatting resizes and omits the terminator", "[address]") {
     provider native;
     native.stored_address.resize(512, std::byte{0x42});
     auto av = native.vector(loom::address_format::inet);
-    SECTION("short text") { native.printable_address = "192.0.2.1:4321"; }
-    SECTION("long text") { native.printable_address.assign(600, 'x'); }
+    SECTION("short text") {
+        native.printable_address = "192.0.2.1:4321";
+    }
+    SECTION("long text") {
+        native.printable_address.assign(600, 'x');
+    }
     REQUIRE(av.address_to_string(loom::av_handle{100}).value() == native.printable_address);
     REQUIRE(native.lookup_calls == 2);
     REQUIRE(native.straddr_calls == (native.printable_address.size() > 256 ? 2 : 1));
@@ -170,8 +182,12 @@ TEST_CASE("synchronous address vectors reject asynchronous creation", "[address]
     provider native;
     auto dom = native.domain();
     loom::address_vector_attr attr;
-    SECTION("loom flag") { attr.flags = loom::av_flags::async; }
-    SECTION("native flag") { attr.flags = FI_EVENT; }
+    SECTION("loom flag") {
+        attr.flags = loom::av_flags::async;
+    }
+    SECTION("native flag") {
+        attr.flags = FI_EVENT;
+    }
     REQUIRE(loom::address_vector::create(dom, attr).error() == loom::errc::not_supported);
     REQUIRE(native.open_calls == 0);
 }
