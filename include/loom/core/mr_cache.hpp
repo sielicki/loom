@@ -429,16 +429,13 @@ public:
 
         std::unique_lock lock(mutex_);
 
-        auto aligned_base = traits::align_down(uaddr);
-        auto aligned_length = traits::aligned_length(uaddr, length);
-
         auto entry =
-            std::make_unique<detail::mr_cache_entry_base>(aligned_base, aligned_length, access);
+            std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
         entry->host_memory = false;
 
         auto mr_result = memory_region::register_dmabuf(*domain_,
-                                                        std::bit_cast<void*>(aligned_base),
-                                                        aligned_length,
+                                                        std::bit_cast<void*>(uaddr),
+                                                        length,
                                                         access,
                                                         fd,
                                                         offset,
@@ -451,11 +448,11 @@ public:
         entry->mr = std::move(*mr_result);
 
         auto* entry_ptr = entry.get();
-        entries_.emplace(aligned_base, std::move(entry));
+        entries_.emplace(uaddr, std::move(entry));
 
         ++stats_.registrations;
         ++stats_.current_entries;
-        stats_.total_registered_bytes += aligned_length;
+        stats_.total_registered_bytes += length;
 
         return handle_type{this, entry_ptr};
     }
@@ -475,16 +472,13 @@ public:
 
         std::unique_lock lock(mutex_);
 
-        auto aligned_base = traits::align_down(uaddr);
-        auto aligned_length = traits::aligned_length(uaddr, length);
-
         auto entry =
-            std::make_unique<detail::mr_cache_entry_base>(aligned_base, aligned_length, access);
+            std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
         entry->host_memory = false;
 
         auto mr_result = memory_region::register_hmem(*domain_,
-                                                      std::bit_cast<void*>(aligned_base),
-                                                      aligned_length,
+                                                      std::bit_cast<void*>(uaddr),
+                                                      length,
                                                       access,
                                                       device,
                                                       resource_);
@@ -496,11 +490,11 @@ public:
         entry->mr = std::move(*mr_result);
 
         auto* entry_ptr = entry.get();
-        entries_.emplace(aligned_base, std::move(entry));
+        entries_.emplace(uaddr, std::move(entry));
 
         ++stats_.registrations;
         ++stats_.current_entries;
-        stats_.total_registered_bytes += aligned_length;
+        stats_.total_registered_bytes += length;
 
         return handle_type{this, entry_ptr};
     }

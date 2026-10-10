@@ -92,6 +92,27 @@ TEST_CASE("cache finds an earlier overlapping registration", "[mr_cache]") {
     REQUIRE(provider.registrations == 2);
 }
 
+TEST_CASE("device registrations retain their exact range", "[mr_cache]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    auto* address = buffer.data() + 17;
+    SECTION("DMA buffer") {
+        auto handle = cache.lookup_dmabuf(address, 31, mr_access_flags::send, 1, 17);
+        REQUIRE(handle);
+        REQUIRE(handle->mr()->address() == address);
+        REQUIRE(handle->mr()->length() == 31);
+    }
+    SECTION("device allocation") {
+        auto handle = cache.lookup_hmem(address, 31, mr_access_flags::send, hmem_device::cuda(2));
+        REQUIRE(handle);
+        REQUIRE(handle->mr()->address() == address);
+        REQUIRE(handle->mr()->length() == 31);
+    }
+    REQUIRE(cache.stats().total_registered_bytes == 31);
+}
+
 TEST_CASE("clearing a cache preserves live handles", "[mr_cache]") {
     using namespace loom;
     test::mock_domain provider;
