@@ -31,6 +31,19 @@ TEST_CASE("completion honors the handler executor association", "[asio][context]
     REQUIRE(completed);
 }
 
+TEST_CASE("immediate errors defer handler invocation", "[asio][context]") {
+    ::asio::io_context ioc;
+    bool completed{};
+    ::asio::post(ioc, [&] {
+        auto* ctx = loom::asio::make_asio_context(
+            [&](std::error_code, std::size_t) { completed = true; }, ioc.get_executor());
+        ctx->fail(std::make_error_code(std::errc::bad_file_descriptor));
+        REQUIRE_FALSE(completed);
+    });
+    ioc.run();
+    REQUIRE(completed);
+}
+
 namespace {
 template <typename T>
 struct tracking_allocator {

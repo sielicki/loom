@@ -262,8 +262,7 @@ public:
 
         destroy_self();
 
-        ::asio::dispatch(executor,
-                         [handler = std::move(handler), ec]() mutable { handler(ec, 0); });
+        ::asio::post(executor, [handler = std::move(handler), ec]() mutable { handler(ec, 0); });
     }
 
     /**
