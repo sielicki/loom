@@ -670,10 +670,14 @@ This works with multiple implementations:
 
 - [stdexec](https://github.com/NVIDIA/stdexec) (NVIDIA's reference implementation)
 - [beman::execution](https://github.com/bemanproject/execution) (Beman project)
-- `std::execution` (future C++26 standard)
+- `std::execution` (C++26 standard, when supplied by the standard library)
 
-The integration is designed to be generic - code written against loom's execution interface
-will work with any conforming P2300 implementation with minimal changes.
+Senders use standard member customizations. The `loom::execution` namespace
+forwards concepts, completion operations, and algorithms to the selected backend.
+The same concept and runtime completion tests run against stdexec and Beman.
+The standard-library backend requires `__cpp_lib_senders >= 202406L`; the
+installed libstdc++ 16 currently lacks it, so that backend is not runtime-tested.
+All translation units exchanging loom senders must select the same backend.
 
 Fabric senders require application-driven progress. Bind the endpoint to
 the CQ passed to the sender, dedicate that CQ to loom execution operations,
@@ -685,7 +689,6 @@ threading mode that permits concurrent submission and polling.
 
 ```cpp
 #include <loom/execution.hpp>
-#include <stdexec/execution.hpp>  // Or beman/execution/execution.hpp
 
 using namespace loom;
 
@@ -703,24 +706,24 @@ auto main() -> int {
 
     // Compose with P2300 algorithms
     auto pipeline = send_op
-                  | stdexec::then([] { std::println("sent!"); });
+                  | loom::execution::then([] { std::println("sent!"); });
 
     // Parallel operations with when_all
     std::array<std::byte, 4096> buf1{}, buf2{};
-    auto both = stdexec::when_all(
+    auto both = loom::execution::when_all(
         msg_ops.send(buf1, &cq),
         msg_ops.recv(buf2, &cq)
     );
 
     // Chain operations with let_value
     auto send_then_recv = msg_ops.send(buf1, &cq)
-                        | stdexec::let_value([&] {
+                        | loom::execution::let_value([&] {
                               return msg_ops.recv(buf2, &cq);
                           });
 
     // Error handling
     auto with_error = msg_ops.send(buffer, &cq)
-                    | stdexec::upon_error([](std::error_code ec) {
+                    | loom::execution::upon_error([](std::error_code ec) {
                           std::println(stderr, "Error: {}", ec.message());
                           return -1;
                       });
@@ -746,25 +749,27 @@ auto write_op = rma_ops.write(local_buffer, remote_addr, key, &cq);
 
 // Read-modify-write pattern
 auto rmw = rma_ops.read(buffer, addr, key, &cq)
-         | stdexec::then([&] {
+         | loom::execution::then([&](std::size_t bytes) {
                // Modify buffer
                process(buffer);
                return buffer;
            })
-         | stdexec::let_value([&](auto& buf) {
+         | loom::execution::let_value([&](auto& buf) {
                return rma_ops.write(buf, addr, key, &cq);
            });
 
 // Atomic operations
-auto atomic_op = rma_ops.fetch_add<std::uint64_t>(addr, 1, key, &cq)
-               | stdexec::then([](std::uint64_t old_val) {
+auto atomic_op = rma_ops.fetch_add<std::uint64_t>(addr, 1, key, result_mr, &cq)
+               | loom::execution::then([](std::uint64_t old_val) {
                      return old_val + 1;
                  });
 ```
 
 #### Scheduler
 
-loom provides a scheduler type for scheduling work on a completion queue context:
+`loom::scheduler` retains a completion queue, but its schedule sender completes
+inline on the thread calling `start`. It does not create a progress thread or
+move work to the thread polling the CQ.
 
 ```cpp
 #include <loom/execution.hpp>
@@ -773,38 +778,44 @@ loom provides a scheduler type for scheduling work on a completion queue context
 auto cq_ptr = std::make_shared<loom::completion_queue>(std::move(cq));
 loom::scheduler sched{cq_ptr};
 
-// Schedule work on the CQ context
-auto work = stdexec::schedule(sched)
-          | stdexec::then([] { return 42; });
+// Run work inline when started
+auto work = loom::execution::schedule(sched)
+          | loom::execution::then([] { return 42; });
 
-// Use with starts_on for explicit context control
-auto on_cq = stdexec::starts_on(sched, some_sender);
+// starts_on uses the same inline scheduling behavior
+auto on_cq = loom::execution::starts_on(sched, some_sender);
 ```
 
 #### Building with P2300
 
-Enable stdexec integration:
+Select one backend per build and link `loom::execution` in your CMake target:
 
 ```bash
-cmake -B build -DLOOM_USE_STDEXEC=ON
+cmake -S . -B build-stdexec -DLOOM_USE_STDEXEC=ON
+cmake -S . -B build-beman -DLOOM_USE_BEMAN_EXECUTION=ON
+cmake -S . -B build-std -DLOOM_USE_STD_EXECUTION=ON
 ```
 
-Or with beman::execution:
+Install the selected dependency first, or enable `LOOM_FETCHCONTENT_STDEXEC`
+or `LOOM_FETCHCONTENT_BEMAN_EXECUTION` to use the pinned upstream source.
+An unavailable backend or conflicting choices produce a configuration error.
+Standard-library execution needs no external package.
+
+With Nix:
 
 ```bash
-cmake -B build -DLOOM_USE_BEMAN_EXECUTION=ON
-```
-
-With Nix (recommended):
-
-```bash
-nix build .#loom-stdexec
-nix develop .#stdexec  # Development shell with stdexec
+nix build .#loom-stdexec .#loom-beman
+nix develop .#stdexec
+nix develop .#beman
 ```
 
 #### Backend Detection
 
-The P2300 backend is automatically detected at compile time:
+The CMake target propagates its backend selection to consumers. Without that
+target, define exactly one of `LOOM_EXECUTION_USE_STD`,
+`LOOM_EXECUTION_USE_STDEXEC`, or `LOOM_EXECUTION_USE_BEMAN` before including
+loom headers. With no explicit choice, detection prefers the standard library,
+then stdexec, then Beman. Explicit choices never fall back to another backend.
 
 ```cpp
 #include <loom/execution.hpp>

@@ -83,6 +83,7 @@
 
           # Use our custom stdexec derivation (header-only)
           stdexec = pkgs.callPackage ./nix/pkgs/stdexec { };
+          beman-execution = pkgs.callPackage ./nix/pkgs/beman-execution { };
 
           # Asio (standalone, header-only)
           asio = pkgs.asio;
@@ -269,6 +270,11 @@
                 cmakeFlags = old.cmakeFlags ++ [ "-DLOOM_USE_STDEXEC=ON" ];
               });
 
+              loom-beman = loom.overrideAttrs (old: {
+                buildInputs = old.buildInputs ++ [ beman-execution ];
+                cmakeFlags = old.cmakeFlags ++ [ "-DLOOM_USE_BEMAN_EXECUTION=ON" ];
+              });
+
               # Build with Asio integration
               loom-asio =
                 if isDarwin
@@ -303,6 +309,9 @@
           devShells =
             {
               stdexec = self'.devShells.default;
+              beman = self'.devShells.default.overrideAttrs (old: {
+                buildInputs = old.buildInputs ++ [ beman-execution ];
+              });
               default =
                 let
                   stdenv =
@@ -599,6 +608,7 @@
               loom-build-asio = self'.packages.loom-asio;
 
               loom-build-stdexec = self'.packages.loom-stdexec;
+              loom-build-beman = self'.packages.loom-beman;
 
               # Formatting check (treefmt)
               formatting = config.treefmt.build.check self;
