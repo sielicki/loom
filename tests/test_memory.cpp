@@ -30,6 +30,13 @@ TEST_CASE("registration translates access permissions", "[memory]") {
             REQUIRE(provider.access == expected);
         }
         {
+            auto region = memory_region::register_dmabuf(
+                provider.dom, buffer.data(), buffer.size(), access, 7, 0);
+            REQUIRE(region);
+            REQUIRE(provider.access == expected);
+            REQUIRE(provider.flags == FI_MR_DMABUF);
+        }
+        {
             auto region = memory_region::register_hmem(
                 provider.dom, buffer.data(), buffer.size(), access, hmem_device::cuda(0));
             REQUIRE(region);

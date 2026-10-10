@@ -177,13 +177,13 @@ inline auto memory_region::register_dmabuf(domain& dom,
     fi_mr_attr mr_attr{};
     mr_attr.dmabuf = &dmabuf;
     mr_attr.iov_count = 1;
-    mr_attr.access = detail::to_fi_mr_access(access) | FI_MR_DMABUF;
+    mr_attr.access = detail::to_fi_mr_access(access);
     mr_attr.offset = offset;
     mr_attr.requested_key = 0;
     mr_attr.context = nullptr;
 
     fid_mr* mr = nullptr;
-    auto ret = fi_mr_regattr(fid_dom, &mr_attr, 0, &mr);
+    auto ret = fi_mr_regattr(fid_dom, &mr_attr, FI_MR_DMABUF, &mr);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<memory_region>(-ret);
