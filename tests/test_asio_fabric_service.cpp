@@ -8,7 +8,10 @@
 #include <loom/detail/impl/completion_queue_impl.hpp>
 #include <loom/loom.hpp>
 
+#include <array>
+#include <barrier>
 #include <chrono>
+#include <exception>
 #include <thread>
 #include <vector>
 
@@ -79,6 +82,32 @@ TEST_CASE("fabric_service use returns same instance", "[asio][fabric_service]") 
     auto& service2 = loom::asio::fabric_service::use(ioc);
 
     REQUIRE(&service1 == &service2);
+}
+
+TEST_CASE("fabric_service creation is safe across threads", "[asio][fabric_service]") {
+    for (int iteration = 0; iteration < 20; ++iteration) {
+        ::asio::io_context ioc;
+        std::array<loom::asio::fabric_service*, 8> services{};
+        std::array<std::exception_ptr, 8> errors{};
+        std::barrier ready{8};
+        {
+            std::array<std::jthread, 8> threads;
+            for (std::size_t i = 0; i < threads.size(); ++i) {
+                threads[i] = std::jthread{[&, i] {
+                    ready.arrive_and_wait();
+                    try {
+                        services[i] = &loom::asio::fabric_service::use(ioc);
+                    } catch (...) {
+                        errors[i] = std::current_exception();
+                    }
+                }};
+            }
+        }
+        for (std::size_t i = 0; i < services.size(); ++i) {
+            REQUIRE_FALSE(errors[i]);
+            REQUIRE(services[i] == services.front());
+        }
+    }
 }
 
 TEST_CASE("fabric_service start and stop", "[asio][fabric_service]") {

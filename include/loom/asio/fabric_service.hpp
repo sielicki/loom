@@ -295,9 +295,6 @@ inline auto fabric_service::process_completions(completion_queue& cq, std::size_
 }
 
 inline auto fabric_service::use(::asio::io_context& ioc) -> fabric_service& {
-    if (!::asio::has_service<fabric_service>(ioc)) {
-        ::asio::make_service<fabric_service>(ioc);
-    }
     return ::asio::use_service<fabric_service>(ioc);
 }
 
