@@ -8,6 +8,28 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+namespace {
+struct tracked_callable {
+    int* live;
+    explicit tracked_callable(int& count) : live(&count) { ++*live; }
+    tracked_callable(tracked_callable&& other) noexcept : live(other.live) { ++*live; }
+    ~tracked_callable() { --*live; }
+    void operator()() const {}
+};
+}  // namespace
+
+TEST_CASE("moving callbacks releases every stored object", "[submission_context]") {
+    int live{};
+    {
+        loom::detail::unique_function<void()> first{tracked_callable{live}};
+        auto second = std::move(first);
+        loom::detail::unique_function<void()> third;
+        third = std::move(second);
+        third();
+    }
+    REQUIRE(live == 0);
+}
+
 TEST_CASE("callback_receiver satisfies full_receiver", "[submission_context]") {
     static_assert(loom::full_receiver<loom::callback_receiver>);
 }
