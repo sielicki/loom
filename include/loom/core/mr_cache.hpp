@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <memory_resource>
@@ -67,7 +68,8 @@ struct mr_cache_entry_base {
      * @return True if the range is fully contained.
      */
     [[nodiscard]] auto contains(std::uintptr_t addr, std::size_t len) const noexcept -> bool {
-        return addr >= base_addr && (addr + len) <= (base_addr + length);
+        return addr >= base_addr && addr - base_addr <= length &&
+               len <= length - (addr - base_addr);
     }
 
     /**
@@ -77,7 +79,8 @@ struct mr_cache_entry_base {
      * @return True if the ranges overlap.
      */
     [[nodiscard]] auto overlaps(std::uintptr_t addr, std::size_t len) const noexcept -> bool {
-        return addr < (base_addr + length) && (addr + len) > base_addr;
+        return length != 0 && len != 0 &&
+               (addr < base_addr ? base_addr - addr < len : addr - base_addr < length);
     }
 };
 
@@ -324,6 +327,7 @@ struct mr_cache_stats {
  *
  * Provides caching of memory region registrations to avoid repeated
  * registration overhead. Uses page-aligned regions for efficient sharing.
+ * The domain must outlive this cache, which must outlive every returned handle.
  *
  * @tparam Provider The provider tag type.
  */
@@ -365,6 +369,12 @@ public:
     [[nodiscard]] auto lookup(void* addr, std::size_t length, mr_access access)
         -> result<handle_type> {
         auto uaddr = std::bit_cast<std::uintptr_t>(addr);
+        constexpr auto last_aligned =
+            traits::align_down(std::numeric_limits<std::uintptr_t>::max());
+        if (addr == nullptr || length == 0 || uaddr > last_aligned ||
+            length > last_aligned - uaddr) {
+            return make_error_result<handle_type>(errc::invalid_argument);
+        }
 
         std::unique_lock lock(mutex_);
 
@@ -426,20 +436,17 @@ public:
                                      int fd,
                                      std::uint64_t offset = 0) -> result<handle_type> {
         auto uaddr = std::bit_cast<std::uintptr_t>(addr);
+        if (length == 0 || length > std::numeric_limits<std::uintptr_t>::max() - uaddr) {
+            return make_error_result<handle_type>(errc::invalid_argument);
+        }
 
         std::unique_lock lock(mutex_);
 
-        auto entry =
-            std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
+        auto entry = std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
         entry->host_memory = false;
 
-        auto mr_result = memory_region::register_dmabuf(*domain_,
-                                                        std::bit_cast<void*>(uaddr),
-                                                        length,
-                                                        access,
-                                                        fd,
-                                                        offset,
-                                                        resource_);
+        auto mr_result = memory_region::register_dmabuf(
+            *domain_, std::bit_cast<void*>(uaddr), length, access, fd, offset, resource_);
 
         if (!mr_result) {
             return std::unexpected(mr_result.error());
@@ -469,19 +476,17 @@ public:
     lookup_hmem(void* addr, std::size_t length, mr_access access, hmem_device device)
         -> result<handle_type> {
         auto uaddr = std::bit_cast<std::uintptr_t>(addr);
+        if (length == 0 || length > std::numeric_limits<std::uintptr_t>::max() - uaddr) {
+            return make_error_result<handle_type>(errc::invalid_argument);
+        }
 
         std::unique_lock lock(mutex_);
 
-        auto entry =
-            std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
+        auto entry = std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
         entry->host_memory = false;
 
-        auto mr_result = memory_region::register_hmem(*domain_,
-                                                      std::bit_cast<void*>(uaddr),
-                                                      length,
-                                                      access,
-                                                      device,
-                                                      resource_);
+        auto mr_result = memory_region::register_hmem(
+            *domain_, std::bit_cast<void*>(uaddr), length, access, device, resource_);
 
         if (!mr_result) {
             return std::unexpected(mr_result.error());

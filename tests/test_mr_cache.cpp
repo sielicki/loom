@@ -7,6 +7,33 @@
 #include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
 
+TEST_CASE("cache rejects wrapping ranges before lookup or registration", "[mr_cache]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    auto existing = cache.lookup(buffer, mr_access_flags::send);
+    REQUIRE(existing);
+    const auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    REQUIRE_FALSE(cache.lookup(buffer.data(), maximum, mr_access_flags::send));
+    auto* last_byte = std::bit_cast<void*>(maximum);
+    REQUIRE_FALSE(cache.lookup(last_byte, 1, mr_access_flags::send));
+    REQUIRE_FALSE(cache.lookup_hmem(last_byte, 2, mr_access_flags::send, hmem_device::cuda(0)));
+    REQUIRE_FALSE(cache.lookup_dmabuf(last_byte, 2, mr_access_flags::send, 7, 0));
+    REQUIRE(provider.registrations == 1);
+    REQUIRE(cache.stats().hits == 0);
+    REQUIRE_FALSE(cache.lookup(buffer.data(), 0, mr_access_flags::send));
+}
+
+TEST_CASE("cache range comparisons do not wrap", "[mr_cache]") {
+    const auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    loom::detail::mr_cache_entry_base entry{4096, 4096, loom::mr_access_flags::send};
+    REQUIRE_FALSE(entry.contains(4097, maximum));
+    REQUIRE_FALSE(entry.overlaps(4097, 0));
+    REQUIRE(entry.overlaps(4095, maximum));
+    REQUIRE_FALSE(entry.overlaps(maximum - 2, 1));
+}
+
 TEST_CASE("concurrent cache hits retain exact statistics", "[mr_cache]") {
     using namespace loom;
     test::mock_domain provider;
