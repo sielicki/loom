@@ -36,6 +36,10 @@ auto inject(endpoint& ep,
 
 auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    std::size_t ignored_count{};
+    if (!count_out) {
+        count_out = &ignored_count;
+    }
 
     auto ret = fi_atomicvalid(fid_ep, detail::to_fi_datatype(dt), detail::to_fi_op(op), count_out);
 
@@ -44,6 +48,10 @@ auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -
 
 auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    std::size_t ignored_count{};
+    if (!count_out) {
+        count_out = &ignored_count;
+    }
 
     auto ret =
         fi_fetch_atomicvalid(fid_ep, detail::to_fi_datatype(dt), detail::to_fi_op(op), count_out);
@@ -53,6 +61,10 @@ auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_
 
 auto is_compare_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    std::size_t ignored_count{};
+    if (!count_out) {
+        count_out = &ignored_count;
+    }
 
     auto ret =
         fi_compare_atomicvalid(fid_ep, detail::to_fi_datatype(dt), detail::to_fi_op(op), count_out);

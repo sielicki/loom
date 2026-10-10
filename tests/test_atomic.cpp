@@ -3,6 +3,7 @@
 #include <loom/detail/impl/memory_impl.hpp>
 #include <loom/loom.hpp>
 
+#include <array>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -19,6 +20,22 @@ struct atomic_provider {
     void* comparison_descriptor{};
     void* result_descriptor{};
     void* context{};
+    bool query_supported{true};
+    bool received_count{};
+
+    static auto query(fid_ep* ep, fi_datatype, fi_op, std::size_t* count) -> int {
+        auto& self = *static_cast<atomic_provider*>(ep->fid.context);
+        self.received_count = count != nullptr;
+        if (!count) {
+            return -FI_EINVAL;
+        }
+        if (!self.query_supported) {
+            return -FI_EOPNOTSUPP;
+        }
+        *count = 16;
+        return 0;
+    }
+
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_atomic atomics{
         .size = sizeof(fi_ops_atomic),
@@ -55,6 +72,9 @@ struct atomic_provider {
             }
             return 0;
         },
+        .writevalid = query,
+        .readwritevalid = query,
+        .compwritevalid = query,
     };
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .atomic = &atomics};
 
@@ -64,6 +84,26 @@ struct atomic_provider {
     }
 };
 }  // namespace
+
+TEST_CASE("atomic capability queries allow an omitted count output", "[atomic]") {
+    const auto kind = GENERATE(0, 1, 2);
+    const auto output = GENERATE(false, true);
+    const auto supported = GENERATE(false, true);
+    CAPTURE(kind, output, supported);
+    atomic_provider native;
+    native.query_supported = supported;
+    auto ep = native.endpoint();
+    std::size_t count{};
+    constexpr std::array queries{
+        &atomic::is_valid, &atomic::is_fetch_valid, &atomic::is_compare_valid};
+    const auto op = kind == 2 ? atomic::operation::compare_swap : atomic::operation::sum;
+    REQUIRE(queries[kind](ep, op, atomic::datatype::uint64, output ? &count : nullptr) ==
+            supported);
+    REQUIRE(native.received_count);
+    if (output && supported) {
+        REQUIRE(count == 16);
+    }
+}
 
 TEST_CASE("atomic compare and swap preserves operand roles", "[atomic]") {
     auto expected = GENERATE(std::uint64_t{42}, std::uint64_t{84});
