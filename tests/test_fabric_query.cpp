@@ -1,7 +1,47 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/fabric_query.hpp>
 
+#include <string>
+
 #include <catch2/catch_test_macros.hpp>
+
+TEST_CASE("fabric queries honor name filters", "[fabric_query][integration]") {
+    loom::fabric_hints hints;
+    SECTION("provider") {
+        hints.provider_name = "loom_nonexistent_provider";
+    }
+    SECTION("fabric") {
+        hints.fabric_name = "loom_nonexistent_fabric";
+    }
+    SECTION("domain") {
+        hints.domain_name = "loom_nonexistent_domain";
+    }
+    auto result = loom::query_fabric(hints);
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == loom::errc::no_data);
+}
+
+TEST_CASE("fabric queries retain bounded names and progress requirements",
+          "[fabric_query][integration]") {
+    loom::fabric_hints hints;
+    auto available = loom::query_fabric(hints);
+    if (!available) {
+        SKIP("No providers available");
+    }
+    const auto fabric_attr = available->get_fabric_attr();
+    const auto domain_attr = available->get_domain_attr();
+    REQUIRE(fabric_attr);
+    REQUIRE(domain_attr);
+    const std::string provider = std::string{fabric_attr->provider_name} + "unused_suffix";
+    hints.provider_name = std::string_view{provider}.substr(0, fabric_attr->provider_name.size());
+    hints.control_progress = domain_attr->control_progress;
+    hints.data_progress = domain_attr->data_progress;
+    auto result = loom::query_fabric(hints);
+    REQUIRE(result);
+    REQUIRE(result->get_fabric_attr()->provider_name == fabric_attr->provider_name);
+    REQUIRE(result->get_domain_attr()->control_progress == *hints.control_progress);
+    REQUIRE(result->get_domain_attr()->data_progress == *hints.data_progress);
+}
 
 TEST_CASE("fabric_capability concept", "[fabric_query]") {
     static_assert(loom::fabric_capability<loom::rdm_tagged_messaging>);

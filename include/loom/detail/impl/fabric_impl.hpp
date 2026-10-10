@@ -5,6 +5,8 @@
 #include <rdma/fi_errno.h>
 
 #include <cstdint>
+#include <cstring>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -253,41 +255,51 @@ inline auto fabric::impl_internal_ptr() const noexcept -> void* {
 
 inline auto query_fabric(const fabric_hints& hints, memory_resource* resource)
     -> result<fabric_info> {
-    ::fi_info* info_hints = ::fi_allocinfo();
-    if (!info_hints) {
+    const std::unique_ptr<::fi_info, decltype(&::fi_freeinfo)> info_hints{::fi_allocinfo(),
+                                                                          &::fi_freeinfo};
+    if (!info_hints || !info_hints->ep_attr || !info_hints->domain_attr ||
+        !info_hints->fabric_attr) {
         return make_error_result<fabric_info>(errc::no_memory);
     }
 
-    if (hints.capabilities) {
-        info_hints->caps = detail::to_fi_caps(hints.capabilities);
-    }
-    if (hints.mode_bits) {
-        info_hints->mode = detail::to_fi_mode(hints.mode_bits);
-    }
-
+    info_hints->caps = detail::to_fi_caps(hints.capabilities);
+    info_hints->mode = detail::to_fi_mode(hints.mode_bits);
     info_hints->addr_format = detail::to_fi_addr_format(hints.addr_format);
+    info_hints->ep_attr->type = detail::to_fi_ep_type(hints.ep_type);
 
-    if (info_hints->ep_attr) {
-        info_hints->ep_attr->type = detail::to_fi_ep_type(hints.ep_type);
+    // fi_freeinfo owns these strings; copy bounded views into C allocations.
+    const auto copy_name = [](std::optional<std::string_view> name, char*& output) {
+        if (!name) {
+            return true;
+        }
+        output = ::strdup(std::string{*name}.c_str());
+        return output != nullptr;
+    };
+    if (!copy_name(hints.provider_name, info_hints->fabric_attr->prov_name) ||
+        !copy_name(hints.fabric_name, info_hints->fabric_attr->name) ||
+        !copy_name(hints.domain_name, info_hints->domain_attr->name)) {
+        return make_error_result<fabric_info>(errc::no_memory);
     }
-
-    if (hints.threading || hints.memory_region_mode) {
-        if (!info_hints->domain_attr) {
-            info_hints->domain_attr = new ::fi_domain_attr{};
-        }
-        if (hints.threading) {
-            info_hints->domain_attr->threading = detail::to_fi_threading(*hints.threading);
-        }
-        if (hints.memory_region_mode) {
-            info_hints->domain_attr->mr_mode = detail::to_fi_mr_mode(*hints.memory_region_mode);
-        }
+    if (hints.threading) {
+        info_hints->domain_attr->threading = detail::to_fi_threading(*hints.threading);
+    }
+    if (hints.memory_region_mode) {
+        info_hints->domain_attr->mr_mode = detail::to_fi_mr_mode(*hints.memory_region_mode);
+    }
+    if (hints.control_progress) {
+        info_hints->domain_attr->control_progress = detail::to_fi_progress(*hints.control_progress);
+    }
+    if (hints.data_progress) {
+        info_hints->domain_attr->data_progress = detail::to_fi_progress(*hints.data_progress);
     }
 
     ::fi_info* result = nullptr;
-    int ret = ::fi_getinfo(
-        FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION), nullptr, nullptr, 0, info_hints, &result);
-
-    ::fi_freeinfo(info_hints);
+    int ret = ::fi_getinfo(FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION),
+                           nullptr,
+                           nullptr,
+                           0,
+                           info_hints.get(),
+                           &result);
 
     if (ret != 0) {
         return make_error_result<fabric_info>(static_cast<errc>(ret));
