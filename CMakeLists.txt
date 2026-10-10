@@ -488,6 +488,7 @@ target_sources(loom PUBLIC
 
         # Detail headers
         include/loom/detail/conversions.hpp
+        include/loom/detail/native_address.hpp
 )
 
 # Include directories (for non-FILE_SET aware consumers)

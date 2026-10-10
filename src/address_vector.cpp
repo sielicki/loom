@@ -9,6 +9,7 @@
 
 #include "loom/core/allocator.hpp"
 #include "loom/core/error.hpp"
+#include "loom/detail/native_address.hpp"
 
 namespace loom {
 
@@ -79,6 +80,10 @@ auto address_vector::create(const domain& dom,
         return make_error_result<address_vector>(errc::invalid_argument);
     }
 
+    const auto format = dom.get_address_format();
+    if (attr.addr_format != address_format::unspecified && attr.addr_format != format) {
+        return make_error_result<address_vector>(errc::invalid_argument);
+    }
     ::fi_av_attr av_attr{};
 
     av_attr.type = av_type_to_fi(attr.type);
@@ -97,14 +102,14 @@ auto address_vector::create(const domain& dom,
     }
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::address_vector_impl>(
-            resource, av, attr.type, attr.addr_format);
+        auto impl =
+            detail::make_pmr_unique<detail::address_vector_impl>(resource, av, attr.type, format);
         return address_vector{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::address_vector_impl>(
-        default_resource, av, attr.type, attr.addr_format);
+        default_resource, av, attr.type, format);
     return address_vector{std::move(impl)};
 }
 
@@ -116,7 +121,15 @@ auto address_vector::insert(const address& addr, void* context) -> result<av_han
     ::fi_addr_t fi_addr = FI_ADDR_NOTAVAIL;
     std::uint64_t flags = 0;
 
-    int ret = ::fi_av_insert(impl_->av, get_address_data(addr), 1, &fi_addr, flags, context);
+    const auto native = detail::to_native_address(addr, impl_->addr_format);
+    if (!native) {
+        return std::unexpected(native.error());
+    }
+    const int ret = std::visit(
+        [&](const auto& value) {
+            return ::fi_av_insert(impl_->av, &value, 1, &fi_addr, flags, context);
+        },
+        *native);
 
     if (ret < 0) {
         return make_error_result_from_fi_errno<av_handle>(-ret);

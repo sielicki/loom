@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/detail/impl/address_vector_impl.hpp>
+#include <loom/detail/impl/endpoint_impl.hpp>
+
+#include <array>
+#include <cstring>
+#include <vector>
+
+#include <catch2/catch_test_macros.hpp>
+
+namespace {
+struct provider {
+    std::vector<std::byte> received;
+    std::size_t address_size = sizeof(sockaddr_in);
+    std::size_t calls{};
+    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_cm cm{
+        .size = sizeof(fi_ops_cm),
+        .connect =
+            [](fid_ep* ep, const void* addr, const void*, std::size_t) {
+                auto& self = *static_cast<provider*>(ep->fid.context);
+                self.capture(addr, 1);
+                return 0;
+            },
+    };
+    fi_ops_av av_ops{
+        .size = sizeof(fi_ops_av),
+        .insert =
+            [](fid_av* av,
+               const void* addr,
+               std::size_t count,
+               fi_addr_t* output,
+               std::uint64_t,
+               void*) {
+                auto& self = *static_cast<provider*>(av->fid.context);
+                self.capture(addr, count);
+                for (std::size_t i = 0; i < count; ++i) {
+                    output[i] = 100 + i;
+                }
+                return static_cast<int>(count);
+            },
+    };
+    fid_ep ep_handle{.fid = {.context = this, .ops = &ops}, .cm = &cm};
+    fid_av av_handle{.fid = {.context = this, .ops = &ops}, .ops = &av_ops};
+
+    auto endpoint(loom::address_format format) -> loom::endpoint {
+        return loom::endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+            loom::get_default_resource(), &ep_handle, loom::endpoint_types::msg, format)};
+    }
+    auto vector(loom::address_format format) -> loom::address_vector {
+        return loom::address_vector{
+            loom::detail::make_pmr_unique<loom::detail::address_vector_impl>(
+                loom::get_default_resource(), &av_handle, loom::av_type::table, format)};
+    }
+    void capture(const void* address, std::size_t count) {
+        ++calls;
+        const auto* bytes = static_cast<const std::byte*>(address);
+        received.assign(bytes, bytes + count * address_size);
+    }
+};
+}  // namespace
+
+TEST_CASE("connection and AV insertion encode native IPv4 addresses", "[address]") {
+    provider native;
+    const loom::address addr = loom::ipv4_address{0xC0000201U, 4321};
+    SECTION("connection") {
+        auto ep = native.endpoint(loom::address_format::inet);
+        REQUIRE(ep.connect(addr));
+    }
+    SECTION("address vector") {
+        auto av = native.vector(loom::address_format::inet);
+        auto result = av.insert(addr);
+        REQUIRE(result);
+        REQUIRE(result->value == 100);
+    }
+    sockaddr_in received{};
+    REQUIRE(native.received.size() == sizeof(received));
+    std::memcpy(&received, native.received.data(), sizeof(received));
+    REQUIRE(received.sin_family == AF_INET);
+    REQUIRE(ntohs(received.sin_port) == 4321);
+    REQUIRE(ntohl(received.sin_addr.s_addr) == 0xC0000201U);
+}
+
+TEST_CASE("address insertion encodes IPv6 and rejects format mismatches", "[address]") {
+    provider native;
+    native.address_size = sizeof(sockaddr_in6);
+    const std::array<std::uint16_t, 8> segments{0x2001, 0xdb8, 0, 0, 0, 0, 0, 42};
+    const loom::address addr = loom::ipv6_address{segments, 9876};
+    auto av = native.vector(loom::address_format::inet6);
+    REQUIRE(av.insert(addr));
+    sockaddr_in6 received{};
+    std::memcpy(&received, native.received.data(), sizeof(received));
+    REQUIRE(received.sin6_family == AF_INET6);
+    REQUIRE(ntohs(received.sin6_port) == 9876);
+    REQUIRE(received.sin6_addr.s6_addr[0] == 0x20);
+    REQUIRE(received.sin6_addr.s6_addr[1] == 0x01);
+    REQUIRE(received.sin6_addr.s6_addr[15] == 42);
+    auto mismatched = av.insert(loom::ipv4_address{0x7F000001U, 9876});
+    REQUIRE_FALSE(mismatched);
+    REQUIRE(mismatched.error() == loom::errc::invalid_argument);
+    REQUIRE(native.calls == 1);
+}
+
+TEST_CASE("address vectors inherit the domain format for round trips", "[address][integration]") {
+    loom::fabric_hints hints;
+    hints.ep_type = loom::endpoint_types::rdm;
+    hints.capabilities = loom::capability::msg;
+    hints.addr_format = loom::address_format::inet;
+    auto info = loom::query_fabric(hints);
+    if (!info) {
+        SKIP("No IPv4 RDM provider available");
+    }
+    auto fabric = loom::fabric::create(*info);
+    REQUIRE(fabric);
+    auto domain = loom::domain::create(*fabric, *info);
+    REQUIRE(domain);
+    auto av = loom::address_vector::create(*domain);
+    REQUIRE(av);
+    const loom::address addr = loom::ipv4_address{0x7F000001U, 12345};
+    auto handle = av->insert(addr);
+    REQUIRE(handle);
+    auto found = av->lookup(*handle);
+    REQUIRE(found);
+    REQUIRE(*found == addr);
+}

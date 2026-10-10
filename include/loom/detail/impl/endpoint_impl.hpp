@@ -21,6 +21,7 @@
 #include "loom/core/fabric.hpp"
 #include "loom/core/shared_context.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/native_address.hpp"
 
 namespace loom {
 class completion_queue;
@@ -310,9 +311,12 @@ inline auto endpoint::connect(const address& peer_addr) -> void_result {
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    const void* addr_ptr = get_address_data(peer_addr);
-
-    int ret = ::fi_connect(impl_->ep, addr_ptr, nullptr, 0);
+    const auto native = detail::to_native_address(peer_addr, impl_->addr_format);
+    if (!native) {
+        return std::unexpected(native.error());
+    }
+    const int ret = std::visit(
+        [&](const auto& addr) { return ::fi_connect(impl_->ep, &addr, nullptr, 0); }, *native);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(-ret);

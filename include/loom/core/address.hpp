@@ -735,7 +735,8 @@ template <typename Visitor>
 }
 
 /**
- * @brief Gets a pointer to the raw address data.
+ * @brief Gets a pointer to the stored C++ address object.
+ * This is not a native libfabric address or a wire serialization.
  * @param addr The address to query.
  * @return Pointer to the address data.
  */
