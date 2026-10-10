@@ -265,7 +265,7 @@ auto cq_supports_wait(const CompletionQueueHandle& cq) -> bool;
 // ============================================================================
 
 /// Insert an address into the address vector
-auto av_insert(AddressVectorHandle& av, rust::Slice<const std::uint8_t> addr) -> std::uint64_t;
+auto av_insert(const AddressVectorHandle& av, rust::Slice<const std::uint8_t> addr) -> std::uint64_t;
 
 // ============================================================================
 // Memory region operations

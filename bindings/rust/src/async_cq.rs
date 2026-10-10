@@ -27,8 +27,8 @@ use tokio::io::Interest;
 /// This wraps a [`CompletionQueue`] and provides async methods for waiting
 /// on completions without blocking the tokio runtime.
 pub struct AsyncCompletionQueue {
-    inner: CompletionQueue,
     async_fd: AsyncFd<RawFd>,
+    inner: CompletionQueue,
 }
 
 /// Wrapper to implement AsRawFd for the CQ's wait fd.

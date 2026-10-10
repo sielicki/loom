@@ -50,6 +50,7 @@ mod async_cq;
 pub use error::{Error, Result};
 
 use cxx::UniquePtr;
+use std::rc::Rc;
 
 // ============================================================================
 // Capability flags
@@ -195,8 +196,9 @@ pub fn query_fabric_with_hints(
 ///
 /// The fabric is the top-level resource from which all other resources
 /// are created.
+#[derive(Clone)]
 pub struct Fabric {
-    inner: UniquePtr<ffi::ffi::FabricHandle>,
+    inner: Rc<UniquePtr<ffi::ffi::FabricHandle>>,
 }
 
 impl Fabric {
@@ -207,7 +209,7 @@ impl Fabric {
     /// * `info` - Fabric information from [`query_fabric`].
     pub fn new(info: &FabricInfo) -> Result<Self> {
         let inner = ffi::ffi::create_fabric(&info.inner)?;
-        Ok(Self { inner })
+        Ok(Self { inner: Rc::new(inner) })
     }
 }
 
@@ -218,8 +220,10 @@ impl Fabric {
 /// A fabric domain representing a resource boundary.
 ///
 /// All resources (endpoints, memory regions, etc.) belong to a domain.
+#[derive(Clone)]
 pub struct Domain {
-    inner: UniquePtr<ffi::ffi::DomainHandle>,
+    inner: Rc<UniquePtr<ffi::ffi::DomainHandle>>,
+    _fabric: Fabric,
 }
 
 impl Domain {
@@ -231,7 +235,7 @@ impl Domain {
     /// * `info` - Fabric information.
     pub fn new(fabric: &Fabric, info: &FabricInfo) -> Result<Self> {
         let inner = ffi::ffi::create_domain(&fabric.inner, &info.inner)?;
-        Ok(Self { inner })
+        Ok(Self { inner: Rc::new(inner), _fabric: fabric.clone() })
     }
 }
 
@@ -278,8 +282,10 @@ impl CompletionEvent {
 }
 
 /// A completion queue for operation completion notifications.
+#[derive(Clone)]
 pub struct CompletionQueue {
-    inner: UniquePtr<ffi::ffi::CompletionQueueHandle>,
+    inner: Rc<UniquePtr<ffi::ffi::CompletionQueueHandle>>,
+    _domain: Domain,
 }
 
 impl CompletionQueue {
@@ -303,7 +309,7 @@ impl CompletionQueue {
     pub fn with_options(domain: &Domain, size: usize, wait_obj: bool) -> Result<Self> {
         let attr = ffi::CqAttributes { size, wait_obj };
         let inner = ffi::ffi::create_completion_queue(&domain.inner, &attr)?;
-        Ok(Self { inner })
+        Ok(Self { inner: Rc::new(inner), _domain: domain.clone() })
     }
 
     /// Poll for a completion (non-blocking).
@@ -350,15 +356,17 @@ impl CompletionQueue {
 // ============================================================================
 
 /// An address vector for peer addressing.
+#[derive(Clone)]
 pub struct AddressVector {
-    inner: UniquePtr<ffi::ffi::AddressVectorHandle>,
+    inner: Rc<UniquePtr<ffi::ffi::AddressVectorHandle>>,
+    _domain: Domain,
 }
 
 impl AddressVector {
     /// Create a new address vector.
     pub fn new(domain: &Domain) -> Result<Self> {
         let inner = ffi::ffi::create_address_vector(&domain.inner)?;
-        Ok(Self { inner })
+        Ok(Self { inner: Rc::new(inner), _domain: domain.clone() })
     }
 
     /// Insert an address into the address vector.
@@ -370,7 +378,7 @@ impl AddressVector {
     /// `addr` must contain a complete address in this provider's native
     /// format, such as one returned by an endpoint using the same provider.
     pub unsafe fn insert(&mut self, addr: &[u8]) -> Result<u64> {
-        Ok(ffi::ffi::av_insert(self.inner.pin_mut(), addr)?)
+        Ok(ffi::ffi::av_insert(&self.inner, addr)?)
     }
 }
 
@@ -381,6 +389,7 @@ impl AddressVector {
 /// A registered memory region for RDMA operations.
 pub struct MemoryRegion {
     inner: UniquePtr<ffi::ffi::MemoryRegionHandle>,
+    _domain: Domain,
 }
 
 impl MemoryRegion {
@@ -404,7 +413,7 @@ impl MemoryRegion {
         access: MrAccess,
     ) -> Result<Self> {
         let inner = ffi::ffi::register_memory(&domain.inner, ptr as usize, len, access.bits())?;
-        Ok(Self { inner })
+        Ok(Self { inner, _domain: domain.clone() })
     }
 
     /// Get the memory region key for remote access.
@@ -433,6 +442,9 @@ impl MemoryRegion {
 /// ```
 pub struct Endpoint {
     inner: UniquePtr<ffi::ffi::EndpointHandle>,
+    _domain: Domain,
+    bound_queues: Vec<CompletionQueue>,
+    bound_vectors: Vec<AddressVector>,
 }
 
 impl Endpoint {
@@ -444,7 +456,7 @@ impl Endpoint {
     /// * `info` - Fabric information.
     pub fn new(domain: &Domain, info: &FabricInfo) -> Result<Self> {
         let inner = ffi::ffi::create_endpoint(&domain.inner, &info.inner)?;
-        Ok(Self { inner })
+        Ok(Self { inner, _domain: domain.clone(), bound_queues: Vec::new(), bound_vectors: Vec::new() })
     }
 
     /// Enable the endpoint for communication.
@@ -462,16 +474,16 @@ impl Endpoint {
     /// * `cq` - The completion queue to bind.
     /// * `flags` - Bind flags (transmit, recv, or both).
     pub fn bind_cq(&mut self, cq: &CompletionQueue, flags: CqBindFlags) -> Result<()> {
-        Ok(ffi::ffi::endpoint_bind_cq(
-            self.inner.pin_mut(),
-            &cq.inner,
-            flags.bits(),
-        )?)
+        ffi::ffi::endpoint_bind_cq(self.inner.pin_mut(), &cq.inner, flags.bits())?;
+        self.bound_queues.push(cq.clone());
+        Ok(())
     }
 
     /// Bind an address vector to the endpoint.
     pub fn bind_av(&mut self, av: &AddressVector) -> Result<()> {
-        Ok(ffi::ffi::endpoint_bind_av(self.inner.pin_mut(), &av.inner)?)
+        ffi::ffi::endpoint_bind_av(self.inner.pin_mut(), &av.inner)?;
+        self.bound_vectors.push(av.clone());
+        Ok(())
     }
 
     /// Post a send operation.
@@ -609,6 +621,31 @@ mod tests {
         assert_eq!(event.error, Some(-125));
         assert_eq!(event.tag, 9);
         assert!(matches!(event.into_result(), Err(Error::Completion { context: 73, code: -125 })));
+    }
+
+    #[test]
+    fn endpoints_retain_bound_resources_and_parents() {
+        let Ok(info) = query_fabric_with_hints("tcp", Capabilities::MSG, EndpointType::Msg) else {
+            return;
+        };
+        let fabric = Fabric::new(&info).unwrap();
+        let fabric_lifetime = Rc::downgrade(&fabric.inner);
+        let domain = Domain::new(&fabric, &info).unwrap();
+        let domain_lifetime = Rc::downgrade(&domain.inner);
+        let cq = CompletionQueue::with_options(&domain, 16, false).unwrap();
+        let cq_lifetime = Rc::downgrade(&cq.inner);
+        let mut endpoint = Endpoint::new(&domain, &info).unwrap();
+        endpoint.bind_cq(&cq, CqBindFlags::TRANSMIT | CqBindFlags::RECV).unwrap();
+        drop(cq);
+        drop(domain);
+        drop(fabric);
+        assert!(cq_lifetime.upgrade().is_some());
+        assert!(domain_lifetime.upgrade().is_some());
+        assert!(fabric_lifetime.upgrade().is_some());
+        drop(endpoint);
+        assert!(cq_lifetime.upgrade().is_none());
+        assert!(domain_lifetime.upgrade().is_none());
+        assert!(fabric_lifetime.upgrade().is_none());
     }
 
     #[test]

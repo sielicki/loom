@@ -214,7 +214,7 @@ auto cq_supports_wait(const CompletionQueueHandle& cq) -> bool {
     return cq.get().supports_blocking_wait();
 }
 
-auto av_insert(AddressVectorHandle& av, rust::Slice<const std::uint8_t> addr) -> std::uint64_t {
+auto av_insert(const AddressVectorHandle& av, rust::Slice<const std::uint8_t> addr) -> std::uint64_t {
     if (!av.get() || addr.empty()) {
         throw std::runtime_error("invalid address vector or empty address");
     }

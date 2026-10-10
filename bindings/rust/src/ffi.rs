@@ -202,7 +202,7 @@ pub mod ffi {
         // ====================================================================
 
         /// Insert an address into the address vector.
-        fn av_insert(av: Pin<&mut AddressVectorHandle>, addr: &[u8]) -> Result<u64>;
+        fn av_insert(av: &AddressVectorHandle, addr: &[u8]) -> Result<u64>;
 
         // ====================================================================
         // Memory region operations
