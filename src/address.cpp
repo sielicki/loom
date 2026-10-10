@@ -19,28 +19,30 @@ auto address_from_raw(const void* data, std::size_t len, address_format format) 
             if (len < sizeof(::sockaddr_in)) {
                 return unspecified_address{};
             }
-            const auto* sa = static_cast<const ::sockaddr_in*>(data);
-            auto addr_be = sa->sin_addr.s_addr;
-            auto a = static_cast<std::uint8_t>((addr_be >> 0) & 0xFF);
-            auto b = static_cast<std::uint8_t>((addr_be >> 8) & 0xFF);
-            auto c = static_cast<std::uint8_t>((addr_be >> 16) & 0xFF);
-            auto d = static_cast<std::uint8_t>((addr_be >> 24) & 0xFF);
-            auto port = ntohs(sa->sin_port);
-            return ipv4_address{a, b, c, d, port};
+            ::sockaddr_in sa{};
+            std::memcpy(&sa, data, sizeof(sa));
+            if (sa.sin_family != AF_INET) {
+                return unspecified_address{};
+            }
+            return ipv4_address{ntohl(sa.sin_addr.s_addr), ntohs(sa.sin_port)};
         }
 
         case address_format::inet6: {
             if (len < sizeof(::sockaddr_in6)) {
                 return unspecified_address{};
             }
-            const auto* sa6 = static_cast<const ::sockaddr_in6*>(data);
+            ::sockaddr_in6 sa6{};
+            std::memcpy(&sa6, data, sizeof(sa6));
+            if (sa6.sin6_family != AF_INET6) {
+                return unspecified_address{};
+            }
             std::array<std::uint16_t, 8> segments{};
             for (std::size_t i = 0; i < 8; ++i) {
-                auto hi = static_cast<std::uint16_t>(sa6->sin6_addr.s6_addr[i * 2]);
-                auto lo = static_cast<std::uint16_t>(sa6->sin6_addr.s6_addr[i * 2 + 1]);
+                auto hi = static_cast<std::uint16_t>(sa6.sin6_addr.s6_addr[i * 2]);
+                auto lo = static_cast<std::uint16_t>(sa6.sin6_addr.s6_addr[i * 2 + 1]);
                 segments[i] = static_cast<std::uint16_t>((hi << 8) | lo);
             }
-            auto port = ntohs(sa6->sin6_port);
+            auto port = ntohs(sa6.sin6_port);
             return ipv6_address{std::span<const std::uint16_t, 8>{segments}, port};
         }
 

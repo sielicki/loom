@@ -363,6 +363,22 @@ TEST_CASE("address_from_raw inet parses loopback", "[address]") {
     REQUIRE(ipv4.port() == 443);
 }
 
+TEST_CASE("native IP parsing accepts unaligned bytes and validates families", "[address]") {
+    sockaddr_in native{};
+    native.sin_family = AF_INET;
+    native.sin_port = htons(4567);
+    native.sin_addr.s_addr = htonl(0xC0000201U);
+    std::array<std::byte, sizeof(native) + 1> storage{};
+    std::memcpy(storage.data() + 1, &native, sizeof(native));
+    REQUIRE(
+        loom::address_from_raw(storage.data() + 1, sizeof(native), loom::address_format::inet) ==
+        loom::address{loom::ipv4_address{0xC0000201U, 4567}});
+
+    native.sin_family = AF_INET6;
+    REQUIRE(std::holds_alternative<loom::unspecified_address>(
+        loom::address_from_raw(&native, sizeof(native), loom::address_format::inet)));
+}
+
 TEST_CASE("address_from_raw inet6 parses sockaddr_in6", "[address]") {
     ::sockaddr_in6 sa6{};
     sa6.sin6_family = AF_INET6;
