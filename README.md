@@ -675,6 +675,14 @@ This works with multiple implementations:
 The integration is designed to be generic - code written against loom's execution interface
 will work with any conforming P2300 implementation with minimal changes.
 
+Fabric senders require application-driven progress. Bind the endpoint to
+the CQ passed to the sender, dedicate that CQ to loom execution operations,
+and call `loom::execution::poll_completions(cq)` from a progress loop.
+Starting an operation submits it; the progress loop delivers its completion
+to the receiver. Keep operation states and buffers alive until delivery.
+When using `sync_wait`, progress must run on another thread, with a provider
+threading mode that permits concurrent submission and polling.
+
 ```cpp
 #include <loom/execution.hpp>
 #include <stdexec/execution.hpp>  // Or beman/execution/execution.hpp

@@ -93,6 +93,9 @@ if(LOOM_HAS_STDEXEC)
     loom_add_test(test_async_senders
         LIBRARY loom::execution
     )
+    loom_add_test(test_execution_progress
+        LIBRARY loom::execution
+    )
 else()
     message(STATUS "Skipping stdexec integration tests (LOOM_USE_STDEXEC=OFF)")
 endif()

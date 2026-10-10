@@ -28,6 +28,43 @@
 
 namespace loom::execution {
 
+namespace detail {
+struct operation_completion_context {
+    safe_context storage;
+    completion_queue* queue{};
+    void (*dispatch)(void*, const completion_event&) noexcept {};
+};
+static_assert(std::is_standard_layout_v<operation_completion_context>);
+static_assert(std::is_pointer_interconvertible_with_class(&operation_completion_context::storage));
+}  // namespace detail
+
+/// Advance a CQ dedicated to loom execution operations. The endpoint must be
+/// bound to this CQ, and operation states must remain alive until completion.
+/// Call this from the application's progress loop; starting a sender does not
+/// create a polling thread. Do not mix foreign contexts into this queue.
+[[nodiscard]] inline auto poll_completions(completion_queue& queue, std::size_t limit = 64)
+    -> result<std::size_t> {
+    std::size_t count{};
+    while (count < limit) {
+        const auto event = queue.poll();
+        if (!event) {
+            break;
+        }
+        if (!event->context) {
+            return std::unexpected(event->error ? event->error
+                                                : make_error_code(errc::invalid_argument));
+        }
+        auto* context = static_cast<detail::operation_completion_context*>(event->context.get());
+        if (context->queue != &queue || !context->dispatch ||
+            !is_context_valid(&context->storage)) {
+            return make_error_result<std::size_t>(errc::invalid_argument);
+        }
+        context->dispatch(context->storage.object, *event);
+        ++count;
+    }
+    return count;
+}
+
 /**
  * @brief Base operation state for fabric messaging operations.
  *
@@ -38,7 +75,7 @@ namespace loom::execution {
  * @tparam Receiver The P2300 receiver type.
  * @tparam ValueTypes The value types for successful completion.
  */
-template <typename Receiver, typename... ValueTypes>
+template <typename Derived, typename Receiver, typename... ValueTypes>
 class fabric_operation_state_base {
 public:
     fabric_operation_state_base(const fabric_operation_state_base&) = delete;
@@ -47,22 +84,26 @@ public:
     auto operator=(fabric_operation_state_base&&) -> fabric_operation_state_base& = delete;
 
 protected:
-    explicit fabric_operation_state_base(Receiver receiver) noexcept(
+    explicit fabric_operation_state_base(Receiver receiver, completion_queue* cq) noexcept(
         std::is_nothrow_move_constructible_v<Receiver>)
         : receiver_(std::move(receiver)) {
         // Store back-pointer for completion dispatch with validation support
-        store_safe_context(fi_ctx_, this);
+        store_safe_context(fi_ctx_.storage, static_cast<Derived*>(this));
+        fi_ctx_.queue = cq;
+        fi_ctx_.dispatch = [](void* object, const completion_event& event) noexcept {
+            static_cast<Derived*>(object)->complete_event(event);
+        };
     }
 
     ~fabric_operation_state_base() {
         // Invalidate application metadata before releasing the context
-        invalidate_safe_context(fi_ctx_);
+        invalidate_safe_context(fi_ctx_.storage);
     }
 
     /**
      * @brief Returns the libfabric context pointer.
      */
-    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_.provider; }
+    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_.storage.provider; }
 
     /**
      * @brief Handles successful completion.
@@ -101,7 +142,18 @@ protected:
         return context_ptr<void>{as_fi_context()};
     }
 
-    safe_context fi_ctx_{};
+    void complete_event(const completion_event& event) noexcept {
+        if (event.error) {
+            complete_error(event.error);
+        } else if constexpr (requires(Derived& operation) { operation.get_result(); }) {
+            loom::execution::set_value(std::move(receiver_),
+                                       static_cast<Derived*>(this)->get_result());
+        } else {
+            complete_value(event.bytes_transferred);
+        }
+    }
+
+    detail::operation_completion_context fi_ctx_{};
     Receiver receiver_;
 };
 
@@ -114,15 +166,16 @@ protected:
  * @tparam Receiver The P2300 receiver type.
  */
 template <typename Receiver>
-class send_operation_state final : public fabric_operation_state_base<Receiver> {
-    using base = fabric_operation_state_base<Receiver>;
+class send_operation_state final
+    : public fabric_operation_state_base<send_operation_state<Receiver>, Receiver> {
+    using base = fabric_operation_state_base<send_operation_state<Receiver>, Receiver>;
 
 public:
     send_operation_state(endpoint* ep,
                          std::span<const std::byte> buffer,
                          completion_queue* cq,
                          Receiver receiver) noexcept
-        : base(std::move(receiver)), ep_(ep), buffer_(buffer), cq_(cq) {}
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), cq_(cq) {}
 
     /**
      * @brief Starts the send operation.
@@ -131,7 +184,7 @@ public:
      * asynchronously via the completion queue.
      */
     void start() & noexcept {
-        if (ep_ == nullptr || !ep_->impl_valid()) {
+        if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
             return;
         }
@@ -158,21 +211,22 @@ private:
  * @tparam Receiver The P2300 receiver type.
  */
 template <typename Receiver>
-class recv_operation_state final : public fabric_operation_state_base<Receiver, std::size_t> {
-    using base = fabric_operation_state_base<Receiver, std::size_t>;
+class recv_operation_state final
+    : public fabric_operation_state_base<recv_operation_state<Receiver>, Receiver, std::size_t> {
+    using base = fabric_operation_state_base<recv_operation_state<Receiver>, Receiver, std::size_t>;
 
 public:
     recv_operation_state(endpoint* ep,
                          std::span<std::byte> buffer,
                          completion_queue* cq,
                          Receiver receiver) noexcept
-        : base(std::move(receiver)), ep_(ep), buffer_(buffer), cq_(cq) {}
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), cq_(cq) {}
 
     /**
      * @brief Starts the receive operation.
      */
     void start() & noexcept {
-        if (ep_ == nullptr || !ep_->impl_valid()) {
+        if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
             return;
         }
@@ -195,8 +249,9 @@ private:
  * @tparam Receiver The P2300 receiver type.
  */
 template <typename Receiver>
-class tagged_send_operation_state final : public fabric_operation_state_base<Receiver> {
-    using base = fabric_operation_state_base<Receiver>;
+class tagged_send_operation_state final
+    : public fabric_operation_state_base<tagged_send_operation_state<Receiver>, Receiver> {
+    using base = fabric_operation_state_base<tagged_send_operation_state<Receiver>, Receiver>;
 
 public:
     tagged_send_operation_state(endpoint* ep,
@@ -204,10 +259,10 @@ public:
                                 std::uint64_t tag,
                                 completion_queue* cq,
                                 Receiver receiver) noexcept
-        : base(std::move(receiver)), ep_(ep), buffer_(buffer), tag_(tag), cq_(cq) {}
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), tag_(tag), cq_(cq) {}
 
     void start() & noexcept {
-        if (ep_ == nullptr || !ep_->impl_valid()) {
+        if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
             return;
         }
@@ -232,8 +287,11 @@ private:
  */
 template <typename Receiver>
 class tagged_recv_operation_state final
-    : public fabric_operation_state_base<Receiver, std::size_t> {
-    using base = fabric_operation_state_base<Receiver, std::size_t>;
+    : public fabric_operation_state_base<tagged_recv_operation_state<Receiver>,
+                                         Receiver,
+                                         std::size_t> {
+    using base =
+        fabric_operation_state_base<tagged_recv_operation_state<Receiver>, Receiver, std::size_t>;
 
 public:
     tagged_recv_operation_state(endpoint* ep,
@@ -242,11 +300,11 @@ public:
                                 std::uint64_t ignore,
                                 completion_queue* cq,
                                 Receiver receiver) noexcept
-        : base(std::move(receiver)), ep_(ep), buffer_(buffer), tag_(tag), ignore_(ignore), cq_(cq) {
-    }
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), tag_(tag), ignore_(ignore),
+          cq_(cq) {}
 
     void start() & noexcept {
-        if (ep_ == nullptr || !ep_->impl_valid()) {
+        if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
             return;
         }
@@ -271,8 +329,9 @@ private:
  * @tparam Receiver The P2300 receiver type.
  */
 template <typename Receiver>
-class read_operation_state final : public fabric_operation_state_base<Receiver, std::size_t> {
-    using base = fabric_operation_state_base<Receiver, std::size_t>;
+class read_operation_state final
+    : public fabric_operation_state_base<read_operation_state<Receiver>, Receiver, std::size_t> {
+    using base = fabric_operation_state_base<read_operation_state<Receiver>, Receiver, std::size_t>;
 
 public:
     read_operation_state(endpoint* ep,
@@ -281,11 +340,11 @@ public:
                          mr_key key,
                          completion_queue* cq,
                          Receiver receiver) noexcept
-        : base(std::move(receiver)), ep_(ep), buffer_(buffer), remote_addr_(remote_addr), key_(key),
-          cq_(cq) {}
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), remote_addr_(remote_addr),
+          key_(key), cq_(cq) {}
 
     void start() & noexcept {
-        if (ep_ == nullptr || !ep_->impl_valid()) {
+        if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
             return;
         }
@@ -310,8 +369,9 @@ private:
  * @tparam Receiver The P2300 receiver type.
  */
 template <typename Receiver>
-class write_operation_state final : public fabric_operation_state_base<Receiver> {
-    using base = fabric_operation_state_base<Receiver>;
+class write_operation_state final
+    : public fabric_operation_state_base<write_operation_state<Receiver>, Receiver> {
+    using base = fabric_operation_state_base<write_operation_state<Receiver>, Receiver>;
 
 public:
     write_operation_state(endpoint* ep,
@@ -320,11 +380,11 @@ public:
                           mr_key key,
                           completion_queue* cq,
                           Receiver receiver) noexcept
-        : base(std::move(receiver)), ep_(ep), buffer_(buffer), remote_addr_(remote_addr), key_(key),
-          cq_(cq) {}
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), remote_addr_(remote_addr),
+          key_(key), cq_(cq) {}
 
     void start() & noexcept {
-        if (ep_ == nullptr || !ep_->impl_valid()) {
+        if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
             return;
         }
@@ -349,8 +409,7 @@ private:
  * This function is used by the completion queue polling loop to dispatch
  * completions to the appropriate operation state.
  *
- * In debug builds, this validates the context pointer to detect use-after-free.
- * If the operation state has been destroyed, this returns nullptr.
+ * The operation state must remain alive until its completion is consumed.
  *
  * @tparam OpState The operation state type.
  * @param ctx The context pointer from the completion event.

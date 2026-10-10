@@ -154,8 +154,9 @@ private:
  */
 template <typename Receiver, typename T>
     requires atomic::atomic_type<T>
-class fetch_add_operation_state final : public fabric_operation_state_base<Receiver, T> {
-    using base = fabric_operation_state_base<Receiver, T>;
+class fetch_add_operation_state final
+    : public fabric_operation_state_base<fetch_add_operation_state<Receiver, T>, Receiver, T> {
+    using base = fabric_operation_state_base<fetch_add_operation_state<Receiver, T>, Receiver, T>;
 
 public:
     fetch_add_operation_state(endpoint* ep,
@@ -165,11 +166,11 @@ public:
                               memory_region* result_mr,
                               completion_queue* cq,
                               Receiver receiver) noexcept
-        : base(std::move(receiver)), ep_(ep), remote_addr_(remote_addr), operand_(operand),
+        : base(std::move(receiver), cq), ep_(ep), remote_addr_(remote_addr), operand_(operand),
           key_(key), result_mr_(result_mr), cq_(cq), result_value_{} {}
 
     void start() & noexcept {
-        if (ep_ == nullptr || !ep_->impl_valid()) {
+        if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
             return;
         }
@@ -260,8 +261,10 @@ private:
  */
 template <typename Receiver, typename T>
     requires atomic::atomic_type<T>
-class compare_swap_operation_state final : public fabric_operation_state_base<Receiver, T> {
-    using base = fabric_operation_state_base<Receiver, T>;
+class compare_swap_operation_state final
+    : public fabric_operation_state_base<compare_swap_operation_state<Receiver, T>, Receiver, T> {
+    using base =
+        fabric_operation_state_base<compare_swap_operation_state<Receiver, T>, Receiver, T>;
 
 public:
     compare_swap_operation_state(endpoint* ep,
@@ -272,12 +275,12 @@ public:
                                  memory_region* result_mr,
                                  completion_queue* cq,
                                  Receiver receiver) noexcept
-        : base(std::move(receiver)), ep_(ep), remote_addr_(remote_addr),
+        : base(std::move(receiver), cq), ep_(ep), remote_addr_(remote_addr),
           compare_value_(compare_value), swap_value_(swap_value), key_(key), result_mr_(result_mr),
           cq_(cq), result_value_{} {}
 
     void start() & noexcept {
-        if (ep_ == nullptr || !ep_->impl_valid()) {
+        if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
             return;
         }
