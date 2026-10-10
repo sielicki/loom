@@ -5,16 +5,61 @@
  */
 
 #include <loom/asio.hpp>
+#include <loom/detail/impl/completion_queue_impl.hpp>
 #include <loom/loom.hpp>
 
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 using namespace std::literals;
+
+TEST_CASE("poll_once reports dispatched completions and honors the limit",
+          "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    std::vector<void*> pending;
+    int completed{};
+    for (int i = 0; i < 2; ++i) {
+        auto* context = loom::asio::make_asio_context(
+            [&](std::error_code error, std::size_t bytes) {
+                REQUIRE_FALSE(error);
+                REQUIRE(bytes == 42);
+                ++completed;
+            },
+            ioc.get_executor());
+        pending.push_back(context->as_fi_context());
+    }
+    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_cq completions{
+        .size = sizeof(fi_ops_cq),
+        .read = [](fid_cq* cq, void* output, std::size_t) -> ssize_t {
+            auto& entries = *static_cast<std::vector<void*>*>(cq->fid.context);
+            if (entries.empty()) {
+                return -FI_EAGAIN;
+            }
+            *static_cast<fi_cq_tagged_entry*>(output) = {.op_context = entries.back(), .len = 42};
+            entries.pop_back();
+            return 1;
+        },
+    };
+    fid_cq handle{.fid = {.context = &pending, .ops = &ops}, .ops = &completions};
+    loom::completion_queue cq{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+        loom::get_default_resource(), &handle)};
+    auto& service = loom::asio::fabric_service::use(ioc);
+    loom::asio::fabric_service_options options;
+    options.max_completions_per_poll = 1;
+    service.register_cq(cq, options);
+    REQUIRE(service.poll_once() == 1);
+    REQUIRE(service.poll_once() == 1);
+    REQUIRE(service.poll_once() == 0);
+    ioc.run();
+    REQUIRE(completed == 2);
+    service.deregister_cq(cq);
+}
 
 TEST_CASE("fabric_service creation", "[asio][fabric_service]") {
     ::asio::io_context ioc;

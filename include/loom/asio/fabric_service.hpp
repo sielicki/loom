@@ -129,7 +129,7 @@ private:
 
     void schedule_poll();
     void do_poll();
-    void process_completions(completion_queue& cq, std::size_t max_count);
+    auto process_completions(completion_queue& cq, std::size_t max_count) -> std::size_t;
 
     struct cq_entry {
         completion_queue* cq;
@@ -234,7 +234,7 @@ inline auto fabric_service::poll_once() -> std::size_t {
     }
 
     for (const auto& entry : cqs_copy) {
-        process_completions(*entry.cq, entry.opts.max_completions_per_poll);
+        total += process_completions(*entry.cq, entry.opts.max_completions_per_poll);
     }
 
     return total;
@@ -274,8 +274,10 @@ inline void fabric_service::do_poll() {
     }
 }
 
-inline void fabric_service::process_completions(completion_queue& cq, std::size_t max_count) {
-    for (std::size_t i = 0; i < max_count; ++i) {
+inline auto fabric_service::process_completions(completion_queue& cq, std::size_t max_count)
+    -> std::size_t {
+    std::size_t count{};
+    for (; count < max_count; ++count) {
         auto event_opt = cq.poll();
         if (!event_opt) {
             break;
@@ -284,6 +286,7 @@ inline void fabric_service::process_completions(completion_queue& cq, std::size_
         const auto& event = *event_opt;
         dispatch_asio_completion(event.context.get(), event);
     }
+    return count;
 }
 
 inline auto fabric_service::use(::asio::io_context& ioc) -> fabric_service& {
