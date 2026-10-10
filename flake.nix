@@ -141,7 +141,6 @@
             , ninja
             , pkg-config
             , libfabric
-            , stdexec
             , asio ? null
             , rdma-core
             , numactl
@@ -172,7 +171,6 @@
               buildInputs =
                 [
                   libfabric
-                  stdexec
                   pkgs.catch2_3
                 ]
                 ++ lib.optionals enableAsio [ asio ]
@@ -218,7 +216,7 @@
               '';
 
               meta = with lib; {
-                description = "Modern C++26 bindings for libfabric with stdexec integration";
+                description = "Modern C++26 bindings for libfabric";
                 homepage = "https://github.com/sielicki/loom";
                 license = licenses.mit;
                 platforms = platforms.unix;
@@ -255,18 +253,19 @@
               # Standard build - use appropriate compiler for platform
               loom =
                 if isDarwin
-                then pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec; }
+                then pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric; }
                 else
                   mkLoom {
                     stdenv = pkgs.gcc15Stdenv;
                     inherit (pkgs) lib cmake ninja pkg-config rdma-core numactl;
-                    inherit libfabric stdexec;
+                    inherit libfabric;
                   };
 
               # Clang build (for all platforms)
-              loom-clang = pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec; };
+              loom-clang = pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric; };
 
               loom-stdexec = loom.overrideAttrs (old: {
+                buildInputs = old.buildInputs ++ [ stdexec ];
                 cmakeFlags = old.cmakeFlags ++ [ "-DLOOM_USE_STDEXEC=ON" ];
               });
 
@@ -278,29 +277,29 @@
               # Build with Asio integration
               loom-asio =
                 if isDarwin
-                then pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec asio; enableAsio = true; }
+                then pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric asio; enableAsio = true; }
                 else
                   mkLoom {
                     stdenv = pkgs.gcc15Stdenv;
                     inherit (pkgs) lib cmake ninja pkg-config rdma-core numactl;
-                    inherit libfabric stdexec asio;
+                    inherit libfabric asio;
                     enableAsio = true;
                   };
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
               loom-debug = pkgs.callPackage mkLoom {
-                inherit libfabric stdexec;
+                inherit libfabric;
                 enableAsan = true;
                 enableUbsan = true;
               };
 
               # Cross-compilation targets (Linux only)
               loom-aarch64 = pkgs.pkgsCross.aarch64-multiplatform.callPackage mkLoom {
-                inherit libfabric stdexec;
+                inherit libfabric;
                 enableTests = false;
               };
               loom-riscv64 = pkgs.pkgsCross.riscv64.callPackage mkLoom {
-                inherit libfabric stdexec;
+                inherit libfabric;
                 enableTests = false;
               };
             };
@@ -310,7 +309,7 @@
             {
               stdexec = self'.devShells.default;
               beman = self'.devShells.default.overrideAttrs (old: {
-                buildInputs = old.buildInputs ++ [ beman-execution ];
+                buildInputs = lib.remove stdexec old.buildInputs ++ [ beman-execution ];
               });
               default =
                 let
