@@ -21,6 +21,10 @@ environment or `nix build .#libfabric` to build that dependency directly.
 `flake.lock` records the exact source revision. CMake can also use an
 installed libfabric through `pkg-config`.
 
+The default Nix dependency disables OPX: its GPU support requires vendor
+HFI1 kernel headers not present in the pinned dependency set. Re-enabling
+OPX requires supplying compatible headers and the corresponding driver.
+
 ### Libfabric release audit
 
 Reviewed every stable release after 1.22.0 through 2.7.0, including the
