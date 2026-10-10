@@ -385,6 +385,7 @@ inline constexpr mode context{0x1ULL};
 inline constexpr mode msg_prefix{0x2ULL};
 inline constexpr mode rx_cq_data{0x4ULL};
 inline constexpr mode local_mr{0x8ULL};
+inline constexpr mode context2{0x10ULL};
 }  // namespace mode_bits
 
 /**

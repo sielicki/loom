@@ -123,6 +123,8 @@ namespace loom::detail {
 
     if (m.has(mode_bits::context))
         fi_mode |= FI_CONTEXT;
+    if (m.has(mode_bits::context2))
+        fi_mode |= FI_CONTEXT2;
     if (m.has(mode_bits::msg_prefix))
         fi_mode |= FI_MSG_PREFIX;
     if (m.has(mode_bits::rx_cq_data))
@@ -143,6 +145,8 @@ namespace loom::detail {
 
     if (fi_mode & FI_CONTEXT)
         result |= mode_bits::context;
+    if (fi_mode & FI_CONTEXT2)
+        result |= mode_bits::context2;
     if (fi_mode & FI_MSG_PREFIX)
         result |= mode_bits::msg_prefix;
     if (fi_mode & FI_RX_CQ_DATA)
