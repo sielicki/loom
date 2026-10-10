@@ -49,6 +49,8 @@ namespace loom::detail {
         fi_caps |= FI_COLLECTIVE;
     if (c.has(capability::hmem))
         fi_caps |= FI_HMEM;
+    if (c.has(capability::trigger))
+        fi_caps |= FI_TRIGGER;
     if (c.has(capability::read))
         fi_caps |= FI_READ;
     if (c.has(capability::write))
@@ -95,6 +97,8 @@ namespace loom::detail {
         result |= capability::collective;
     if (fi_caps & FI_HMEM)
         result |= capability::hmem;
+    if (fi_caps & FI_TRIGGER)
+        result |= capability::trigger;
     if (fi_caps & FI_READ)
         result |= capability::read;
     if (fi_caps & FI_WRITE)

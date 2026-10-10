@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/core/rma.hpp>
+#include <loom/core/trigger.hpp>
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
@@ -8,6 +9,7 @@
 
 namespace {
 struct limit_provider {
+    std::uint64_t capabilities{};
     int query_result = -FI_ENOPROTOOPT;
     std::size_t rma_limit = 8192;
     std::size_t inject_limit = 24;
@@ -43,6 +45,7 @@ struct limit_provider {
     auto endpoint() -> loom::endpoint {
         auto* raw = fi_allocinfo();
         REQUIRE(raw);
+        raw->caps = capabilities;
         raw->ep_attr->type = FI_EP_RDM;
         raw->ep_attr->max_msg_size = 65536;
         raw->tx_attr->inject_size = 48;
@@ -54,6 +57,19 @@ struct limit_provider {
     }
 };
 }  // namespace
+
+TEST_CASE("trigger support reflects negotiated endpoint capabilities", "[trigger][endpoint]") {
+    static_assert(loom::detail::to_fi_caps(loom::capability::trigger) == FI_TRIGGER);
+    static_assert(loom::detail::from_fi_caps(FI_TRIGGER) == loom::capability::trigger);
+    const bool enabled = GENERATE(false, true);
+    limit_provider native;
+    native.capabilities = FI_MSG | (enabled ? FI_TRIGGER : 0);
+    auto original = native.endpoint();
+    REQUIRE(loom::trigger::supports_trigger(original) == enabled);
+    auto moved = std::move(original);
+    REQUIRE_FALSE(loom::trigger::supports_trigger(original));
+    REQUIRE(loom::trigger::supports_trigger(moved) == enabled);
+}
 
 TEST_CASE("RMA size queries use current endpoint limits", "[rma][endpoint]") {
     limit_provider native;

@@ -187,7 +187,9 @@ auto main() -> int {
 ### Triggered Operations
 
 Triggered operations allow deferring work until a counter reaches a threshold,
-enabling efficient pipelining and dependency chains:
+enabling efficient pipelining and dependency chains. Include
+`capability::trigger` in the fabric query's capabilities, and use
+`trigger::supports_trigger(ep)` to check what was negotiated:
 
 ```cpp
 #include <loom/loom.hpp>

@@ -78,6 +78,9 @@ namespace rma {
 auto get_max_rma_size(const endpoint& ep) -> std::size_t;
 auto get_inject_size(const endpoint& ep) -> std::size_t;
 }  // namespace rma
+namespace trigger {
+auto supports_trigger(const endpoint& ep) -> bool;
+}  // namespace trigger
 
 /**
  * @class endpoint
@@ -211,6 +214,7 @@ private:
     friend class event_queue;
     friend auto rma::get_max_rma_size(const endpoint&) -> std::size_t;
     friend auto rma::get_inject_size(const endpoint&) -> std::size_t;
+    friend auto trigger::supports_trigger(const endpoint&) -> bool;
 };
 
 }  // namespace loom

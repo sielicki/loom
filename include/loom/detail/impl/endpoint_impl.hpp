@@ -36,6 +36,7 @@ struct endpoint_impl {
     address_format addr_format{address_format::unspecified};  ///< Address format.
     std::size_t max_msg_size{};
     std::size_t inject_size{};
+    caps capabilities{};
 
     /// @brief Default constructor.
     endpoint_impl() = default;
@@ -46,13 +47,15 @@ struct endpoint_impl {
     /// @param fmt The address format.
     /// @param max_msg_size_ The maximum transfer size from the creation attributes.
     /// @param inject_size_ The inject limit from the creation attributes.
+    /// @param capabilities_ The capabilities negotiated during creation.
     endpoint_impl(::fid_ep* ep_,
                   endpoint_type type_,
                   address_format fmt,
                   std::size_t max_msg_size_ = 0,
-                  std::size_t inject_size_ = 0)
+                  std::size_t inject_size_ = 0,
+                  caps capabilities_ = {})
         : ep(ep_), type(type_), addr_format(fmt), max_msg_size(max_msg_size_),
-          inject_size(inject_size_) {}
+          inject_size(inject_size_), capabilities(capabilities_) {}
 
     [[nodiscard]] auto size_limit(int option, std::size_t fallback) const -> std::size_t {
         if (!ep) {
@@ -127,16 +130,17 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
     auto addr_fmt = detail::from_fi_addr_format(info_ptr->addr_format);
     const auto max_msg_size = info_ptr->ep_attr->max_msg_size;
     const auto inject_size = info_ptr->tx_attr ? info_ptr->tx_attr->inject_size : 0;
+    const auto capabilities = detail::from_fi_caps(info_ptr->caps);
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
-            resource, ep, ep_type, addr_fmt, max_msg_size, inject_size);
+            resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
         return endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
-        default_resource, ep, ep_type, addr_fmt, max_msg_size, inject_size);
+        default_resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
     return endpoint{std::move(impl)};
 }
 

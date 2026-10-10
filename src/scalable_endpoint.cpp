@@ -50,6 +50,7 @@ auto scalable_endpoint::create(const domain& dom,
     std::size_t rx_ctx_cnt = 0;
     const auto max_msg_size = info_ptr->ep_attr ? info_ptr->ep_attr->max_msg_size : 0;
     const auto inject_size = info_ptr->tx_attr ? info_ptr->tx_attr->inject_size : 0;
+    const auto capabilities = detail::from_fi_caps(info_ptr->caps);
     endpoint_type type{endpoint_types::msg};
     const auto format = detail::from_fi_addr_format(info_ptr->addr_format);
     if (info_ptr->ep_attr) {
@@ -59,14 +60,28 @@ auto scalable_endpoint::create(const domain& dom,
     }
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
-            resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format, max_msg_size, inject_size);
+        auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(resource,
+                                                                            sep,
+                                                                            tx_ctx_cnt,
+                                                                            rx_ctx_cnt,
+                                                                            type,
+                                                                            format,
+                                                                            max_msg_size,
+                                                                            inject_size,
+                                                                            capabilities);
         return scalable_endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
-        default_resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format, max_msg_size, inject_size);
+    auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(default_resource,
+                                                                        sep,
+                                                                        tx_ctx_cnt,
+                                                                        rx_ctx_cnt,
+                                                                        type,
+                                                                        format,
+                                                                        max_msg_size,
+                                                                        inject_size,
+                                                                        capabilities);
     return scalable_endpoint{std::move(impl)};
 }
 
@@ -120,8 +135,13 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
     }
 
     auto* resource = std::pmr::get_default_resource();
-    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
-        resource, tx_ep, impl_->type, impl_->addr_format, impl_->max_msg_size, impl_->inject_size);
+    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
+                                                                  tx_ep,
+                                                                  impl_->type,
+                                                                  impl_->addr_format,
+                                                                  impl_->max_msg_size,
+                                                                  impl_->inject_size,
+                                                                  impl_->capabilities);
     return endpoint{std::move(ep_impl)};
 }
 
@@ -142,8 +162,13 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
     }
 
     auto* resource = std::pmr::get_default_resource();
-    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
-        resource, rx_ep, impl_->type, impl_->addr_format, impl_->max_msg_size);
+    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
+                                                                  rx_ep,
+                                                                  impl_->type,
+                                                                  impl_->addr_format,
+                                                                  impl_->max_msg_size,
+                                                                  0UZ,
+                                                                  impl_->capabilities);
     return endpoint{std::move(ep_impl)};
 }
 

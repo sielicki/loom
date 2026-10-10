@@ -61,16 +61,17 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
     auto addr_fmt = detail::from_fi_addr_format(info_ptr->addr_format);
     const auto max_msg_size = info_ptr->ep_attr->max_msg_size;
     const auto inject_size = info_ptr->tx_attr ? info_ptr->tx_attr->inject_size : 0;
+    const auto capabilities = detail::from_fi_caps(info_ptr->caps);
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
-            resource, ep, ep_type, addr_fmt, max_msg_size, inject_size);
+            resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
         return endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
-        default_resource, ep, ep_type, addr_fmt, max_msg_size, inject_size);
+        default_resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
     return endpoint{std::move(impl)};
 }
 

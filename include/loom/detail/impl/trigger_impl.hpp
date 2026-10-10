@@ -18,6 +18,7 @@
 #include "loom/core/allocator.hpp"
 #include "loom/core/error.hpp"
 #include "loom/core/trigger.hpp"
+#include "loom/detail/impl/endpoint_impl.hpp"
 
 namespace loom::trigger::detail {
 
@@ -544,16 +545,7 @@ auto flush_work(domain& dom, counter& triggering_cntr) -> void_result {
 }
 
 auto supports_trigger(const endpoint& ep) -> bool {
-    if (!ep) {
-        return false;
-    }
-
-    auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
-    if (fid_ep == nullptr) {
-        return false;
-    }
-
-    return true;
+    return ep.impl_ && ep.impl_->ep && ep.impl_->capabilities.has(capability::trigger);
 }
 
 }  // namespace loom::trigger

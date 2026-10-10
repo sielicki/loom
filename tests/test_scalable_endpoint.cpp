@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/core/rma.hpp>
 #include <loom/core/scalable_endpoint.hpp>
+#include <loom/core/trigger.hpp>
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
@@ -64,11 +65,13 @@ struct scalable_provider {
 
 TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][scalable]") {
     const bool receive = GENERATE(false, true);
+    const bool triggered = GENERATE(false, true);
     scalable_provider native;
     loom::domain domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
         loom::get_default_resource(), &native.domain_handle)};
     auto* raw_info = fi_allocinfo();
     REQUIRE(raw_info);
+    raw_info->caps = FI_MSG | (triggered ? FI_TRIGGER : 0);
     raw_info->ep_attr->type = FI_EP_RDM;
     raw_info->ep_attr->max_msg_size = 16384;
     raw_info->tx_attr->inject_size = 32;
@@ -85,6 +88,7 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     REQUIRE_FALSE(sep->rx_context(3));
     auto context = receive ? sep->rx_context(2) : sep->tx_context(1);
     REQUIRE(context);
+    REQUIRE(loom::trigger::supports_trigger(*context) == triggered);
     REQUIRE(loom::rma::get_max_rma_size(*context) == 16384);
     REQUIRE(loom::rma::get_inject_size(*context) == (receive ? 0 : 32));
     REQUIRE(context->get_type().value() == loom::endpoint_type{loom::endpoint_types::rdm});
