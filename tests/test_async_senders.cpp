@@ -8,6 +8,7 @@
 #include <execution>
 #include <memory>
 #include <ranges>
+#include <stop_token>
 #include <string_view>
 #include <tuple>
 #include <vector>
@@ -38,6 +39,27 @@ TEST_CASE("portable algorithms deliver values and errors", "[execution]") {
                                ex::upon_error([](std::error_code ec) { return ec; }));
     REQUIRE(error.has_value());
     REQUIRE(std::get<0>(*error) == std::errc::bad_file_descriptor);
+}
+
+TEST_CASE("execution queries preserve the requested stop token", "[execution]") {
+#if defined(LOOM_EXECUTION_BACKEND_STD)
+    std::inplace_stop_source source;
+#else
+    loom::execution::impl::inplace_stop_source source;
+#endif
+    using stop_token = decltype(source.get_token());
+    struct environment {
+        stop_token token;
+        auto query(decltype(loom::execution::get_stop_token)) const noexcept -> stop_token {
+            return token;
+        }
+    };
+    const auto token = loom::execution::get_stop_token(environment{source.get_token()});
+    REQUIRE(token.stop_possible());
+    REQUIRE_FALSE(token.stop_requested());
+    source.request_stop();
+    REQUIRE(token.stop_requested());
+    REQUIRE_FALSE(loom::execution::get_stop_token(loom::execution::fabric_env{}).stop_possible());
 }
 
 TEST_CASE("schedule completes inline", "[execution]") {

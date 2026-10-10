@@ -121,8 +121,8 @@ struct provider {
                 return -FI_EAGAIN;
             if (self.fail)
                 return -FI_EAVAIL;
-            *static_cast<fi_cq_tagged_entry*>(output) = {
-                .op_context = self.take(), .len = self.completion_length};
+            *static_cast<fi_cq_tagged_entry*>(output) = {.op_context = self.take(),
+                                                         .len = self.completion_length};
             return 1;
         },
         .readerr = [](fid_cq* cq, fi_cq_err_entry* output, std::uint64_t) -> ssize_t {

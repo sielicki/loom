@@ -153,7 +153,6 @@ using impl::get_completion_scheduler;
 using impl::get_env;
 using impl::get_forward_progress_guarantee;
 using impl::get_scheduler;
-using impl::get_stop_token;
 using impl::just;
 using impl::just_error;
 using impl::just_stopped;
@@ -179,8 +178,10 @@ using impl::upon_stopped;
 using impl::when_all;
 
 #    if defined(LOOM_EXECUTION_BACKEND_STD)
+using std::get_stop_token;
 using std::this_thread::sync_wait;
 #    else
+using impl::get_stop_token;
 using impl::sync_wait;
 #    endif
 
