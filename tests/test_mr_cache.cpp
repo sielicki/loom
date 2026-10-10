@@ -56,12 +56,18 @@ TEST_CASE("cache retains registrations sharing a page", "[mr_cache]") {
         auto dma = cache.lookup_dmabuf(buffer.data(), 32, mr_access_flags::send, 1);
         REQUIRE(dma);
         REQUIRE(dma->key() != first->key());
+        auto host = cache.lookup(buffer.data(), 32, mr_access_flags::send);
+        REQUIRE(host);
+        REQUIRE(host->key() == first->key());
     }
     SECTION("heterogeneous memory") {
         auto device =
             cache.lookup_hmem(buffer.data(), 32, mr_access_flags::send, hmem_device::cuda(0));
         REQUIRE(device);
         REQUIRE(device->key() != first->key());
+        auto host = cache.lookup(buffer.data(), 32, mr_access_flags::send);
+        REQUIRE(host);
+        REQUIRE(host->key() == first->key());
     }
 
     REQUIRE(first->length() == 4096);

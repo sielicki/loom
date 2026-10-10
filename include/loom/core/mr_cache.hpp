@@ -42,6 +42,7 @@ struct mr_cache_entry_base {
     std::uintptr_t base_addr{0};           ///< Base address of registered region
     std::size_t length{0};                 ///< Length of registered region
     mr_access access{};                    ///< Access flags for the region
+    bool host_memory{true};                ///< Eligible for ordinary host lookup
     std::atomic<std::size_t> refcount{0};  ///< Reference count
     std::optional<memory_region> mr{};     ///< Cached memory region
 
@@ -433,6 +434,7 @@ public:
 
         auto entry =
             std::make_unique<detail::mr_cache_entry_base>(aligned_base, aligned_length, access);
+        entry->host_memory = false;
 
         auto mr_result = memory_region::register_dmabuf(*domain_,
                                                         std::bit_cast<void*>(aligned_base),
@@ -478,6 +480,7 @@ public:
 
         auto entry =
             std::make_unique<detail::mr_cache_entry_base>(aligned_base, aligned_length, access);
+        entry->host_memory = false;
 
         auto mr_result = memory_region::register_hmem(*domain_,
                                                       std::bit_cast<void*>(aligned_base),
@@ -599,7 +602,7 @@ private:
              it != entries_.rend();
              ++it) {
             auto& entry = *it->second;
-            if (entry.contains(addr, length) && entry.access.has(access)) {
+            if (entry.host_memory && entry.contains(addr, length) && entry.access.has(access)) {
                 return it->second.get();
             }
         }
