@@ -45,6 +45,7 @@ struct provider {
     std::size_t completion_length{7};
     void* expected_result{};
     void* expected_result_descriptor{};
+    std::uint64_t remote_value{42};
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
@@ -96,10 +97,10 @@ struct provider {
                 ->store_result(result, result_descriptor, ctx);
         },
         .compwrite = [](fid_ep* ep,
-                        const void*,
+                        const void* value,
                         std::size_t,
                         void*,
-                        const void*,
+                        const void* compare,
                         void*,
                         void* result,
                         void* result_descriptor,
@@ -109,8 +110,12 @@ struct provider {
                         fi_datatype,
                         fi_op,
                         void* ctx) -> ssize_t {
-            return static_cast<provider*>(ep->fid.context)
-                ->store_result(result, result_descriptor, ctx);
+            auto& self = *static_cast<provider*>(ep->fid.context);
+            const auto status = self.store_result(result, result_descriptor, ctx);
+            if (status == 0 && self.remote_value == *static_cast<const std::uint64_t*>(compare)) {
+                self.remote_value = *static_cast<const std::uint64_t*>(value);
+            }
+            return status;
         },
     };
     fi_ops_cq completions{
@@ -164,6 +169,22 @@ struct provider {
     }
 };
 }  // namespace
+
+TEST_CASE("compare swap senders compare before replacing remote data", "[execution][progress]") {
+    const auto expected = GENERATE(std::uint64_t{42}, std::uint64_t{84});
+    provider fabric;
+    completion_state state;
+    auto operation = loom::execution::connect(
+        loom::rma_async(fabric.ep).compare_swap<std::uint64_t>(
+            loom::rma_addr{0x1000}, expected, 84, loom::mr_key{1}, nullptr, &fabric.cq),
+        receiver{&state});
+    loom::execution::start(operation);
+    REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+    REQUIRE(state.calls == 1);
+    REQUIRE_FALSE(state.error);
+    REQUIRE(state.bytes == 42);
+    REQUIRE(fabric.remote_value == (expected == 42 ? 84 : 42));
+}
 
 TEST_CASE("execution progress completes composed fabric operations", "[execution][progress]") {
     provider fabric;

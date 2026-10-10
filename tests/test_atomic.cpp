@@ -1,11 +1,108 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/detail/impl/endpoint_impl.hpp>
+#include <loom/detail/impl/memory_impl.hpp>
 #include <loom/loom.hpp>
 
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace loom;
+
+namespace {
+struct atomic_provider {
+    std::uint64_t remote_value{42};
+    const void* operand{};
+    const void* comparison{};
+    void* operand_descriptor{};
+    void* comparison_descriptor{};
+    void* result_descriptor{};
+    void* context{};
+    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_atomic atomics{
+        .size = sizeof(fi_ops_atomic),
+        .compwrite = [](fid_ep* ep,
+                        const void* buf,
+                        std::size_t count,
+                        void* desc,
+                        const void* compare,
+                        void* compare_desc,
+                        void* result,
+                        void* result_desc,
+                        fi_addr_t destination,
+                        std::uint64_t address,
+                        std::uint64_t key,
+                        fi_datatype datatype,
+                        fi_op operation,
+                        void* context) -> ssize_t {
+            REQUIRE(count == 1);
+            REQUIRE(datatype == FI_UINT64);
+            REQUIRE(operation == FI_CSWAP);
+            REQUIRE(destination == FI_ADDR_UNSPEC);
+            REQUIRE(address == 0x1000);
+            REQUIRE(key == 0x1234);
+            auto& self = *static_cast<atomic_provider*>(ep->fid.context);
+            self.operand = buf;
+            self.comparison = compare;
+            self.operand_descriptor = desc;
+            self.comparison_descriptor = compare_desc;
+            self.result_descriptor = result_desc;
+            self.context = context;
+            *static_cast<std::uint64_t*>(result) = self.remote_value;
+            if (self.remote_value == *static_cast<const std::uint64_t*>(compare)) {
+                self.remote_value = *static_cast<const std::uint64_t*>(buf);
+            }
+            return 0;
+        },
+    };
+    fid_ep handle{.fid = {.context = this, .ops = &ops}, .atomic = &atomics};
+
+    auto endpoint() -> loom::endpoint {
+        return loom::endpoint{detail::make_pmr_unique<detail::endpoint_impl>(
+            get_default_resource(), &handle, endpoint_types::msg, address_format::inet)};
+    }
+};
+}  // namespace
+
+TEST_CASE("atomic compare and swap preserves operand roles", "[atomic]") {
+    auto expected = GENERATE(std::uint64_t{42}, std::uint64_t{84});
+    const auto typed = GENERATE(false, true);
+    CAPTURE(expected, typed);
+    atomic_provider native;
+    auto ep = native.endpoint();
+    const std::uint64_t desired{84};
+    std::uint64_t previous{};
+    fid_mr compare_handle{.fid = {.ops = &native.ops}, .mem_desc = &compare_handle};
+    fid_mr result_handle{.fid = {.ops = &native.ops}, .mem_desc = &result_handle};
+    memory_region compare_mr{detail::make_pmr_unique<detail::memory_region_impl>(
+        get_default_resource(), &compare_handle, &expected, sizeof(expected))};
+    memory_region result_mr{detail::make_pmr_unique<detail::memory_region_impl>(
+        get_default_resource(), &result_handle, &previous, sizeof(previous))};
+    const remote_memory remote{0x1000, 0x1234, sizeof(previous)};
+    fi_context2 context{};
+    const auto result =
+        typed ? atomic::cas(ep, expected, desired, &previous, result_mr, remote, &context)
+              : atomic::compare_swap(ep,
+                                     atomic::datatype::uint64,
+                                     &expected,
+                                     &desired,
+                                     &previous,
+                                     1,
+                                     &compare_mr,
+                                     &result_mr,
+                                     remote,
+                                     &context);
+    REQUIRE(result);
+    REQUIRE(previous == 42);
+    REQUIRE(native.remote_value == (expected == 42 ? desired : 42));
+    REQUIRE(native.operand == &desired);
+    REQUIRE(native.comparison == &expected);
+    REQUIRE(native.operand_descriptor == nullptr);
+    REQUIRE(native.comparison_descriptor == (typed ? nullptr : &compare_handle));
+    REQUIRE(native.result_descriptor == &result_handle);
+    REQUIRE(native.context == &context);
+}
 
 TEST_CASE("atomic_type concept", "[atomic]") {
     static_assert(atomic::atomic_type<int8_t>);
