@@ -25,7 +25,6 @@
 #include <asio/any_io_executor.hpp>
 #include <asio/async_result.hpp>
 #include <asio/buffer.hpp>
-#include <asio/default_completion_token.hpp>
 #include <asio/io_context.hpp>
 
 namespace loom::asio {
