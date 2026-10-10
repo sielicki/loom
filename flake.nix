@@ -57,6 +57,14 @@
           libfabric = inputs'.libfabric.packages.default.override {
             version = "2.7.0";
             src = inputs.libfabric-src;
+            libcxi = inputs'.libfabric.packages.libcxi.override {
+              # Criterion 2.4.2 uses SIZE_MAX without including its definition.
+              criterion = pkgs.criterion.overrideAttrs (old: {
+                postPatch = (old.postPatch or "") + ''
+                  sed -i '1i#include <stdint.h>' include/criterion/alloc.h
+                '';
+              });
+            };
           };
 
           # Use our custom stdexec derivation (header-only)
