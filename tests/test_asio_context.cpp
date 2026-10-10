@@ -10,10 +10,61 @@
 #include <chrono>
 #include <thread>
 
+#include <asio/bind_allocator.hpp>
+#include <asio/bind_cancellation_slot.hpp>
 #include <asio/io_context.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 using namespace std::literals;
+
+namespace {
+template <typename T>
+struct tracking_allocator {
+    using value_type = T;
+    int* deallocations{};
+    explicit tracking_allocator(int* count) : deallocations(count) {}
+    tracking_allocator(const tracking_allocator&) = default;
+    tracking_allocator(tracking_allocator&& other) noexcept
+        : deallocations(std::exchange(other.deallocations, nullptr)) {}
+    template <typename U>
+    tracking_allocator(const tracking_allocator<U>& other) : deallocations(other.deallocations) {}
+    auto allocate(std::size_t count) -> T* { return std::allocator<T>{}.allocate(count); }
+    void deallocate(T* pointer, std::size_t count) noexcept {
+        if (deallocations) {
+            ++*deallocations;
+        }
+        std::allocator<T>{}.deallocate(pointer, count);
+    }
+};
+}  // namespace
+
+TEST_CASE("completion preserves allocator state and clears cancellation", "[asio][context]") {
+    ::asio::io_context ioc;
+    ::asio::cancellation_signal cancellation;
+    loom::endpoint ep;
+    int deallocations{};
+    int completions{};
+    auto handler = ::asio::bind_allocator(
+        tracking_allocator<std::byte>{&deallocations},
+        ::asio::bind_cancellation_slot(cancellation.slot(),
+                                       [&](std::error_code, std::size_t) { ++completions; }));
+    auto* ctx = loom::asio::make_asio_context(std::move(handler), ioc.get_executor(), &ep);
+    REQUIRE(cancellation.slot().has_handler());
+    SECTION("success") {
+        ctx->complete(loom::completion_event{});
+    }
+    SECTION("error") {
+        ctx->fail(std::make_error_code(std::errc::io_error));
+    }
+    SECTION("stopped") {
+        ctx->cancel();
+    }
+    REQUIRE_FALSE(cancellation.slot().has_handler());
+    REQUIRE(deallocations == 1);
+    cancellation.emit(::asio::cancellation_type::terminal);
+    ioc.run();
+    REQUIRE(completions == 1);
+}
 
 TEST_CASE("asio_context_erased from_fi_context nullptr", "[asio][context]") {
     auto* result = loom::asio::asio_context_erased::from_fi_context(nullptr);

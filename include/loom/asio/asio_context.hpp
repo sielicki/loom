@@ -213,7 +213,9 @@ public:
      * @param executor The executor to dispatch on.
      */
     asio_context(Handler handler, Executor executor)
-        : handler_(std::move(handler)), executor_(std::move(executor)) {}
+        : handler_(std::move(handler)), executor_(std::move(executor)),
+          allocator_(::asio::get_associated_allocator(handler_)),
+          cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)) {}
 
     /**
      * @brief Constructs a context with a handler, executor, and endpoint for cancellation.
@@ -222,8 +224,16 @@ public:
      * @param ep The endpoint for cancellation support.
      */
     asio_context(Handler handler, Executor executor, endpoint* ep)
-        : handler_(std::move(handler)), executor_(std::move(executor)), endpoint_(ep) {
+        : handler_(std::move(handler)), executor_(std::move(executor)),
+          allocator_(::asio::get_associated_allocator(handler_)),
+          cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)), endpoint_(ep) {
         setup_cancellation();
+    }
+
+    ~asio_context() override {
+        if (endpoint_ && cancellation_slot_.is_connected()) {
+            cancellation_slot_.clear();
+        }
     }
 
     /**
@@ -273,9 +283,7 @@ public:
      * @brief Returns the associated allocator.
      * @return The allocator.
      */
-    [[nodiscard]] auto get_allocator() const -> allocator_type {
-        return ::asio::get_associated_allocator(handler_);
-    }
+    [[nodiscard]] auto get_allocator() const -> allocator_type { return allocator_; }
 
     /**
      * @brief Allocates and constructs a new asio_context.
@@ -318,14 +326,13 @@ public:
      * @return The cancellation slot.
      */
     [[nodiscard]] auto get_cancellation_slot() const noexcept -> cancellation_slot_type {
-        return ::asio::get_associated_cancellation_slot(handler_);
+        return cancellation_slot_;
     }
 
 private:
     void setup_cancellation() {
-        auto slot = ::asio::get_associated_cancellation_slot(handler_);
-        if (slot.is_connected()) {
-            slot.assign(cancellation_handler(endpoint_, this->as_fi_context()));
+        if (cancellation_slot_.is_connected()) {
+            cancellation_slot_.assign(cancellation_handler(endpoint_, this->as_fi_context()));
         }
     }
 
@@ -343,6 +350,8 @@ private:
 
     Handler handler_;
     Executor executor_;
+    allocator_type allocator_;
+    cancellation_slot_type cancellation_slot_;
     endpoint* endpoint_{nullptr};
 };
 
