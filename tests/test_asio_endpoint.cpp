@@ -5,6 +5,7 @@
  */
 
 #include <loom/asio.hpp>
+#include <loom/detail/impl/endpoint_impl.hpp>
 #include <loom/loom.hpp>
 
 #include <array>
@@ -14,6 +15,39 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 #include <catch2/catch_test_macros.hpp>
+
+TEST_CASE("deferred operations retain their buffer descriptors", "[asio][endpoint]") {
+    ::asio::io_context ioc;
+    std::size_t submitted{};
+    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_msg messages{
+        .size = sizeof(fi_ops_msg),
+        .send =
+            [](fid_ep* ep, const void*, std::size_t length, void*, fi_addr_t, void*) -> ssize_t {
+            *static_cast<std::size_t*>(ep->fid.context) = length;
+            return -FI_EIO;
+        },
+    };
+    fid_ep native{.fid = {.context = &submitted, .ops = &ops}, .msg = &messages};
+    loom::endpoint fabric{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+        loom::get_default_resource(),
+        &native,
+        loom::endpoint_types::rdm,
+        loom::address_format::unspecified)};
+    loom::asio::endpoint endpoint{ioc.get_executor(), std::move(fabric)};
+    std::array<std::byte, 64> storage{};
+    std::array<::asio::mutable_buffer, 1> buffers{::asio::buffer(storage)};
+    auto operation = endpoint.async_send(buffers, ::asio::deferred);
+    buffers[0] = {};
+    bool completed{};
+    std::move(operation)([&](std::error_code error, std::size_t) {
+        REQUIRE(error == loom::errc::io_error);
+        completed = true;
+    });
+    ioc.run();
+    REQUIRE(completed);
+    REQUIRE(submitted == storage.size());
+}
 
 using namespace std::literals;
 

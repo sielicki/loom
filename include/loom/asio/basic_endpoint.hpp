@@ -223,7 +223,7 @@ public:
     auto async_send(const ConstBufferSequence& buffers,
                     CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, &buffers](auto handler) {
+            [this, buffers](auto handler) {
                 auto span = buffers_to_const_span(buffers);
                 auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
 
@@ -252,7 +252,7 @@ public:
     async_receive(const MutableBufferSequence& buffers,
                   CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, &buffers](auto handler) {
+            [this, buffers](auto handler) {
                 auto span = buffers_to_span(buffers);
                 auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
 
@@ -281,7 +281,7 @@ public:
         std::uint64_t tag,
         CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, &buffers, tag](auto handler) {
+            [this, buffers, tag](auto handler) {
                 auto span = buffers_to_const_span(buffers);
                 auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
 
@@ -312,7 +312,7 @@ public:
         std::uint64_t ignore,
         CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, &buffers, tag, ignore](auto handler) {
+            [this, buffers, tag, ignore](auto handler) {
                 auto span = buffers_to_span(buffers);
                 auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
 
@@ -343,7 +343,7 @@ public:
                    remote_memory remote,
                    CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, &buffers, &local_mr, remote](auto handler) {
+            [this, buffers, &local_mr, remote](auto handler) {
                 auto span = buffers_to_const_span(buffers);
                 auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
 
@@ -374,7 +374,7 @@ public:
                     remote_memory remote,
                     CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, &buffers, &local_mr, remote](auto handler) {
+            [this, buffers, &local_mr, remote](auto handler) {
                 auto span = buffers_to_span(buffers);
                 auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
 
