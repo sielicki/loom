@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <memory_resource>
@@ -614,19 +615,13 @@ private:
     [[nodiscard]] auto
     find_existing_entry(std::uintptr_t addr, std::size_t length, mr_access access) const noexcept
         -> detail::mr_cache_entry_base* {
-        auto aligned_base = traits::align_down(addr);
-
-        auto it = entries_.upper_bound(aligned_base);
-        if (it != entries_.begin()) {
-            --it;
-        }
-
-        while (it != entries_.end() && it->first <= addr) {
+        for (auto it = std::make_reverse_iterator(entries_.upper_bound(addr));
+             it != entries_.rend();
+             ++it) {
             auto& entry = *it->second;
             if (entry.contains(addr, length) && entry.access.has(access)) {
                 return it->second.get();
             }
-            ++it;
         }
 
         return nullptr;
@@ -641,7 +636,7 @@ private:
     domain* domain_;                   ///< Fabric domain
     memory_resource* resource_;        ///< Memory resource
     mutable std::shared_mutex mutex_;  ///< Lock for thread safety
-    std::map<std::uintptr_t, std::unique_ptr<detail::mr_cache_entry_base>>
+    std::multimap<std::uintptr_t, std::unique_ptr<detail::mr_cache_entry_base>>
         entries_;           ///< Cache entries
     mr_cache_stats stats_;  ///< Cache statistics
 };

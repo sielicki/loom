@@ -1,7 +1,65 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/core/mr_cache.hpp>
 
+#include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
+
+TEST_CASE("cache retains registrations sharing a page", "[mr_cache]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 8192> buffer{};
+
+    auto first = cache.lookup(buffer.data(), 32, mr_access_flags::send);
+    REQUIRE(first);
+
+    SECTION("larger range") {
+        auto larger = cache.lookup(buffer, mr_access_flags::send);
+        REQUIRE(larger);
+        REQUIRE(larger->length() == buffer.size());
+        REQUIRE(larger->key() != first->key());
+    }
+    SECTION("different permissions") {
+        auto receiver = cache.lookup(buffer.data(), 32, mr_access_flags::recv);
+        REQUIRE(receiver);
+        REQUIRE(receiver->key() != first->key());
+        auto sender = cache.lookup(buffer.data(), 32, mr_access_flags::send);
+        REQUIRE(sender);
+        REQUIRE(sender->key() == first->key());
+    }
+    SECTION("DMA buffer") {
+        auto dma = cache.lookup_dmabuf(buffer.data(), 32, mr_access_flags::send, 1);
+        REQUIRE(dma);
+        REQUIRE(dma->key() != first->key());
+    }
+    SECTION("heterogeneous memory") {
+        auto device =
+            cache.lookup_hmem(buffer.data(), 32, mr_access_flags::send, hmem_device::cuda(0));
+        REQUIRE(device);
+        REQUIRE(device->key() != first->key());
+    }
+
+    REQUIRE(first->length() == 4096);
+    REQUIRE(first->refcount() == 1);
+    REQUIRE(cache.size() == 2);
+    REQUIRE(provider.live_regions == 2);
+}
+
+TEST_CASE("cache finds an earlier overlapping registration", "[mr_cache]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 8192> buffer{};
+
+    auto large = cache.lookup(buffer, mr_access_flags::send);
+    auto small = cache.lookup(buffer.data() + 4096, 32, mr_access_flags::recv);
+    REQUIRE(large);
+    REQUIRE(small);
+    auto found = cache.lookup(buffer.data() + 4096, 4096, mr_access_flags::send);
+    REQUIRE(found);
+    REQUIRE(found->key() == large->key());
+    REQUIRE(provider.registrations == 2);
+}
 
 TEST_CASE("cache_traits alignment", "[mr_cache]") {
     using traits = loom::mr_cache_traits<loom::provider::verbs_tag>;
