@@ -318,7 +318,9 @@ if(LOOM_USE_ASIO)
     endif()
 
     if(NOT LOOM_HAS_ASIO)
-        message(STATUS "Asio not found - Asio integration will be skipped")
+        message(FATAL_ERROR
+            "LOOM_USE_ASIO requires Asio. Install Asio or enable LOOM_FETCHCONTENT_ASIO."
+        )
     endif()
 endif()
 
