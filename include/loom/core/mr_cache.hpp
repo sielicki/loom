@@ -541,19 +541,7 @@ public:
     /**
      * @brief Clears all unreferenced cache entries.
      */
-    void clear() {
-        std::unique_lock lock(mutex_);
-
-        for (auto& [addr, entry] : entries_) {
-            if (entry->refcount.load(std::memory_order_acquire) == 0) {
-                stats_.total_registered_bytes -= entry->length;
-                ++stats_.evictions;
-            }
-        }
-
-        entries_.clear();
-        stats_.current_entries = 0;
-    }
+    void clear() { evict_unreferenced(); }
 
     /**
      * @brief Evicts all unreferenced entries.

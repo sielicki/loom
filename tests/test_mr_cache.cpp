@@ -61,6 +61,37 @@ TEST_CASE("cache finds an earlier overlapping registration", "[mr_cache]") {
     REQUIRE(provider.registrations == 2);
 }
 
+TEST_CASE("clearing a cache preserves live handles", "[mr_cache]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 8192> buffer{};
+
+    {
+        auto live = cache.lookup(buffer.data(), 32, mr_access_flags::send);
+        REQUIRE(live);
+        {
+            auto unused = cache.lookup(buffer.data() + 4096, 32, mr_access_flags::send);
+            REQUIRE(unused);
+        }
+        cache.clear();
+        REQUIRE(live->refcount() == 1);
+        REQUIRE(live->mr()->address() == buffer.data());
+        REQUIRE(provider.live_regions == 1);
+        REQUIRE(cache.size() == 1);
+        REQUIRE(cache.stats().current_entries == 1);
+        REQUIRE(cache.stats().total_registered_bytes == 4096);
+        REQUIRE(cache.stats().evictions == 1);
+    }
+
+    cache.clear();
+    REQUIRE(provider.live_regions == 0);
+    REQUIRE(cache.size() == 0);
+    REQUIRE(cache.stats().current_entries == 0);
+    REQUIRE(cache.stats().total_registered_bytes == 0);
+    REQUIRE(cache.stats().evictions == 2);
+}
+
 TEST_CASE("cache_traits alignment", "[mr_cache]") {
     using traits = loom::mr_cache_traits<loom::provider::verbs_tag>;
 
