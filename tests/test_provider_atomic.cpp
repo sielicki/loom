@@ -210,6 +210,43 @@ TEST_CASE("fetch_add_op has execute_native and execute_staged", "[provider_atomi
     });
 }
 
+TEST_CASE("provider atomic helpers borrow caller operand storage", "[provider_atomic]") {
+    const auto kind = GENERATE(0, 1, 2, 3);
+    CAPTURE(kind);
+    atomic_transport native;
+    auto ep = native.endpoint();
+    loom::domain domain;
+    loom::provider_atomic_context<loom::provider::efa_tag> context{domain};
+    loom::memory_region mr;
+    const std::uint64_t operand{2};
+    const std::uint64_t expected{42};
+    const std::uint64_t desired{84};
+    std::uint64_t previous{};
+    const loom::remote_memory remote{0x1000, 1, sizeof(previous)};
+    switch (kind) {
+        case 0:
+            REQUIRE(loom::provider_atomic::add(context, ep, operand, nullptr, remote));
+            break;
+        case 1:
+            REQUIRE(loom::provider_atomic::fetch_add(context, ep, operand, &previous, mr, remote));
+            break;
+        case 2:
+            REQUIRE(loom::provider_atomic::compare_swap(
+                context, ep, expected, desired, &previous, mr, remote));
+            break;
+        case 3:
+            REQUIRE(loom::provider_atomic::fetch_op(
+                context, ep, loom::atomic::operation::prod, operand, &previous, mr, remote));
+            break;
+    }
+    // A provider may consume operands only after the submitting helper returns.
+    native.complete();
+    REQUIRE(native.remote_value == (kind < 2 ? 44 : 84));
+    REQUIRE(previous == (kind == 0 ? 0 : 42));
+    REQUIRE(native.operand == (kind == 2 ? &desired : &operand));
+    REQUIRE(native.comparison == (kind == 2 ? &expected : nullptr));
+}
+
 TEST_CASE("atomic_add_op has execute_native and execute_staged", "[provider_atomic]") {
     using op_type = loom::atomic_add_op<std::uint64_t>;
 

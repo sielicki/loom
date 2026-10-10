@@ -132,7 +132,7 @@ template <atomic::atomic_type T>
 struct atomic_add_op {
     endpoint* ep;          ///< Target endpoint
     T operand;             ///< Value to add
-    memory_region* mr;     ///< Memory region (for staged operations)
+    memory_region* mr;     ///< Legacy staging registration (unused)
     remote_memory remote;  ///< Remote memory location
     void* context;         ///< Operation context
 
@@ -269,12 +269,11 @@ public:
     /**
      * @brief Executes an atomic operation using the appropriate method.
      * @tparam Op The operation type (must have execute_native/execute_staged).
-     * @param op The operation to execute.
+     * @param op Borrowed operation descriptor; keep its storage alive until completion.
      * @return Success or error result.
      */
     template <typename Op>
     [[nodiscard]] auto execute(Op&& op) -> loom::result<void> {
-        // The operation and its operand storage must survive until completion.
         return std::forward<Op>(op).execute_native();
     }
 
@@ -304,6 +303,7 @@ private:
 /**
  * @namespace loom::provider_atomic
  * @brief Provider-aware atomic operation functions.
+ * @note Operand and result storage must remain alive until asynchronous completion.
  */
 namespace provider_atomic {
 
@@ -321,14 +321,14 @@ namespace provider_atomic {
  * @return Success or error result.
  */
 template <provider_tag P, atomic::atomic_type T>
-[[nodiscard]] auto fetch_add(provider_atomic_context<P>& ctx,
+[[nodiscard]] auto fetch_add([[maybe_unused]] provider_atomic_context<P>& ctx,
                              endpoint& ep,
                              const T& operand,
                              T* result,
                              memory_region& mr_result,
                              remote_memory remote,
                              void* context = nullptr) -> loom::result<void> {
-    return ctx.execute(fetch_add_op<T>{&ep, operand, result, &mr_result, remote, context});
+    return atomic::fetch_add(ep, operand, result, mr_result, remote, context);
 }
 
 /**
@@ -338,19 +338,19 @@ template <provider_tag P, atomic::atomic_type T>
  * @param ctx The provider atomic context.
  * @param ep The endpoint for the operation.
  * @param operand The value to add.
- * @param mr Memory region (for staged operations).
+ * @param mr Legacy staging registration (unused).
  * @param remote Remote memory location.
  * @param context Optional operation context.
  * @return Success or error result.
  */
 template <provider_tag P, atomic::atomic_type T>
-[[nodiscard]] auto add(provider_atomic_context<P>& ctx,
+[[nodiscard]] auto add([[maybe_unused]] provider_atomic_context<P>& ctx,
                        endpoint& ep,
                        const T& operand,
-                       memory_region* mr,
+                       [[maybe_unused]] memory_region* mr,
                        remote_memory remote,
                        void* context = nullptr) -> loom::result<void> {
-    return ctx.execute(atomic_add_op<T>{&ep, operand, mr, remote, context});
+    return atomic::add(ep, operand, remote, context);
 }
 
 /**
@@ -368,7 +368,7 @@ template <provider_tag P, atomic::atomic_type T>
  * @return Success or error result.
  */
 template <provider_tag P, atomic::atomic_type T>
-[[nodiscard]] auto compare_swap(provider_atomic_context<P>& ctx,
+[[nodiscard]] auto compare_swap([[maybe_unused]] provider_atomic_context<P>& ctx,
                                 endpoint& ep,
                                 const T& compare_value,
                                 const T& swap_value,
@@ -376,8 +376,7 @@ template <provider_tag P, atomic::atomic_type T>
                                 memory_region& mr_old,
                                 remote_memory remote,
                                 void* context = nullptr) -> loom::result<void> {
-    return ctx.execute(
-        compare_swap_op<T>{&ep, compare_value, swap_value, old_value, &mr_old, remote, context});
+    return atomic::cas(ep, compare_value, swap_value, old_value, mr_old, remote, context);
 }
 
 /**
@@ -395,7 +394,7 @@ template <provider_tag P, atomic::atomic_type T>
  * @return Success or error result.
  */
 template <provider_tag P, atomic::atomic_type T>
-[[nodiscard]] auto fetch_op(provider_atomic_context<P>& ctx,
+[[nodiscard]] auto fetch_op([[maybe_unused]] provider_atomic_context<P>& ctx,
                             endpoint& ep,
                             atomic::operation op,
                             const T& operand,
@@ -403,7 +402,16 @@ template <provider_tag P, atomic::atomic_type T>
                             memory_region& mr_result,
                             remote_memory remote,
                             void* context = nullptr) -> loom::result<void> {
-    return ctx.execute(generic_fetch_op<T>{&ep, op, operand, result, &mr_result, remote, context});
+    return atomic::fetch(ep,
+                         op,
+                         atomic::get_datatype<T>(),
+                         &operand,
+                         result,
+                         1,
+                         nullptr,
+                         &mr_result,
+                         remote,
+                         context);
 }
 
 }  // namespace provider_atomic
