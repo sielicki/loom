@@ -202,6 +202,14 @@ auto cq_wait(const CompletionQueueHandle& cq, std::int32_t timeout_ms) -> Comple
     return data;
 }
 
+auto cq_try_wait(const CompletionQueueHandle& cq, const FabricHandle& fabric) -> bool {
+    auto ready = cq.get().try_wait(fabric.get());
+    if (!ready) {
+        throw std::system_error(ready.error());
+    }
+    return *ready;
+}
+
 auto cq_get_wait_fd(const CompletionQueueHandle& cq) -> std::int32_t {
     auto result = cq.get().get_wait_fd();
     if (!result) {
@@ -214,7 +222,8 @@ auto cq_supports_wait(const CompletionQueueHandle& cq) -> bool {
     return cq.get().supports_blocking_wait();
 }
 
-auto av_insert(const AddressVectorHandle& av, rust::Slice<const std::uint8_t> addr) -> std::uint64_t {
+auto av_insert(const AddressVectorHandle& av, rust::Slice<const std::uint8_t> addr)
+    -> std::uint64_t {
     if (!av.get() || addr.empty()) {
         throw std::runtime_error("invalid address vector or empty address");
     }

@@ -345,6 +345,12 @@ impl CompletionQueue {
         Ok(ffi::ffi::cq_get_wait_fd(&self.inner)?)
     }
 
+    /// Prepare a native descriptor wait. A false result requires more polling.
+    /// Call this before every potentially blocking wait on [`Self::wait_fd`].
+    pub fn try_wait(&self) -> Result<bool> {
+        Ok(ffi::ffi::cq_try_wait(&self.inner, &self._domain._fabric.inner)?)
+    }
+
     /// Check if the completion queue supports blocking wait.
     pub fn supports_wait(&self) -> bool {
         ffi::ffi::cq_supports_wait(&self.inner)

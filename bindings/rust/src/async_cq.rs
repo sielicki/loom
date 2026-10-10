@@ -76,7 +76,14 @@ impl AsyncCompletionQueue {
                 return event.into_result();
             }
 
-            // Wait for the fd to become readable
+            // The provider may need progress even though polling found no completion.
+            // Blocking without fi_trywait can miss the event that would wake us.
+            if !self.inner.try_wait()? {
+                tokio::task::yield_now().await;
+                continue;
+            }
+
+            // Wait only after the provider has armed its native wait object.
             let mut guard = self.async_fd.readable().await.map_err(Error::Io)?;
 
             // Try to poll again
@@ -387,6 +394,12 @@ mod tests {
         };
 
         // This may fail if the provider doesn't support wait objects
-        let _cq = AsyncCompletionQueue::new(&domain, 128);
+        if let Ok(cq) = AsyncCompletionQueue::new(&domain, 128) {
+            assert!(cq.inner().try_wait().is_ok());
+            // An empty queue can safely wait without blocking the Tokio executor.
+            let result = tokio::time::timeout(
+                std::time::Duration::from_millis(10), cq.wait_async()).await;
+            assert!(result.is_err());
+        }
     }
 }

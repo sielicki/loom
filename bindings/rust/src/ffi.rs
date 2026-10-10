@@ -187,6 +187,9 @@ pub mod ffi {
         /// Returns CompletionEventData with error_code=-11 if no completion available.
         fn cq_poll(cq: &CompletionQueueHandle) -> CompletionEventData;
 
+        /// Return whether the provider permits blocking on this queue's native wait object.
+        fn cq_try_wait(cq: &CompletionQueueHandle, fabric: &FabricHandle) -> Result<bool>;
+
         /// Wait for a completion with optional timeout.
         /// timeout_ms: -1 = infinite, 0 = non-blocking, >0 = milliseconds.
         fn cq_wait(cq: &CompletionQueueHandle, timeout_ms: i32) -> CompletionEventData;

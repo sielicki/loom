@@ -251,6 +251,9 @@ auto endpoint_get_name(const EndpointHandle& ep) -> rust::Vec<std::uint8_t>;
 /// Poll for a completion (non-blocking)
 auto cq_poll(const CompletionQueueHandle& cq) -> CompletionEventData;
 
+/// Prepare the provider for a native wait on the CQ descriptor.
+auto cq_try_wait(const CompletionQueueHandle& cq, const FabricHandle& fabric) -> bool;
+
 /// Wait for a completion with optional timeout (milliseconds, -1 = infinite)
 auto cq_wait(const CompletionQueueHandle& cq, std::int32_t timeout_ms) -> CompletionEventData;
 
@@ -265,7 +268,8 @@ auto cq_supports_wait(const CompletionQueueHandle& cq) -> bool;
 // ============================================================================
 
 /// Insert an address into the address vector
-auto av_insert(const AddressVectorHandle& av, rust::Slice<const std::uint8_t> addr) -> std::uint64_t;
+auto av_insert(const AddressVectorHandle& av, rust::Slice<const std::uint8_t> addr)
+    -> std::uint64_t;
 
 // ============================================================================
 // Memory region operations
