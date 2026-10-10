@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstring>
+#include <vector>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -478,4 +479,14 @@ TEST_CASE("address_from_raw ethernet parses multicast mac", "[address]") {
 
     const auto& eth = std::get<loom::ethernet_address>(result);
     REQUIRE(eth.is_multicast());
+}
+
+TEST_CASE("IPv6 constructors validate dynamic segment counts", "[address]") {
+    const std::vector<std::uint16_t> short_address(7);
+    const std::vector<std::uint16_t> long_address(9);
+    REQUIRE_THROWS_AS(loom::ipv6_address{short_address}, std::length_error);
+    REQUIRE_THROWS_AS(loom::addresses::ipv6(short_address), std::length_error);
+    REQUIRE_THROWS_AS(loom::ipv6_address{long_address}, std::length_error);
+    const std::vector<std::uint16_t> valid_address(8);
+    REQUIRE_NOTHROW(loom::addresses::ipv6(valid_address));
 }

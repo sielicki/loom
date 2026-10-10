@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <variant>
 
@@ -213,8 +214,11 @@ public:
     constexpr explicit ipv6_address(R&& segments,
                                     std::uint16_t port = 0,
                                     std::uint32_t scope_id = 0,
-                                    std::uint32_t flow_info = 0) noexcept
+                                    std::uint32_t flow_info = 0)
         : port_(port), scope_id_(scope_id), flow_info_(flow_info) {
+        if (std::ranges::size(segments) != segment_count) {
+            throw std::length_error("IPv6 requires exactly eight address segments");
+        }
         std::ranges::copy_n(std::ranges::begin(segments), segment_count, segments_.begin());
     }
 
@@ -622,7 +626,7 @@ template <std::integral A, std::integral B, std::integral C, std::integral D>
  */
 template <std::ranges::contiguous_range R>
     requires std::same_as<std::ranges::range_value_t<R>, std::uint16_t>
-[[nodiscard]] constexpr auto ipv6(R&& segments, std::uint16_t port = 0) noexcept -> address {
+[[nodiscard]] constexpr auto ipv6(R&& segments, std::uint16_t port = 0) -> address {
     return ipv6_address{std::forward<R>(segments), port};
 }
 
