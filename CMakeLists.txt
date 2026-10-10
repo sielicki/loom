@@ -115,31 +115,35 @@ else()
 endif()
 
 # Sanitizers (mutually exclusive in most cases)
+# Sanitizers must instrument consumers that instantiate loom's public templates.
+add_library(loom_sanitizers INTERFACE)
+set_target_properties(loom_sanitizers PROPERTIES EXPORT_NAME sanitizers)
+
 if(LOOM_ENABLE_ASAN)
-    target_compile_options(loom_compile_options INTERFACE
+    target_compile_options(loom_sanitizers INTERFACE
         -fsanitize=address -fno-omit-frame-pointer)
-    target_link_options(loom_compile_options INTERFACE -fsanitize=address)
+    target_link_options(loom_sanitizers INTERFACE -fsanitize=address)
     message(STATUS "AddressSanitizer enabled")
 endif()
 
 if(LOOM_ENABLE_UBSAN)
-    target_compile_options(loom_compile_options INTERFACE
+    target_compile_options(loom_sanitizers INTERFACE
         -fsanitize=undefined -fno-omit-frame-pointer)
-    target_link_options(loom_compile_options INTERFACE -fsanitize=undefined)
+    target_link_options(loom_sanitizers INTERFACE -fsanitize=undefined)
     message(STATUS "UndefinedBehaviorSanitizer enabled")
 endif()
 
 if(LOOM_ENABLE_TSAN)
-    target_compile_options(loom_compile_options INTERFACE
+    target_compile_options(loom_sanitizers INTERFACE
         -fsanitize=thread -fno-omit-frame-pointer)
-    target_link_options(loom_compile_options INTERFACE -fsanitize=thread)
+    target_link_options(loom_sanitizers INTERFACE -fsanitize=thread)
     message(STATUS "ThreadSanitizer enabled")
 endif()
 
 if(LOOM_ENABLE_MSAN)
-    target_compile_options(loom_compile_options INTERFACE
+    target_compile_options(loom_sanitizers INTERFACE
         -fsanitize=memory -fno-omit-frame-pointer)
-    target_link_options(loom_compile_options INTERFACE -fsanitize=memory)
+    target_link_options(loom_sanitizers INTERFACE -fsanitize=memory)
     message(STATUS "MemorySanitizer enabled")
 endif()
 
@@ -503,6 +507,7 @@ target_link_libraries(loom
     PRIVATE
         loom::compile_options
     PUBLIC
+        loom_sanitizers
         ${LOOM_LIBFABRIC_TARGET}
         Threads::Threads
 )
@@ -585,7 +590,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 # Install the main library
-install(TARGETS loom loom_compile_options
+install(TARGETS loom loom_compile_options loom_sanitizers
     EXPORT loomTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
