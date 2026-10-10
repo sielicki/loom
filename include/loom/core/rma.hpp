@@ -3,10 +3,10 @@
 
 #include <rdma/fi_rma.h>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include <sys/uio.h>
 
@@ -60,36 +60,6 @@ struct rma_iov {
 };
 
 /**
- * @namespace loom::rma::detail
- * @brief Implementation details for RMA operations.
- */
-namespace detail {
-
-/// Maximum number of I/O vectors supported
-inline constexpr std::size_t max_iov_count = 16;
-
-/**
- * @brief Converts memory region descriptors to raw pointers.
- * @tparam N Maximum output array size.
- * @param desc Span of memory region descriptors.
- * @param out Output array for raw descriptor pointers.
- * @return Pointer to raw descriptor array, or nullptr if empty.
- */
-template <std::size_t N>
-[[nodiscard]] inline auto descriptors_to_raw(std::span<const mr_descriptor> desc,
-                                             std::array<void*, N>& out) noexcept -> void** {
-    if (desc.empty()) {
-        return nullptr;
-    }
-    for (std::size_t i = 0; i < desc.size() && i < N; ++i) {
-        out[i] = desc[i].raw();
-    }
-    return out.data();
-}
-
-}  // namespace detail
-
-/**
  * @brief Reads data from remote memory into a local buffer.
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
@@ -140,22 +110,32 @@ auto readv(endpoint& ep,
            std::span<const mr_descriptor> desc,
            std::span<const rma_iov> remote_iov,
            Ctx context = {}) -> result<void> {
-    if (remote_iov.empty()) {
+    if (!ep || remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
 
-    std::array<void*, detail::max_iov_count> raw_desc{};
-
-    auto ret = ::fi_readv(fid_ep,
-                          local_iov.data(),
-                          detail::descriptors_to_raw(desc, raw_desc),
-                          local_iov.size(),
-                          FI_ADDR_UNSPEC,
-                          remote_iov[0].addr,
-                          remote_iov[0].key,
-                          to_raw_context(context));
+    std::vector<void*> raw_desc;
+    raw_desc.reserve(desc.size());
+    for (const auto descriptor : desc) {
+        raw_desc.push_back(descriptor.raw());
+    }
+    std::vector<::fi_rma_iov> raw_remote;
+    raw_remote.reserve(remote_iov.size());
+    for (const auto& remote : remote_iov) {
+        raw_remote.push_back({remote.addr, remote.len, remote.key});
+    }
+    const ::fi_msg_rma message{
+        .msg_iov = local_iov.data(),
+        .desc = raw_desc.empty() ? nullptr : raw_desc.data(),
+        .iov_count = local_iov.size(),
+        .addr = FI_ADDR_UNSPEC,
+        .rma_iov = raw_remote.data(),
+        .rma_iov_count = raw_remote.size(),
+        .context = to_raw_context(context),
+    };
+    const auto ret = ::fi_readmsg(fid_ep, &message, 0);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
@@ -215,22 +195,32 @@ auto writev(endpoint& ep,
             std::span<const mr_descriptor> desc,
             std::span<const rma_iov> remote_iov,
             Ctx context = {}) -> result<void> {
-    if (remote_iov.empty()) {
+    if (!ep || remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
 
-    std::array<void*, detail::max_iov_count> raw_desc{};
-
-    auto ret = ::fi_writev(fid_ep,
-                           local_iov.data(),
-                           detail::descriptors_to_raw(desc, raw_desc),
-                           local_iov.size(),
-                           FI_ADDR_UNSPEC,
-                           remote_iov[0].addr,
-                           remote_iov[0].key,
-                           to_raw_context(context));
+    std::vector<void*> raw_desc;
+    raw_desc.reserve(desc.size());
+    for (const auto descriptor : desc) {
+        raw_desc.push_back(descriptor.raw());
+    }
+    std::vector<::fi_rma_iov> raw_remote;
+    raw_remote.reserve(remote_iov.size());
+    for (const auto& remote : remote_iov) {
+        raw_remote.push_back({remote.addr, remote.len, remote.key});
+    }
+    const ::fi_msg_rma message{
+        .msg_iov = local_iov.data(),
+        .desc = raw_desc.empty() ? nullptr : raw_desc.data(),
+        .iov_count = local_iov.size(),
+        .addr = FI_ADDR_UNSPEC,
+        .rma_iov = raw_remote.data(),
+        .rma_iov_count = raw_remote.size(),
+        .context = to_raw_context(context),
+    };
+    const auto ret = ::fi_writemsg(fid_ep, &message, 0);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));

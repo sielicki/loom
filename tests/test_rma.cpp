@@ -1,12 +1,135 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/detail/impl/endpoint_impl.hpp>
 #include <loom/loom.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 using namespace loom;
+
+namespace {
+struct rma_provider {
+    std::size_t calls{};
+    void* context{};
+    std::vector<void*> descriptors;
+    std::vector<std::uint64_t> keys;
+    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_rma rma_ops{
+        .size = sizeof(fi_ops_rma),
+        .readmsg = [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) -> ssize_t {
+            return static_cast<rma_provider*>(ep->fid.context)->transfer(*msg, false);
+        },
+        .writemsg = [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) -> ssize_t {
+            return static_cast<rma_provider*>(ep->fid.context)->transfer(*msg, true);
+        },
+    };
+    fid_ep handle{.fid = {.context = this, .ops = &ops}, .rma = &rma_ops};
+
+    auto endpoint() -> loom::endpoint {
+        return loom::endpoint{
+            loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
+                                                                       &handle,
+                                                                       loom::endpoint_types::msg,
+                                                                       loom::address_format::inet)};
+    }
+
+    auto transfer(const fi_msg_rma& msg, bool write) -> ssize_t {
+        ++calls;
+        context = msg.context;
+        if (msg.desc) {
+            descriptors.assign(msg.desc, msg.desc + msg.iov_count);
+        }
+        std::size_t local_index{}, local_offset{};
+        for (std::size_t i = 0; i < msg.rma_iov_count; ++i) {
+            const auto& remote = msg.rma_iov[i];
+            keys.push_back(remote.key);
+            auto* remote_data = reinterpret_cast<std::byte*>(remote.addr);
+            for (std::size_t offset = 0; offset < remote.len;) {
+                if (local_index == msg.iov_count) {
+                    return -FI_EINVAL;
+                }
+                const auto& local = msg.msg_iov[local_index];
+                const auto count = std::min(local.iov_len - local_offset, remote.len - offset);
+                auto* local_data = static_cast<std::byte*>(local.iov_base) + local_offset;
+                if (write) {
+                    std::memcpy(remote_data + offset, local_data, count);
+                } else {
+                    std::memcpy(local_data, remote_data + offset, count);
+                }
+                offset += count;
+                local_offset += count;
+                if (local_offset == local.iov_len) {
+                    ++local_index;
+                    local_offset = 0;
+                }
+            }
+        }
+        return 0;
+    }
+};
+}  // namespace
+
+TEST_CASE("vectored RMA preserves every remote segment", "[rma]") {
+    rma_provider native;
+    auto ep = native.endpoint();
+    std::array<std::byte, 3> first{std::byte{1}, std::byte{2}, std::byte{3}};
+    std::array<std::byte, 5> second{
+        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8}};
+    std::array<std::byte, 8> local{};
+    std::array<iovec, 2> local_iov{{{local.data(), 4}, {local.data() + 4, 4}}};
+    std::array<rma::rma_iov, 2> remote{{
+        {reinterpret_cast<std::uintptr_t>(first.data()), first.size(), 11},
+        {reinterpret_cast<std::uintptr_t>(second.data()), second.size(), 22},
+    }};
+    int context{};
+    REQUIRE(rma::readv(ep, local_iov, {}, remote, &context));
+    REQUIRE(local == std::array<std::byte, 8>{std::byte{1},
+                                              std::byte{2},
+                                              std::byte{3},
+                                              std::byte{4},
+                                              std::byte{5},
+                                              std::byte{6},
+                                              std::byte{7},
+                                              std::byte{8}});
+    REQUIRE(native.keys == std::vector<std::uint64_t>{11, 22});
+    REQUIRE(native.context == &context);
+    local.fill(std::byte{42});
+    REQUIRE(rma::writev(ep, local_iov, {}, remote, &context));
+    REQUIRE(std::ranges::all_of(first, [](auto byte) { return byte == std::byte{42}; }));
+    REQUIRE(std::ranges::all_of(second, [](auto byte) { return byte == std::byte{42}; }));
+}
+
+TEST_CASE("vectored RMA retains all memory descriptors", "[rma]") {
+    rma_provider native;
+    auto ep = native.endpoint();
+    std::array<std::byte, 20> local{}, remote{};
+    std::array<iovec, 20> iov{};
+    std::array<mr_descriptor, 20> descriptors{};
+    std::vector<void*> expected;
+    for (std::size_t i = 0; i < local.size(); ++i) {
+        iov[i] = {local.data() + i, 1};
+        descriptors[i] = mr_descriptor{local.data() + i};
+        expected.push_back(local.data() + i);
+    }
+    std::array remote_iov{
+        rma::rma_iov{reinterpret_cast<std::uintptr_t>(remote.data()), remote.size(), 1}};
+    SECTION("read") {
+        REQUIRE(rma::readv(ep, iov, descriptors, remote_iov));
+    }
+    SECTION("write") {
+        REQUIRE(rma::writev(ep, iov, descriptors, remote_iov));
+    }
+    REQUIRE(native.descriptors == expected);
+    REQUIRE(rma::readv(ep, iov, std::span{descriptors}.first(1), remote_iov).error() ==
+            errc::invalid_argument);
+    REQUIRE(rma::writev(ep, iov, std::span{descriptors}.first(1), remote_iov).error() ==
+            errc::invalid_argument);
+    REQUIRE(native.calls == 1);
+}
 
 TEST_CASE("rma type definitions", "[rma]") {
     rma::rma_iov iov{};
