@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/detail/impl/completion_queue_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
+#include <loom/detail/impl/memory_impl.hpp>
 #include <loom/execution.hpp>
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace {
 struct completion_state {
@@ -41,6 +43,8 @@ struct provider {
     std::vector<void*> pending;
     bool fail{};
     std::size_t completion_length{7};
+    void* expected_result{};
+    void* expected_result_descriptor{};
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
@@ -81,15 +85,15 @@ struct provider {
                         std::size_t,
                         void*,
                         void* result,
-                        void*,
+                        void* result_descriptor,
                         fi_addr_t,
                         std::uint64_t,
                         std::uint64_t,
                         fi_datatype,
                         fi_op,
                         void* ctx) -> ssize_t {
-            *static_cast<std::uint64_t*>(result) = 42;
-            return static_cast<provider*>(ep->fid.context)->post(ctx);
+            return static_cast<provider*>(ep->fid.context)
+                ->store_result(result, result_descriptor, ctx);
         },
         .compwrite = [](fid_ep* ep,
                         const void*,
@@ -98,15 +102,15 @@ struct provider {
                         const void*,
                         void*,
                         void* result,
-                        void*,
+                        void* result_descriptor,
                         fi_addr_t,
                         std::uint64_t,
                         std::uint64_t,
                         fi_datatype,
                         fi_op,
                         void* ctx) -> ssize_t {
-            *static_cast<std::uint64_t*>(result) = 42;
-            return static_cast<provider*>(ep->fid.context)->post(ctx);
+            return static_cast<provider*>(ep->fid.context)
+                ->store_result(result, result_descriptor, ctx);
         },
     };
     fi_ops_cq completions{
@@ -144,6 +148,14 @@ struct provider {
         std::ranges::fill(static_cast<fi_context2*>(ctx)->internal, nullptr);
         pending.push_back(ctx);
         return 0;
+    }
+    auto store_result(void* result, void* descriptor, void* ctx) -> ssize_t {
+        if (expected_result &&
+            (result != expected_result || descriptor != expected_result_descriptor)) {
+            return -FI_EINVAL;
+        }
+        *static_cast<std::uint64_t*>(result) = 42;
+        return post(ctx);
     }
     auto take() -> void* {
         auto* ctx = pending.front();
@@ -223,5 +235,65 @@ TEST_CASE("execution progress delivers atomic results", "[execution][progress]")
     SECTION("compare swap") {
         run(loom::rma_async(fabric.ep).compare_swap<std::uint64_t>(
             loom::rma_addr{0x1000}, 42, 43, loom::mr_key{1}, nullptr, &fabric.cq));
+    }
+}
+
+TEST_CASE("atomic senders store results in the supplied registration", "[execution][progress]") {
+    const auto compare_swap = GENERATE(false, true);
+    provider fabric;
+    completion_state state;
+    std::uint64_t result{};
+    int descriptor{};
+    fid_mr native_mr{.fid = {.ops = &fabric.ops}, .mem_desc = &descriptor};
+    loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(), &native_mr, &result, sizeof(result))};
+    fabric.expected_result = &result;
+    fabric.expected_result_descriptor = &descriptor;
+    auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        REQUIRE(state.calls == 0);
+        REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+        REQUIRE(state.calls == 1);
+        REQUIRE_FALSE(state.error);
+        REQUIRE(state.bytes == 42);
+        REQUIRE(result == 42);
+    };
+    if (compare_swap) {
+        run(loom::rma_async(fabric.ep).compare_swap<std::uint64_t>(
+            loom::rma_addr{0x1000}, 42, 43, loom::mr_key{1}, &mr, &fabric.cq));
+    } else {
+        run(loom::rma_async(fabric.ep).fetch_add<std::uint64_t>(
+            loom::rma_addr{0x1000}, 1, loom::mr_key{1}, &mr, &fabric.cq));
+    }
+}
+
+TEST_CASE("atomic senders reject invalid result registrations", "[execution][progress]") {
+    const auto compare_swap = GENERATE(false, true);
+    const auto invalid = GENERATE(0, 1, 2, 3);
+    CAPTURE(compare_swap, invalid);
+    provider fabric;
+    completion_state state;
+    alignas(std::uint64_t) std::array<std::byte, 16> storage{};
+    fid_mr native_mr{.fid = {.ops = &fabric.ops}};
+    void* address = invalid == 1 ? nullptr : storage.data() + (invalid == 2 ? 1 : 0);
+    loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(),
+        invalid == 0 ? nullptr : &native_mr,
+        address,
+        invalid == 3 ? 1 : storage.size())};
+    auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        REQUIRE(state.calls == 1);
+        REQUIRE(state.error == loom::errc::invalid_argument);
+        REQUIRE(fabric.pending.empty());
+    };
+    if (compare_swap) {
+        run(loom::rma_async(fabric.ep).compare_swap<std::uint64_t>(
+            loom::rma_addr{0x1000}, 42, 43, loom::mr_key{1}, &mr, &fabric.cq));
+    } else {
+        run(loom::rma_async(fabric.ep).fetch_add<std::uint64_t>(
+            loom::rma_addr{0x1000}, 1, loom::mr_key{1}, &mr, &fabric.cq));
     }
 }

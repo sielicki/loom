@@ -32,6 +32,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <system_error>
 #include <type_traits>
@@ -185,13 +186,23 @@ public:
             return;
         }
 
+        if (result_mr_) {
+            auto* address = result_mr_->address();
+            if (!*result_mr_ || address == nullptr || result_mr_->length() < sizeof(T) ||
+                reinterpret_cast<std::uintptr_t>(address) % alignof(T) != 0) {
+                this->complete_error(make_error_code(errc::invalid_argument));
+                return;
+            }
+            result_address_ = address;
+        }
+
         remote_memory remote{remote_addr_.get(), key_.get(), sizeof(T)};
 
         auto result = atomic::fetch(*ep_,
                                     atomic::operation::sum,
                                     atomic::get_datatype<T>(),
                                     &operand_,
-                                    &result_value_,
+                                    result_address_,
                                     1,
                                     nullptr,
                                     result_mr_,
@@ -204,7 +215,11 @@ public:
         // On success, completion comes via the completion queue
     }
 
-    [[nodiscard]] auto get_result() const noexcept -> T { return result_value_; }
+    [[nodiscard]] auto get_result() const noexcept -> T {
+        T value;
+        std::memcpy(&value, result_address_, sizeof(value));
+        return value;
+    }
 
 private:
     endpoint* ep_;
@@ -214,6 +229,7 @@ private:
     memory_region* result_mr_;
     completion_queue* cq_;
     T result_value_;
+    void* result_address_{&result_value_};
 };
 
 /**
@@ -300,13 +316,23 @@ public:
             return;
         }
 
+        if (result_mr_) {
+            auto* address = result_mr_->address();
+            if (!*result_mr_ || address == nullptr || result_mr_->length() < sizeof(T) ||
+                reinterpret_cast<std::uintptr_t>(address) % alignof(T) != 0) {
+                this->complete_error(make_error_code(errc::invalid_argument));
+                return;
+            }
+            result_address_ = address;
+        }
+
         remote_memory remote{remote_addr_.get(), key_.get(), sizeof(T)};
 
         auto result = atomic::compare_swap(*ep_,
                                            atomic::get_datatype<T>(),
                                            &compare_value_,
                                            &swap_value_,
-                                           &result_value_,
+                                           result_address_,
                                            1,
                                            nullptr,
                                            result_mr_,
@@ -319,7 +345,11 @@ public:
         // On success, completion comes via the completion queue
     }
 
-    [[nodiscard]] auto get_result() const noexcept -> T { return result_value_; }
+    [[nodiscard]] auto get_result() const noexcept -> T {
+        T value;
+        std::memcpy(&value, result_address_, sizeof(value));
+        return value;
+    }
 
 private:
     endpoint* ep_;
@@ -330,6 +360,7 @@ private:
     memory_region* result_mr_;
     completion_queue* cq_;
     T result_value_;
+    void* result_address_{&result_value_};
 };
 
 /**
@@ -483,7 +514,9 @@ public:
      * @param remote_addr Remote memory address of the atomic variable.
      * @param operand The value to add to the remote value.
      * @param key Remote memory region key.
-     * @param result_mr Memory region for storing the result (original value).
+     * @param result_mr Optional host-accessible result region. Its first sizeof(T)
+     * bytes must be aligned for T and remain valid until completion. With no
+     * region, the provider must accept an unregistered local result buffer.
      * @param cq Pointer to the completion queue.
      * @return A fetch_add_sender that completes with the original remote value.
      */
@@ -509,7 +542,9 @@ public:
      * @param compare_value The expected value to compare against.
      * @param swap_value The new value to store if comparison succeeds.
      * @param key Remote memory region key.
-     * @param result_mr Memory region for storing the result (original value).
+     * @param result_mr Optional host-accessible result region. Its first sizeof(T)
+     * bytes must be aligned for T and remain valid until completion. With no
+     * region, the provider must accept an unregistered local result buffer.
      * @param cq Pointer to the completion queue.
      * @return A compare_swap_sender that completes with the original remote value.
      */
