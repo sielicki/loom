@@ -98,7 +98,7 @@ auto deferred_work::create_send(domain& dom,
     impl->op_msg.msg.desc = impl->desc_storage.empty() ? nullptr : impl->desc_storage.data();
     impl->op_msg.msg.iov_count = impl->iov_storage.size();
     impl->op_msg.msg.addr = msg.dest_addr.get();
-    impl->op_msg.msg.context = msg.context;
+    impl->op_msg.msg.context = msg.context ? msg.context : &impl->work.context;
     impl->op_msg.msg.data = msg.data;
     impl->op_msg.flags = loom::msg::detail::translate_send_flags(flags);
 
@@ -148,7 +148,7 @@ auto deferred_work::create_recv(domain& dom,
     impl->op_msg.msg.desc = impl->desc_storage.empty() ? nullptr : impl->desc_storage.data();
     impl->op_msg.msg.iov_count = impl->iov_storage.size();
     impl->op_msg.msg.addr = msg.src_addr.get();
-    impl->op_msg.msg.context = msg.context;
+    impl->op_msg.msg.context = msg.context ? msg.context : &impl->work.context;
     impl->op_msg.msg.data = 0;
     impl->op_msg.flags = loom::msg::detail::translate_recv_flags(flags);
 
@@ -200,7 +200,7 @@ auto deferred_work::create_tagged_send(domain& dom,
     impl->op_tagged.msg.addr = msg.dest_addr.get();
     impl->op_tagged.msg.tag = msg.tag;
     impl->op_tagged.msg.ignore = 0;
-    impl->op_tagged.msg.context = msg.context;
+    impl->op_tagged.msg.context = msg.context ? msg.context : &impl->work.context;
     impl->op_tagged.msg.data = msg.data;
     impl->op_tagged.flags = loom::msg::detail::translate_send_flags(flags);
 
@@ -252,7 +252,7 @@ auto deferred_work::create_tagged_recv(domain& dom,
     impl->op_tagged.msg.addr = msg.src_addr.get();
     impl->op_tagged.msg.tag = msg.tag;
     impl->op_tagged.msg.ignore = msg.ignore;
-    impl->op_tagged.msg.context = msg.context;
+    impl->op_tagged.msg.context = msg.context ? msg.context : &impl->work.context;
     impl->op_tagged.msg.data = 0;
     impl->op_tagged.flags = loom::msg::detail::translate_recv_flags(flags);
 
@@ -315,7 +315,7 @@ auto deferred_work::create_read(domain& dom,
     impl->op_rma.msg.addr = dest_addr.get();
     impl->op_rma.msg.rma_iov = impl->rma_iov_storage.data();
     impl->op_rma.msg.rma_iov_count = impl->rma_iov_storage.size();
-    impl->op_rma.msg.context = nullptr;
+    impl->op_rma.msg.context = &impl->work.context;
     impl->op_rma.msg.data = 0;
     impl->op_rma.flags = flags;
 
@@ -379,7 +379,7 @@ auto deferred_work::create_write(domain& dom,
     impl->op_rma.msg.addr = dest_addr.get();
     impl->op_rma.msg.rma_iov = impl->rma_iov_storage.data();
     impl->op_rma.msg.rma_iov_count = impl->rma_iov_storage.size();
-    impl->op_rma.msg.context = nullptr;
+    impl->op_rma.msg.context = &impl->work.context;
     impl->op_rma.msg.data = data;
     impl->op_rma.flags = flags;
 

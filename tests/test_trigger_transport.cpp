@@ -19,6 +19,7 @@ struct trigger_provider {
     int submissions{};
     int cancellations{};
     int cancel_result{};
+    bool require_work_context{};
     fi_deferred_work* pending{};
     fi_ops ops{
         .size = sizeof(fi_ops),
@@ -35,6 +36,24 @@ struct trigger_provider {
                     return 0;
                 }
                 REQUIRE(command == FI_QUEUE_WORK);
+                const auto* work = static_cast<fi_deferred_work*>(argument);
+                if (self.require_work_context) {
+                    const auto* context = [work]() -> void* {
+                        switch (work->op_type) {
+                            case FI_OP_SEND:
+                            case FI_OP_RECV:
+                                return work->op.msg->msg.context;
+                            case FI_OP_TSEND:
+                            case FI_OP_TRECV:
+                                return work->op.tagged->msg.context;
+                            default:
+                                return work->op.rma->msg.context;
+                        }
+                    }();
+                    if (context != &work->context) {
+                        return -FI_EINVAL;
+                    }
+                }
                 ++self.submissions;
                 self.pending = static_cast<fi_deferred_work*>(argument);
                 return 0;
@@ -104,6 +123,31 @@ struct trigger_provider {
 
 struct trigger_context : loom::triggered_context<trigger_context> {};
 }  // namespace
+
+TEST_CASE("deferred transfers default to their work context", "[trigger]") {
+    const auto operation = GENERATE(0, 1, 2, 3, 4, 5);
+    trigger_provider native;
+    native.require_work_context = true;
+    auto work = native.queue(operation, &native.counter, &native.counter);
+    REQUIRE(work);
+    REQUIRE(native.submissions == 1);
+    auto moved = std::move(*work);
+    REQUIRE(moved.internal_ptr() == native.pending);
+    REQUIRE(moved.cancel());
+}
+
+TEST_CASE("deferred messages preserve explicit operation contexts", "[trigger]") {
+    trigger_provider native;
+    int context{};
+    const auto work = loom::trigger::deferred_work::create_send(
+        native.domain,
+        native.endpoint,
+        {&native.counter, 1},
+        nullptr,
+        loom::msg::send_message<void*>{.context = &context});
+    REQUIRE(work);
+    REQUIRE(native.pending->op.msg->msg.context == &context);
+}
 
 TEST_CASE("pending work cannot be freed after cancellation fails", "[trigger]") {
     const auto child = ::fork();

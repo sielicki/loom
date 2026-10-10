@@ -91,6 +91,9 @@ struct deferred_work_impl;
  * until completion or successful cancellation. This object owns the native
  * work descriptor and operation metadata, which the provider also borrows.
  * After observing completion, call mark_completed() before destruction.
+ * Transfers without an explicit message context use the native work's embedded
+ * context. Their CQ completion context compares equal to internal_ptr().
+ * Some providers require this default context for deferred transfers.
  */
 class deferred_work : public fabric_object_base<deferred_work> {
 public:
