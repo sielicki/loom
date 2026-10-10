@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
-# Modern CMake configuration for loom - C++23 libfabric bindings
+# Modern CMake configuration for loom - C++26 libfabric bindings
 
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.30)
 
 project(loom
     VERSION 0.1.0
     LANGUAGES CXX C
-    DESCRIPTION "Modern C++23 bindings for libfabric with stdexec/asio integration"
+    DESCRIPTION "Modern C++26 bindings for libfabric with stdexec/asio integration"
     HOMEPAGE_URL "https://github.com/sielicki/loom"
 )
 
@@ -14,8 +14,8 @@ project(loom
 # Project-wide settings
 # =============================================================================
 
-# Require C++23
-set(CMAKE_CXX_STANDARD 23)
+# Require C++26
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -493,7 +493,7 @@ target_link_libraries(loom
 )
 
 # Compile features
-target_compile_features(loom PUBLIC cxx_std_23)
+target_compile_features(loom PUBLIC cxx_std_26)
 
 # Define LOOM_SHARED when building shared library (for potential dllexport/dllimport)
 if(BUILD_SHARED_LIBS)
@@ -522,7 +522,7 @@ if(LOOM_HAS_STDEXEC)
             LOOM_HAS_STDEXEC=1
     )
 
-    target_compile_features(loom_execution INTERFACE cxx_std_23)
+    target_compile_features(loom_execution INTERFACE cxx_std_26)
 endif()
 
 # Also support beman::execution as an alternative
@@ -541,7 +541,7 @@ if(LOOM_HAS_BEMAN_EXECUTION AND NOT TARGET loom::execution)
             LOOM_HAS_BEMAN_EXECUTION=1
     )
 
-    target_compile_features(loom_execution INTERFACE cxx_std_23)
+    target_compile_features(loom_execution INTERFACE cxx_std_26)
 endif()
 
 # =============================================================================
@@ -565,7 +565,7 @@ if(LOOM_HAS_ASIO)
             ASIO_NO_DEPRECATED
     )
 
-    target_compile_features(loom_asio INTERFACE cxx_std_23)
+    target_compile_features(loom_asio INTERFACE cxx_std_26)
 endif()
 
 # =============================================================================

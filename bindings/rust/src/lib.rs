@@ -2,7 +2,7 @@
 
 //! # loom-fabric
 //!
-//! Rust bindings for [loom](https://github.com/sielicki/loom), a modern C++23
+//! Rust bindings for [loom](https://github.com/sielicki/loom), a modern C++26
 //! libfabric binding library.
 //!
 //! This crate provides safe, ergonomic Rust wrappers around loom's C++ API,

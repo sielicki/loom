@@ -1,5 +1,5 @@
 {
-  description = "Loom - Modern C++23 bindings for libfabric with stdexec integration";
+  description = "Loom - Modern C++26 bindings for libfabric with stdexec integration";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -188,7 +188,7 @@
               '';
 
               meta = with lib; {
-                description = "Modern C++23 bindings for libfabric with stdexec integration";
+                description = "Modern C++26 bindings for libfabric with stdexec integration";
                 homepage = "https://github.com/sielicki/loom";
                 license = licenses.mit;
                 platforms = platforms.unix;
@@ -294,7 +294,7 @@
                     echo "================================"
                     echo ""
                     echo "Platform: ${system}"
-                    echo "C++ Standard: C++23"
+                    echo "C++ Standard: C++26"
                     echo "Compiler: $(${stdenv.cc}/bin/c++ --version | head -n1)"
                     echo "CMake: $(cmake --version | head -n1)"
                     echo ""

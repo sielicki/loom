@@ -4,7 +4,7 @@
 
 C++ bindings for libfabric, done right.
 
-loom provides an opinionated, idiomatic, and strongly-typed C++23 interface over [libfabric](https://github.com/ofiwg/libfabric), which is a low-level vendor-agnostic fabric abstraction layer for HPC/RDMA networking.
+loom provides an opinionated, idiomatic, and strongly-typed C++26 interface over [libfabric](https://github.com/ofiwg/libfabric), which is a low-level vendor-agnostic fabric abstraction layer for HPC/RDMA networking.
 
 ## license
 
@@ -12,7 +12,7 @@ loom provides an opinionated, idiomatic, and strongly-typed C++23 interface over
 
 ## Requirements
 
-- C++23 compiler
+- C++26 compiler
 - libfabric
 
 ## Examples

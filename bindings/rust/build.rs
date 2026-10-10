@@ -19,8 +19,8 @@ fn main() {
     // Build the cxx bridge along with loom source files
     let mut build = cxx_build::bridge("src/ffi.rs");
 
-    // C++23 is required for loom
-    build.std("c++23");
+    // C++26 is required for loom
+    build.std("c++26");
 
     // Add loom include path
     build.include(&loom_include);
