@@ -68,12 +68,12 @@ public:
     fabric_receiver(const fabric_receiver&) = delete;
     auto operator=(const fabric_receiver&) -> fabric_receiver& = delete;
     // Move operations are deleted because once this pointer is stored in
-    // fi_ctx_.internal[0], the object cannot safely change address.
+    // fi_ctx_.object, the object cannot safely change address.
     fabric_receiver(fabric_receiver&&) = delete;
     auto operator=(fabric_receiver&&) -> fabric_receiver& = delete;
 
     ~fabric_receiver() {
-        // Invalidate context to detect use-after-free in debug builds
+        // Invalidate application metadata before releasing the context
         invalidate_safe_context(fi_ctx_);
     }
 
@@ -81,12 +81,12 @@ public:
      * @brief Returns the libfabric context pointer.
      * @return Pointer to the fi_context2 structure.
      */
-    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_; }
+    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_.provider; }
 
     /**
      * @brief Recovers the fabric_receiver from a libfabric context.
      *
-     * In debug builds, this validates the context to detect use-after-free.
+     * The context must remain alive until its completion is consumed.
      *
      * @param ctx The context pointer from a completion event.
      * @return Pointer to the fabric_receiver, or nullptr if invalid.
@@ -176,7 +176,7 @@ public:
     [[nodiscard]] auto base() && noexcept -> Receiver&& { return std::move(receiver_); }
 
 private:
-    ::fi_context2 fi_ctx_{};
+    safe_context fi_ctx_{};
     Receiver receiver_;
     fabric_env env_{};
 };

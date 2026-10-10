@@ -55,14 +55,14 @@ protected:
     }
 
     ~fabric_operation_state_base() {
-        // Invalidate context to detect use-after-free in debug builds
+        // Invalidate application metadata before releasing the context
         invalidate_safe_context(fi_ctx_);
     }
 
     /**
      * @brief Returns the libfabric context pointer.
      */
-    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_; }
+    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_.provider; }
 
     /**
      * @brief Handles successful completion.
@@ -101,7 +101,7 @@ protected:
         return context_ptr<void>{as_fi_context()};
     }
 
-    ::fi_context2 fi_ctx_{};
+    safe_context fi_ctx_{};
     Receiver receiver_;
 };
 

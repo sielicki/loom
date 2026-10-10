@@ -61,7 +61,7 @@ public:
     }
 
     virtual ~asio_context_base() {
-        // Invalidate context to detect use-after-free in debug builds
+        // Invalidate application metadata before releasing the context
         invalidate_safe_context(fi_ctx_);
     }
 
@@ -74,18 +74,18 @@ public:
      * @brief Returns the libfabric context pointer for this context.
      * @return Pointer to the fi_context2 structure.
      */
-    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_; }
+    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_.provider; }
 
     /**
      * @brief Returns the libfabric context pointer (const version).
      * @return Const pointer to the fi_context2 structure.
      */
-    [[nodiscard]] auto as_fi_context() const noexcept -> const void* { return &fi_ctx_; }
+    [[nodiscard]] auto as_fi_context() const noexcept -> const void* { return &fi_ctx_.provider; }
 
     /**
      * @brief Recovers the derived context from a libfabric context pointer.
      *
-     * In debug builds, this validates the context to detect use-after-free.
+     * The context must remain alive until its completion is consumed.
      *
      * @param ctx The libfabric context pointer from a completion event.
      * @return Pointer to the derived context, or nullptr if invalid.
@@ -140,7 +140,7 @@ public:
     void cancel() { set_stopped(); }
 
 protected:
-    ::fi_context2 fi_ctx_{};
+    safe_context fi_ctx_{};
 };
 
 /**
