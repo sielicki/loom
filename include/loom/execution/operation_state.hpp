@@ -356,6 +356,8 @@ public:
         }
     }
 
+    [[nodiscard]] auto get_result() const noexcept -> std::size_t { return buffer_.size(); }
+
 private:
     endpoint* ep_;
     std::span<std::byte> buffer_;

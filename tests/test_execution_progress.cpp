@@ -40,6 +40,7 @@ struct receiver {
 struct provider {
     std::vector<void*> pending;
     bool fail{};
+    std::size_t completion_length{7};
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
@@ -116,7 +117,8 @@ struct provider {
                 return -FI_EAGAIN;
             if (self.fail)
                 return -FI_EAVAIL;
-            *static_cast<fi_cq_tagged_entry*>(output) = {.op_context = self.take(), .len = 7};
+            *static_cast<fi_cq_tagged_entry*>(output) = {
+                .op_context = self.take(), .len = self.completion_length};
             return 1;
         },
         .readerr = [](fid_cq* cq, fi_cq_err_entry* output, std::uint64_t) -> ssize_t {
@@ -184,6 +186,7 @@ TEST_CASE("execution progress delivers operation failures", "[execution][progres
 
 TEST_CASE("execution progress delivers RMA completions", "[execution][progress]") {
     provider fabric;
+    fabric.completion_length = 0;
     completion_state state;
     std::array<std::byte, 16> data{};
     auto operations = loom::rma_async(fabric.ep);
@@ -197,7 +200,7 @@ TEST_CASE("execution progress delivers RMA completions", "[execution][progress]"
     REQUIRE(state.calls == 0);
     REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 2);
     REQUIRE(state.calls == 1);
-    REQUIRE(state.bytes == 7);
+    REQUIRE(state.bytes == data.size());
 }
 
 TEST_CASE("execution progress delivers atomic results", "[execution][progress]") {
