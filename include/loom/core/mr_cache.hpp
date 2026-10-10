@@ -365,14 +365,6 @@ public:
         -> result<handle_type> {
         auto uaddr = std::bit_cast<std::uintptr_t>(addr);
 
-        {
-            std::shared_lock lock(mutex_);
-            if (auto* entry = find_existing_entry(uaddr, length, access)) {
-                ++stats_.hits;
-                return handle_type{this, entry};
-            }
-        }
-
         std::unique_lock lock(mutex_);
 
         if (auto* entry = find_existing_entry(uaddr, length, access)) {

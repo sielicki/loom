@@ -1,8 +1,33 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/core/mr_cache.hpp>
 
+#include <thread>
+#include <vector>
+
 #include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
+
+TEST_CASE("concurrent cache hits retain exact statistics", "[mr_cache]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    auto registration = cache.lookup(buffer, mr_access_flags::send);
+    REQUIRE(registration);
+    {
+        std::vector<std::jthread> threads;
+        for (int i = 0; i < 4; ++i) {
+            threads.emplace_back([&] {
+                for (int j = 0; j < 1000; ++j) {
+                    auto handle = cache.lookup(buffer, mr_access_flags::send);
+                }
+            });
+        }
+    }
+    REQUIRE(cache.stats().hits == 4000);
+    REQUIRE(provider.registrations == 1);
+    REQUIRE(registration->refcount() == 1);
+}
 
 TEST_CASE("cache retains registrations sharing a page", "[mr_cache]") {
     using namespace loom;
