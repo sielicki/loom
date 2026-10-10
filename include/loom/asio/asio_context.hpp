@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <system_error>
@@ -176,6 +177,18 @@ public:
     virtual void discard() = 0;
 
     [[nodiscard]] virtual auto buffers() const noexcept -> detail::asio_buffers = 0;
+
+    // Send and local RMA completions do not carry a received-message length.
+    void set_transfer_size(std::size_t bytes) noexcept { transfer_size_ = bytes; }
+
+protected:
+    [[nodiscard]] auto completion_size(const completion_event& event) const noexcept
+        -> std::size_t {
+        return transfer_size_ ? (event.error ? 0 : *transfer_size_) : event.bytes_transferred;
+    }
+
+private:
+    std::optional<std::size_t> transfer_size_;
 };
 
 /**
@@ -291,7 +304,7 @@ public:
      * @param event The completion event containing bytes transferred.
      */
     void impl_set_value(completion_event& event) override {
-        auto bytes = event.bytes_transferred;
+        auto bytes = this->completion_size(event);
         auto ec = event.error;
         auto handler = std::move(handler_);
         auto executor = executor_;

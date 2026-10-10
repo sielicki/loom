@@ -181,7 +181,7 @@ TEST_CASE("Asio operations retain and submit every buffer", "[asio][endpoint]") 
         REQUIRE(native.remote_length == 6);
     }
     loom::completion_event event;
-    event.bytes_transferred = 6;
+    event.bytes_transferred = operation == 1 || operation == 3 ? 6 : 0;
     loom::asio::dispatch_asio_completion(native.context, event);
     ioc.run();
     REQUIRE(completed);

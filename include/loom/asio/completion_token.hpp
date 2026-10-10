@@ -223,6 +223,7 @@ struct initiate_fabric_send {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<false>(
             std::forward<Handler>(handler), executor, ep_, buffers);
+        ctx->set_transfer_size(ctx->buffers().bytes);
 
         auto result = ep_->sendv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
         finish_asio_submission(std::move(ctx), std::move(result));
@@ -277,6 +278,7 @@ struct initiate_fabric_tagged_send {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<false>(
             std::forward<Handler>(handler), executor, ep_, buffers);
+        ctx->set_transfer_size(ctx->buffers().bytes);
 
         auto result = loom::tagged_sendv(*ep_,
                                          ctx->buffers().iov,
@@ -350,6 +352,7 @@ struct initiate_fabric_write {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<false>(
             std::forward<Handler>(handler), executor, ep_, buffers, mr.descriptor());
+        ctx->set_transfer_size(ctx->buffers().bytes);
 
         const std::array remote_iov{rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
         auto result = rma::writev(
@@ -383,6 +386,7 @@ struct initiate_fabric_read {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<true>(
             std::forward<Handler>(handler), executor, ep_, buffers, mr.descriptor());
+        ctx->set_transfer_size(ctx->buffers().bytes);
 
         const std::array remote_iov{rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
         auto result = rma::readv(

@@ -228,6 +228,7 @@ public:
             [this, buffers](auto handler) {
                 auto ctx = make_buffered_asio_context<false>(
                     std::move(handler), executor_, &endpoint_, buffers);
+                ctx->set_transfer_size(ctx->buffers().bytes);
 
                 auto result =
                     endpoint_.sendv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
@@ -284,6 +285,7 @@ public:
             [this, buffers, tag](auto handler) {
                 auto ctx = make_buffered_asio_context<false>(
                     std::move(handler), executor_, &endpoint_, buffers);
+                ctx->set_transfer_size(ctx->buffers().bytes);
 
                 auto result = loom::tagged_sendv(endpoint_,
                                                  ctx->buffers().iov,
@@ -353,6 +355,7 @@ public:
             [this, buffers, &local_mr, remote](auto handler) {
                 auto ctx = make_buffered_asio_context<false>(
                     std::move(handler), executor_, &endpoint_, buffers, local_mr.descriptor());
+                ctx->set_transfer_size(ctx->buffers().bytes);
 
                 const std::array remote_iov{
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
@@ -388,6 +391,7 @@ public:
             [this, buffers, &local_mr, remote](auto handler) {
                 auto ctx = make_buffered_asio_context<true>(
                     std::move(handler), executor_, &endpoint_, buffers, local_mr.descriptor());
+                ctx->set_transfer_size(ctx->buffers().bytes);
 
                 const std::array remote_iov{
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
