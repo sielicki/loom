@@ -20,6 +20,9 @@ inline auto inject(endpoint& ep,
                    std::size_t count,
                    remote_memory remote) -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    if (!fid_ep) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
 
     auto ret = fi_inject_atomic(fid_ep,
                                 buf,
@@ -39,6 +42,9 @@ inline auto inject(endpoint& ep,
 
 inline auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    if (!fid_ep) {
+        return false;
+    }
     std::size_t ignored_count{};
     if (!count_out) {
         count_out = &ignored_count;
@@ -52,6 +58,9 @@ inline auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count
 inline auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out)
     -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    if (!fid_ep) {
+        return false;
+    }
     std::size_t ignored_count{};
     if (!count_out) {
         count_out = &ignored_count;
@@ -66,6 +75,9 @@ inline auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t*
 inline auto is_compare_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out)
     -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    if (!fid_ep) {
+        return false;
+    }
     std::size_t ignored_count{};
     if (!count_out) {
         count_out = &ignored_count;

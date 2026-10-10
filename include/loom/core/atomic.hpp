@@ -257,6 +257,9 @@ auto execute(endpoint& ep,
              remote_memory remote,
              Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (!fid_ep) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
     void* desc = mr ? mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_atomic(fid_ep,
@@ -321,6 +324,9 @@ auto fetch(endpoint& ep,
            remote_memory remote,
            Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (!fid_ep) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
     void* desc_buf = mr_buf ? mr_buf->descriptor().raw() : nullptr;
     void* desc_result = mr_result ? mr_result->descriptor().raw() : nullptr;
 
@@ -371,6 +377,9 @@ auto compare_swap(endpoint& ep,
                   remote_memory remote,
                   Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (!fid_ep) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
     void* desc_compare = mr_compare ? mr_compare->descriptor().raw() : nullptr;
     void* desc_result = mr_result ? mr_result->descriptor().raw() : nullptr;
 
