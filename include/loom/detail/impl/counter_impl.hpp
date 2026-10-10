@@ -43,21 +43,21 @@ struct counter_impl {
 
 namespace loom {
 
-inline counter::counter() = default;
+counter::counter() = default;
 
-inline counter::counter(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+counter::counter(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline counter::~counter() = default;
+counter::~counter() = default;
 
-inline counter::counter(counter&&) noexcept = default;
+counter::counter(counter&&) noexcept = default;
 
-inline auto counter::operator=(counter&&) noexcept -> counter& = default;
+auto counter::operator=(counter&&) noexcept -> counter& = default;
 
-inline auto counter::impl_valid() const noexcept -> bool {
+auto counter::impl_valid() const noexcept -> bool {
     return impl_ && impl_->cntr != nullptr;
 }
 
-inline auto counter::create(const domain& dom, const counter_attr& attr, memory_resource* resource)
+auto counter::create(const domain& dom, const counter_attr& attr, memory_resource* resource)
     -> result<counter> {
     if (!dom) {
         return make_error_result<counter>(errc::invalid_argument);
@@ -95,7 +95,7 @@ inline auto counter::create(const domain& dom, const counter_attr& attr, memory_
     return counter{std::move(impl)};
 }
 
-inline auto counter::read() const -> result<std::uint64_t> {
+auto counter::read() const -> result<std::uint64_t> {
     if (!impl_ || !impl_->cntr) {
         return make_error_result<std::uint64_t>(errc::invalid_argument);
     }
@@ -104,7 +104,7 @@ inline auto counter::read() const -> result<std::uint64_t> {
     return value;
 }
 
-inline auto counter::set(std::uint64_t value) -> void_result {
+auto counter::set(std::uint64_t value) -> void_result {
     if (!impl_ || !impl_->cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -117,7 +117,7 @@ inline auto counter::set(std::uint64_t value) -> void_result {
     return make_success();
 }
 
-inline auto counter::add(std::uint64_t value) -> void_result {
+auto counter::add(std::uint64_t value) -> void_result {
     if (!impl_ || !impl_->cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -130,7 +130,7 @@ inline auto counter::add(std::uint64_t value) -> void_result {
     return make_success();
 }
 
-inline auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> void_result {
+auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> void_result {
     if (!impl_ || !impl_->cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -154,7 +154,7 @@ inline auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> v
     return make_success();
 }
 
-inline auto counter::check_threshold() const -> bool {
+auto counter::check_threshold() const -> bool {
     if (!impl_ || !impl_->cntr) {
         return false;
     }
@@ -163,7 +163,7 @@ inline auto counter::check_threshold() const -> bool {
     return value > 0;
 }
 
-inline auto counter::get_error() const -> std::error_code {
+auto counter::get_error() const -> std::error_code {
     if (!impl_ || !impl_->cntr) {
         return make_error_code(errc::invalid_argument);
     }
@@ -177,7 +177,7 @@ inline auto counter::get_error() const -> std::error_code {
     return make_error_code(errc::io_error);
 }
 
-inline auto counter::ack(std::uint64_t count) -> void_result {
+auto counter::ack(std::uint64_t count) -> void_result {
     if (!impl_ || !impl_->cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -191,7 +191,7 @@ inline auto counter::ack(std::uint64_t count) -> void_result {
     return make_success();
 }
 
-inline auto counter::impl_internal_ptr() const noexcept -> void* {
+auto counter::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->cntr : nullptr;
 }
 

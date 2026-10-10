@@ -67,23 +67,22 @@ static inline auto fi_event_to_loom(std::uint32_t fi_event) -> event_type {
     }
 }
 
-inline event_queue::event_queue() = default;
+event_queue::event_queue() = default;
 
-inline event_queue::event_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+event_queue::event_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline event_queue::~event_queue() = default;
+event_queue::~event_queue() = default;
 
-inline event_queue::event_queue(event_queue&&) noexcept = default;
+event_queue::event_queue(event_queue&&) noexcept = default;
 
-inline auto event_queue::operator=(event_queue&&) noexcept -> event_queue& = default;
+auto event_queue::operator=(event_queue&&) noexcept -> event_queue& = default;
 
-inline auto event_queue::impl_valid() const noexcept -> bool {
+auto event_queue::impl_valid() const noexcept -> bool {
     return impl_ && impl_->eq != nullptr;
 }
 
-inline auto event_queue::create(const fabric& fab,
-                                const event_queue_attr& attr,
-                                memory_resource* resource) -> result<event_queue> {
+auto event_queue::create(const fabric& fab, const event_queue_attr& attr, memory_resource* resource)
+    -> result<event_queue> {
     if (!fab) {
         return make_error_result<event_queue>(errc::invalid_argument);
     }
@@ -113,7 +112,7 @@ inline auto event_queue::create(const fabric& fab,
     return event_queue{std::move(impl)};
 }
 
-inline auto event_queue::poll() -> std::optional<fabric_event> {
+auto event_queue::poll() -> std::optional<fabric_event> {
     if (!impl_ || !impl_->eq) {
         return std::nullopt;
     }
@@ -150,8 +149,7 @@ inline auto event_queue::poll() -> std::optional<fabric_event> {
     return event;
 }
 
-inline auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout)
-    -> result<fabric_event> {
+auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> result<fabric_event> {
     if (!impl_ || !impl_->eq) {
         return make_error_result<fabric_event>(errc::invalid_argument);
     }
@@ -193,7 +191,7 @@ inline auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout)
     return event;
 }
 
-inline auto event_queue::read() -> result<fabric_event> {
+auto event_queue::read() -> result<fabric_event> {
     auto event = poll();
     if (!event) {
         return make_error_result<fabric_event>(errc::again);
@@ -201,11 +199,11 @@ inline auto event_queue::read() -> result<fabric_event> {
     return *event;
 }
 
-inline auto event_queue::write_error(const fabric_event&) -> void_result {
+auto event_queue::write_error(const fabric_event&) -> void_result {
     return make_error_result<void>(errc::not_supported);
 }
 
-inline auto event_queue::event_to_string(const fabric_event& event) const -> std::string {
+auto event_queue::event_to_string(const fabric_event& event) const -> std::string {
     if (!impl_ || !impl_->eq) {
         return "Invalid event queue";
     }
@@ -218,18 +216,18 @@ inline auto event_queue::event_to_string(const fabric_event& event) const -> std
     return str ? std::string(str) : "Unknown event";
 }
 
-inline auto event_queue::capacity() const noexcept -> std::size_t {
+auto event_queue::capacity() const noexcept -> std::size_t {
     if (!impl_ || !impl_->eq) {
         return 0;
     }
     return 128;
 }
 
-inline auto event_queue::ack(const fabric_event&) -> void_result {
+auto event_queue::ack(const fabric_event&) -> void_result {
     return make_success();
 }
 
-inline auto event_queue::impl_internal_ptr() const noexcept -> void* {
+auto event_queue::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->eq : nullptr;
 }
 

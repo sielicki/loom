@@ -62,36 +62,36 @@ struct deferred_work_impl {
 
 namespace loom::trigger {
 
-inline auto threshold_condition::to_fi_threshold() const noexcept -> ::fi_trigger_threshold {
+auto threshold_condition::to_fi_threshold() const noexcept -> ::fi_trigger_threshold {
     ::fi_trigger_threshold result{};
     result.cntr = cntr ? static_cast<::fid_cntr*>(cntr->impl_internal_ptr()) : nullptr;
     result.threshold = threshold;
     return result;
 }
 
-inline deferred_work::deferred_work() = default;
+deferred_work::deferred_work() = default;
 
-inline deferred_work::deferred_work(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+deferred_work::deferred_work(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline deferred_work::~deferred_work() = default;
+deferred_work::~deferred_work() = default;
 
-inline deferred_work::deferred_work(deferred_work&&) noexcept = default;
+deferred_work::deferred_work(deferred_work&&) noexcept = default;
 
-inline auto deferred_work::operator=(deferred_work&&) noexcept -> deferred_work& = default;
+auto deferred_work::operator=(deferred_work&&) noexcept -> deferred_work& = default;
 
-inline auto deferred_work::impl_valid() const noexcept -> bool {
+auto deferred_work::impl_valid() const noexcept -> bool {
     return impl_ && impl_->domain != nullptr;
 }
 
-inline auto deferred_work::impl_internal_ptr() const noexcept -> void* {
+auto deferred_work::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? &impl_->work : nullptr;
 }
 
-inline auto deferred_work::is_pending() const noexcept -> bool {
+auto deferred_work::is_pending() const noexcept -> bool {
     return impl_ && impl_->queued;
 }
 
-inline auto deferred_work::cancel() -> void_result {
+auto deferred_work::cancel() -> void_result {
     if (!impl_ || !impl_->domain || !impl_->queued) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -105,13 +105,13 @@ inline auto deferred_work::cancel() -> void_result {
     return make_success();
 }
 
-inline auto deferred_work::create_send(domain& dom,
-                                       endpoint& ep,
-                                       const threshold_condition& trigger,
-                                       counter* completion_cntr,
-                                       const msg::send_message<void*>& msg,
-                                       msg::send_flags flags,
-                                       memory_resource* resource) -> result<deferred_work> {
+auto deferred_work::create_send(domain& dom,
+                                endpoint& ep,
+                                const threshold_condition& trigger,
+                                counter* completion_cntr,
+                                const msg::send_message<void*>& msg,
+                                msg::send_flags flags,
+                                memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -154,13 +154,13 @@ inline auto deferred_work::create_send(domain& dom,
     return deferred_work{std::move(impl)};
 }
 
-inline auto deferred_work::create_recv(domain& dom,
-                                       endpoint& ep,
-                                       const threshold_condition& trigger,
-                                       counter* completion_cntr,
-                                       const msg::recv_message<void*>& msg,
-                                       msg::recv_flags flags,
-                                       memory_resource* resource) -> result<deferred_work> {
+auto deferred_work::create_recv(domain& dom,
+                                endpoint& ep,
+                                const threshold_condition& trigger,
+                                counter* completion_cntr,
+                                const msg::recv_message<void*>& msg,
+                                msg::recv_flags flags,
+                                memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -203,13 +203,13 @@ inline auto deferred_work::create_recv(domain& dom,
     return deferred_work{std::move(impl)};
 }
 
-inline auto deferred_work::create_tagged_send(domain& dom,
-                                              endpoint& ep,
-                                              const threshold_condition& trigger,
-                                              counter* completion_cntr,
-                                              const msg::tagged_send_message<void*>& msg,
-                                              msg::send_flags flags,
-                                              memory_resource* resource) -> result<deferred_work> {
+auto deferred_work::create_tagged_send(domain& dom,
+                                       endpoint& ep,
+                                       const threshold_condition& trigger,
+                                       counter* completion_cntr,
+                                       const msg::tagged_send_message<void*>& msg,
+                                       msg::send_flags flags,
+                                       memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -254,13 +254,13 @@ inline auto deferred_work::create_tagged_send(domain& dom,
     return deferred_work{std::move(impl)};
 }
 
-inline auto deferred_work::create_tagged_recv(domain& dom,
-                                              endpoint& ep,
-                                              const threshold_condition& trigger,
-                                              counter* completion_cntr,
-                                              const msg::tagged_recv_message<void*>& msg,
-                                              msg::recv_flags flags,
-                                              memory_resource* resource) -> result<deferred_work> {
+auto deferred_work::create_tagged_recv(domain& dom,
+                                       endpoint& ep,
+                                       const threshold_condition& trigger,
+                                       counter* completion_cntr,
+                                       const msg::tagged_recv_message<void*>& msg,
+                                       msg::recv_flags flags,
+                                       memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -305,16 +305,16 @@ inline auto deferred_work::create_tagged_recv(domain& dom,
     return deferred_work{std::move(impl)};
 }
 
-inline auto deferred_work::create_read(domain& dom,
-                                       endpoint& ep,
-                                       const threshold_condition& trigger,
-                                       counter* completion_cntr,
-                                       std::span<const iovec> local_iov,
-                                       std::span<const mr_descriptor> desc,
-                                       std::span<const rma::rma_iov> remote_iov,
-                                       fabric_addr dest_addr,
-                                       std::uint64_t flags,
-                                       memory_resource* resource) -> result<deferred_work> {
+auto deferred_work::create_read(domain& dom,
+                                endpoint& ep,
+                                const threshold_condition& trigger,
+                                counter* completion_cntr,
+                                std::span<const iovec> local_iov,
+                                std::span<const mr_descriptor> desc,
+                                std::span<const rma::rma_iov> remote_iov,
+                                fabric_addr dest_addr,
+                                std::uint64_t flags,
+                                memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -367,17 +367,17 @@ inline auto deferred_work::create_read(domain& dom,
     return deferred_work{std::move(impl)};
 }
 
-inline auto deferred_work::create_write(domain& dom,
-                                        endpoint& ep,
-                                        const threshold_condition& trigger,
-                                        counter* completion_cntr,
-                                        std::span<const iovec> local_iov,
-                                        std::span<const mr_descriptor> desc,
-                                        std::span<const rma::rma_iov> remote_iov,
-                                        fabric_addr dest_addr,
-                                        std::uint64_t flags,
-                                        std::uint64_t data,
-                                        memory_resource* resource) -> result<deferred_work> {
+auto deferred_work::create_write(domain& dom,
+                                 endpoint& ep,
+                                 const threshold_condition& trigger,
+                                 counter* completion_cntr,
+                                 std::span<const iovec> local_iov,
+                                 std::span<const mr_descriptor> desc,
+                                 std::span<const rma::rma_iov> remote_iov,
+                                 fabric_addr dest_addr,
+                                 std::uint64_t flags,
+                                 std::uint64_t data,
+                                 memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -430,11 +430,11 @@ inline auto deferred_work::create_write(domain& dom,
     return deferred_work{std::move(impl)};
 }
 
-inline auto deferred_work::create_counter_set(domain& dom,
-                                              const threshold_condition& trigger,
-                                              counter& target_cntr,
-                                              std::uint64_t value,
-                                              memory_resource* resource) -> result<deferred_work> {
+auto deferred_work::create_counter_set(domain& dom,
+                                       const threshold_condition& trigger,
+                                       counter& target_cntr,
+                                       std::uint64_t value,
+                                       memory_resource* resource) -> result<deferred_work> {
     if (!dom || !target_cntr) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -463,11 +463,11 @@ inline auto deferred_work::create_counter_set(domain& dom,
     return deferred_work{std::move(impl)};
 }
 
-inline auto deferred_work::create_counter_add(domain& dom,
-                                              const threshold_condition& trigger,
-                                              counter& target_cntr,
-                                              std::uint64_t value,
-                                              memory_resource* resource) -> result<deferred_work> {
+auto deferred_work::create_counter_add(domain& dom,
+                                       const threshold_condition& trigger,
+                                       counter& target_cntr,
+                                       std::uint64_t value,
+                                       memory_resource* resource) -> result<deferred_work> {
     if (!dom || !target_cntr) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -496,7 +496,7 @@ inline auto deferred_work::create_counter_add(domain& dom,
     return deferred_work{std::move(impl)};
 }
 
-inline auto flush_work(domain& dom) -> void_result {
+auto flush_work(domain& dom) -> void_result {
     if (!dom) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -511,7 +511,7 @@ inline auto flush_work(domain& dom) -> void_result {
     return make_success();
 }
 
-inline auto flush_work(domain& dom, counter& triggering_cntr) -> void_result {
+auto flush_work(domain& dom, counter& triggering_cntr) -> void_result {
     if (!dom || !triggering_cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -527,7 +527,7 @@ inline auto flush_work(domain& dom, counter& triggering_cntr) -> void_result {
     return make_success();
 }
 
-inline auto supports_trigger(const endpoint& ep) -> bool {
+auto supports_trigger(const endpoint& ep) -> bool {
     if (!ep) {
         return false;
     }

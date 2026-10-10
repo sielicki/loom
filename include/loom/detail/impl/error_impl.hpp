@@ -11,7 +11,7 @@
 
 namespace loom {
 
-inline auto error_category::message(int ev) const -> std::string {
+auto error_category::message(int ev) const -> std::string {
     const char* msg = ::fi_strerror(-ev);
     return msg ? msg : "Unknown loom error";
 }

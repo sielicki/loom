@@ -62,21 +62,21 @@ struct domain_impl {
 
 namespace loom {
 
-inline domain::domain() = default;
+domain::domain() = default;
 
-inline domain::domain(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+domain::domain(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline domain::~domain() = default;
+domain::~domain() = default;
 
-inline domain::domain(domain&&) noexcept = default;
+domain::domain(domain&&) noexcept = default;
 
-inline auto domain::operator=(domain&&) noexcept -> domain& = default;
+auto domain::operator=(domain&&) noexcept -> domain& = default;
 
-inline auto domain::impl_valid() const noexcept -> bool {
+auto domain::impl_valid() const noexcept -> bool {
     return impl_ && impl_->domain != nullptr;
 }
 
-inline auto domain::create(const fabric& fab, const fabric_info& info, memory_resource* resource)
+auto domain::create(const fabric& fab, const fabric_info& info, memory_resource* resource)
     -> result<domain> {
     if (!fab || !info) {
         return make_error_result<domain>(errc::invalid_argument);
@@ -118,43 +118,43 @@ inline auto domain::create(const fabric& fab, const fabric_info& info, memory_re
     return domain{std::move(impl)};
 }
 
-inline auto domain::get_name() const -> std::string_view {
+auto domain::get_name() const -> std::string_view {
     return impl_ ? std::string_view{impl_->name} : std::string_view{};
 }
 
-inline auto domain::get_address_format() const noexcept -> address_format {
+auto domain::get_address_format() const noexcept -> address_format {
     return impl_ ? impl_->addr_format : address_format::unspecified;
 }
 
-inline auto domain::get_threading() const -> threading_mode {
+auto domain::get_threading() const -> threading_mode {
     if (!impl_) {
         return threading_mode::unspecified;
     }
     return impl_->threading;
 }
 
-inline auto domain::get_control_progress() const -> progress_mode {
+auto domain::get_control_progress() const -> progress_mode {
     if (!impl_) {
         return progress_mode::unspecified;
     }
     return impl_->control_progress;
 }
 
-inline auto domain::get_data_progress() const -> progress_mode {
+auto domain::get_data_progress() const -> progress_mode {
     if (!impl_) {
         return progress_mode::unspecified;
     }
     return impl_->data_progress;
 }
 
-inline auto domain::progress_policy() const noexcept -> runtime_progress_policy {
+auto domain::progress_policy() const noexcept -> runtime_progress_policy {
     if (!impl_) {
         return runtime_progress_policy{};
     }
     return runtime_progress_policy{impl_->control_progress, impl_->data_progress};
 }
 
-inline auto domain::bind_eq(event_queue& eq, std::uint64_t flags) -> void_result {
+auto domain::bind_eq(event_queue& eq, std::uint64_t flags) -> void_result {
     if (!impl_ || !impl_->domain) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -173,7 +173,7 @@ inline auto domain::bind_eq(event_queue& eq, std::uint64_t flags) -> void_result
     return make_success();
 }
 
-inline auto domain::impl_internal_ptr() const noexcept -> void* {
+auto domain::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->domain : nullptr;
 }
 

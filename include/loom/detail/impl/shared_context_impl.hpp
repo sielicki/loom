@@ -109,24 +109,23 @@ struct shared_rx_context_impl {
 
 namespace loom {
 
-inline shared_tx_context::shared_tx_context() = default;
+shared_tx_context::shared_tx_context() = default;
 
-inline shared_tx_context::shared_tx_context(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+shared_tx_context::shared_tx_context(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline shared_tx_context::~shared_tx_context() = default;
+shared_tx_context::~shared_tx_context() = default;
 
-inline shared_tx_context::shared_tx_context(shared_tx_context&&) noexcept = default;
+shared_tx_context::shared_tx_context(shared_tx_context&&) noexcept = default;
 
-inline auto shared_tx_context::operator=(shared_tx_context&&) noexcept
-    -> shared_tx_context& = default;
+auto shared_tx_context::operator=(shared_tx_context&&) noexcept -> shared_tx_context& = default;
 
-inline auto shared_tx_context::impl_valid() const noexcept -> bool {
+auto shared_tx_context::impl_valid() const noexcept -> bool {
     return impl_ && impl_->stx;
 }
 
-inline auto shared_tx_context::create(const domain& dom,
-                                      const fabric_info& info,
-                                      memory_resource* resource) -> result<shared_tx_context> {
+auto shared_tx_context::create(const domain& dom,
+                               const fabric_info& info,
+                               memory_resource* resource) -> result<shared_tx_context> {
     if (!dom || !info) {
         return make_error_result<shared_tx_context>(errc::invalid_argument);
     }
@@ -152,28 +151,27 @@ inline auto shared_tx_context::create(const domain& dom,
     return shared_tx_context{std::move(impl)};
 }
 
-inline auto shared_tx_context::impl_internal_ptr() const noexcept -> void* {
+auto shared_tx_context::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->stx : nullptr;
 }
 
-inline shared_rx_context::shared_rx_context() = default;
+shared_rx_context::shared_rx_context() = default;
 
-inline shared_rx_context::shared_rx_context(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+shared_rx_context::shared_rx_context(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline shared_rx_context::~shared_rx_context() = default;
+shared_rx_context::~shared_rx_context() = default;
 
-inline shared_rx_context::shared_rx_context(shared_rx_context&&) noexcept = default;
+shared_rx_context::shared_rx_context(shared_rx_context&&) noexcept = default;
 
-inline auto shared_rx_context::operator=(shared_rx_context&&) noexcept
-    -> shared_rx_context& = default;
+auto shared_rx_context::operator=(shared_rx_context&&) noexcept -> shared_rx_context& = default;
 
-inline auto shared_rx_context::impl_valid() const noexcept -> bool {
+auto shared_rx_context::impl_valid() const noexcept -> bool {
     return impl_ && impl_->srx;
 }
 
-inline auto shared_rx_context::create(const domain& dom,
-                                      const fabric_info& info,
-                                      memory_resource* resource) -> result<shared_rx_context> {
+auto shared_rx_context::create(const domain& dom,
+                               const fabric_info& info,
+                               memory_resource* resource) -> result<shared_rx_context> {
     if (!dom || !info) {
         return make_error_result<shared_rx_context>(errc::invalid_argument);
     }
@@ -199,7 +197,7 @@ inline auto shared_rx_context::create(const domain& dom,
     return shared_rx_context{std::move(impl)};
 }
 
-inline auto shared_rx_context::bind_cq(completion_queue& cq, cq_bind_flags flags) -> void_result {
+auto shared_rx_context::bind_cq(completion_queue& cq, cq_bind_flags flags) -> void_result {
     if (!impl_ || !impl_->srx) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -219,7 +217,7 @@ inline auto shared_rx_context::bind_cq(completion_queue& cq, cq_bind_flags flags
     return make_success();
 }
 
-inline auto shared_rx_context::bind_counter(counter& cntr, std::uint64_t flags) -> void_result {
+auto shared_rx_context::bind_counter(counter& cntr, std::uint64_t flags) -> void_result {
     if (!impl_ || !impl_->srx) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -238,7 +236,7 @@ inline auto shared_rx_context::bind_counter(counter& cntr, std::uint64_t flags) 
     return make_success();
 }
 
-inline auto shared_rx_context::impl_internal_ptr() const noexcept -> void* {
+auto shared_rx_context::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->srx : nullptr;
 }
 

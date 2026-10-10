@@ -14,7 +14,7 @@
 
 namespace loom::rma {
 
-inline auto inject_write(endpoint& ep, std::span<const std::byte> data, remote_memory remote)
+auto inject_write(endpoint& ep, std::span<const std::byte> data, remote_memory remote)
     -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr) {
@@ -31,10 +31,10 @@ inline auto inject_write(endpoint& ep, std::span<const std::byte> data, remote_m
     return make_success();
 }
 
-inline auto inject_write_data(endpoint& ep,
-                              std::span<const std::byte> data,
-                              remote_memory remote,
-                              std::uint64_t immediate_data) -> result<void> {
+auto inject_write_data(endpoint& ep,
+                       std::span<const std::byte> data,
+                       remote_memory remote,
+                       std::uint64_t immediate_data) -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
@@ -50,11 +50,11 @@ inline auto inject_write_data(endpoint& ep,
     return make_success();
 }
 
-inline auto get_max_rma_size(const endpoint&) -> std::size_t {
+auto get_max_rma_size(const endpoint&) -> std::size_t {
     return 1ULL << 30;
 }
 
-inline auto get_inject_size(const endpoint&) -> std::size_t {
+auto get_inject_size(const endpoint&) -> std::size_t {
     return 4096;
 }
 

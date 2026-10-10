@@ -81,6 +81,27 @@ loom_add_test(test_provider_aware)
 loom_add_test(test_provider_atomic)
 loom_add_test(test_trigger)
 
+# Exercise implementation mode without linking the compiled loom library.
+add_library(loom_test_implementation OBJECT loom_implementation.cpp)
+target_include_directories(loom_test_implementation PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(loom_test_implementation
+    PRIVATE loom::compile_options
+    PUBLIC loom_sanitizers ${LOOM_LIBFABRIC_TARGET} Threads::Threads
+)
+add_executable(test_implementation
+    test_empty_resources.cpp
+    test_atomic.cpp
+    test_address_transport.cpp
+    test_completion_queue.cpp
+    test_scalable_endpoint.cpp
+)
+target_link_libraries(test_implementation PRIVATE
+    loom_test_implementation
+    loom_test_options
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(test_implementation TEST_PREFIX "implementation: ")
+
 # =============================================================================
 # Integration tests (require fabric provider, e.g., sockets/tcp)
 # =============================================================================

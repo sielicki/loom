@@ -54,23 +54,23 @@ struct completion_queue_impl {
 
 namespace loom {
 
-inline completion_queue::completion_queue() = default;
+completion_queue::completion_queue() = default;
 
-inline completion_queue::completion_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+completion_queue::completion_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline completion_queue::~completion_queue() = default;
+completion_queue::~completion_queue() = default;
 
-inline completion_queue::completion_queue(completion_queue&&) noexcept = default;
+completion_queue::completion_queue(completion_queue&&) noexcept = default;
 
-inline auto completion_queue::operator=(completion_queue&&) noexcept -> completion_queue& = default;
+auto completion_queue::operator=(completion_queue&&) noexcept -> completion_queue& = default;
 
-inline auto completion_queue::impl_valid() const noexcept -> bool {
+auto completion_queue::impl_valid() const noexcept -> bool {
     return impl_ && impl_->cq != nullptr;
 }
 
-inline auto completion_queue::create(const domain& dom,
-                                     const completion_queue_attr& attr,
-                                     memory_resource* resource) -> result<completion_queue> {
+auto completion_queue::create(const domain& dom,
+                              const completion_queue_attr& attr,
+                              memory_resource* resource) -> result<completion_queue> {
     if (!dom) {
         return make_error_result<completion_queue>(errc::invalid_argument);
     }
@@ -103,7 +103,7 @@ inline auto completion_queue::create(const domain& dom,
     return completion_queue{std::move(impl)};
 }
 
-inline auto completion_queue::poll() const -> std::optional<completion_event> {
+auto completion_queue::poll() const -> std::optional<completion_event> {
     if (!impl_ || !impl_->cq) {
         return std::nullopt;
     }
@@ -135,7 +135,7 @@ inline auto completion_queue::poll() const -> std::optional<completion_event> {
     return event;
 }
 
-inline auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) const
+auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) const
     -> result<completion_event> {
     if (!impl_ || !impl_->cq) {
         return make_error_result<completion_event>(errc::invalid_argument);
@@ -170,7 +170,7 @@ inline auto completion_queue::wait(std::optional<std::chrono::milliseconds> time
     return event;
 }
 
-inline auto completion_queue::poll_batch(std::span<completion_event> events) const -> std::size_t {
+auto completion_queue::poll_batch(std::span<completion_event> events) const -> std::size_t {
     if (!impl_ || !impl_->cq || events.empty()) {
         return 0;
     }
@@ -204,7 +204,7 @@ inline auto completion_queue::poll_batch(std::span<completion_event> events) con
     return count;
 }
 
-inline auto completion_queue::read_error(int status) const -> completion_event {
+auto completion_queue::read_error(int status) const -> completion_event {
     completion_event event{};
     if (status != FI_EAVAIL) {
         event.error = make_error_code_from_fi_errno(status);
@@ -229,7 +229,7 @@ inline auto completion_queue::read_error(int status) const -> completion_event {
     return event;
 }
 
-inline auto completion_queue::read() const -> result<completion_event> {
+auto completion_queue::read() const -> result<completion_event> {
     auto event = poll();
     if (!event) {
         return make_error_result<completion_event>(errc::again);
@@ -237,7 +237,7 @@ inline auto completion_queue::read() const -> result<completion_event> {
     return *event;
 }
 
-inline auto completion_queue::capacity() const noexcept -> std::size_t {
+auto completion_queue::capacity() const noexcept -> std::size_t {
     if (!impl_ || !impl_->cq) {
         return 0;
     }
@@ -245,7 +245,7 @@ inline auto completion_queue::capacity() const noexcept -> std::size_t {
     return 1024;
 }
 
-inline auto completion_queue::pending() const noexcept -> std::size_t {
+auto completion_queue::pending() const noexcept -> std::size_t {
     if (!impl_ || !impl_->cq) {
         return 0;
     }
@@ -260,18 +260,18 @@ inline auto completion_queue::pending() const noexcept -> std::size_t {
     return static_cast<std::size_t>(ret);
 }
 
-inline auto completion_queue::ack(const completion_event&) -> void_result {
+auto completion_queue::ack(const completion_event&) -> void_result {
     return make_success();
 }
 
-inline auto completion_queue::get_progress_policy() const noexcept -> runtime_progress_policy {
+auto completion_queue::get_progress_policy() const noexcept -> runtime_progress_policy {
     if (!impl_) {
         return runtime_progress_policy{};
     }
     return impl_->progress;
 }
 
-inline auto completion_queue::supports_blocking_wait() const noexcept -> bool {
+auto completion_queue::supports_blocking_wait() const noexcept -> bool {
     if (!impl_ || !impl_->cq) {
         return false;
     }
@@ -280,14 +280,14 @@ inline auto completion_queue::supports_blocking_wait() const noexcept -> bool {
            object != FI_WAIT_UNSPEC;
 }
 
-inline auto completion_queue::requires_manual_progress() const noexcept -> bool {
+auto completion_queue::requires_manual_progress() const noexcept -> bool {
     if (!impl_) {
         return true;
     }
     return impl_->progress.requires_manual_data_progress();
 }
 
-inline auto completion_queue::try_wait(const fabric& parent) const -> result<bool> {
+auto completion_queue::try_wait(const fabric& parent) const -> result<bool> {
     if (!impl_ || !impl_->cq || !parent) {
         return make_error_result<bool>(errc::invalid_argument);
     }
@@ -303,7 +303,7 @@ inline auto completion_queue::try_wait(const fabric& parent) const -> result<boo
     return true;
 }
 
-inline auto completion_queue::get_wait_fd() const -> result<int> {
+auto completion_queue::get_wait_fd() const -> result<int> {
     if (!impl_ || !impl_->cq) {
         return make_error_result<int>(errc::invalid_argument);
     }
@@ -330,7 +330,7 @@ inline auto completion_queue::get_wait_fd() const -> result<int> {
     return fd;
 }
 
-inline auto completion_queue::impl_internal_ptr() const noexcept -> void* {
+auto completion_queue::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->cq : nullptr;
 }
 

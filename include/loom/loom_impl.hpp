@@ -29,7 +29,8 @@
 #    define LOOM_IMPLEMENTATION_DEFINED_HERE
 #endif
 
-// Include all implementation headers
+// Provide out-of-line definitions in this translation unit. Other translation
+// units use the declarations in loom.hpp and link to these definitions.
 #include "loom/detail/impl/address_impl.hpp"
 #include "loom/detail/impl/address_vector_impl.hpp"
 #include "loom/detail/impl/atomic_impl.hpp"

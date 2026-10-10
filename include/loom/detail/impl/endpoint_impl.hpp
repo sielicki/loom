@@ -68,21 +68,21 @@ namespace loom {
 // endpoint.cpp implementation
 // ============================================================================
 
-inline endpoint::endpoint() = default;
+endpoint::endpoint() = default;
 
-inline endpoint::endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+endpoint::endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline endpoint::~endpoint() = default;
+endpoint::~endpoint() = default;
 
-inline endpoint::endpoint(endpoint&&) noexcept = default;
+endpoint::endpoint(endpoint&&) noexcept = default;
 
-inline auto endpoint::operator=(endpoint&&) noexcept -> endpoint& = default;
+auto endpoint::operator=(endpoint&&) noexcept -> endpoint& = default;
 
-inline auto endpoint::impl_valid() const noexcept -> bool {
+auto endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->ep;
 }
 
-inline auto endpoint::create(const domain& dom, const fabric_info& info, memory_resource* resource)
+auto endpoint::create(const domain& dom, const fabric_info& info, memory_resource* resource)
     -> result<endpoint> {
     if (!dom || !info) {
         return make_error_result<endpoint>(errc::invalid_argument);
@@ -112,7 +112,7 @@ inline auto endpoint::create(const domain& dom, const fabric_info& info, memory_
     return endpoint{std::move(impl)};
 }
 
-inline auto endpoint::enable() -> result<void> {
+auto endpoint::enable() -> result<void> {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -125,7 +125,7 @@ inline auto endpoint::enable() -> result<void> {
     return make_success();
 }
 
-inline auto endpoint::get_type() const -> result<endpoint_type> {
+auto endpoint::get_type() const -> result<endpoint_type> {
     if (!impl_) {
         return make_error_result<endpoint_type>(errc::invalid_argument);
     }
@@ -133,7 +133,7 @@ inline auto endpoint::get_type() const -> result<endpoint_type> {
     return impl_->type;
 }
 
-inline auto endpoint::send(std::span<const std::byte> data, context_ptr<void> ctx) -> void_result {
+auto endpoint::send(std::span<const std::byte> data, context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -148,7 +148,7 @@ inline auto endpoint::send(std::span<const std::byte> data, context_ptr<void> ct
     return make_success();
 }
 
-inline auto endpoint::recv(std::span<std::byte> buffer, context_ptr<void> ctx) -> void_result {
+auto endpoint::recv(std::span<std::byte> buffer, context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -163,7 +163,7 @@ inline auto endpoint::recv(std::span<std::byte> buffer, context_ptr<void> ctx) -
     return make_success();
 }
 
-inline auto endpoint::sendv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_result {
+auto endpoint::sendv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -177,7 +177,7 @@ inline auto endpoint::sendv(std::span<const iovec> iov, context_ptr<void> ctx) -
     return make_success();
 }
 
-inline auto endpoint::recvv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_result {
+auto endpoint::recvv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -191,9 +191,9 @@ inline auto endpoint::recvv(std::span<const iovec> iov, context_ptr<void> ctx) -
     return make_success();
 }
 
-inline auto endpoint::tagged_send(std::span<const std::byte> data,
-                                  std::uint64_t tag,
-                                  context_ptr<void> ctx) -> void_result {
+auto endpoint::tagged_send(std::span<const std::byte> data,
+                           std::uint64_t tag,
+                           context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -208,10 +208,10 @@ inline auto endpoint::tagged_send(std::span<const std::byte> data,
     return make_success();
 }
 
-inline auto endpoint::tagged_recv(std::span<std::byte> buffer,
-                                  std::uint64_t tag,
-                                  std::uint64_t ignore,
-                                  context_ptr<void> ctx) -> void_result {
+auto endpoint::tagged_recv(std::span<std::byte> buffer,
+                           std::uint64_t tag,
+                           std::uint64_t ignore,
+                           context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -226,8 +226,7 @@ inline auto endpoint::tagged_recv(std::span<std::byte> buffer,
     return make_success();
 }
 
-inline auto endpoint::inject(std::span<const std::byte> data, fabric_addr dest_addr)
-    -> void_result {
+auto endpoint::inject(std::span<const std::byte> data, fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -241,9 +240,9 @@ inline auto endpoint::inject(std::span<const std::byte> data, fabric_addr dest_a
     return make_success();
 }
 
-inline auto endpoint::inject_data(std::span<const std::byte> data,
-                                  std::uint64_t immediate_data,
-                                  fabric_addr dest_addr) -> void_result {
+auto endpoint::inject_data(std::span<const std::byte> data,
+                           std::uint64_t immediate_data,
+                           fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -258,9 +257,9 @@ inline auto endpoint::inject_data(std::span<const std::byte> data,
     return make_success();
 }
 
-inline auto endpoint::tagged_inject(std::span<const std::byte> data,
-                                    std::uint64_t tag,
-                                    fabric_addr dest_addr) -> void_result {
+auto endpoint::tagged_inject(std::span<const std::byte> data,
+                             std::uint64_t tag,
+                             fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -274,10 +273,10 @@ inline auto endpoint::tagged_inject(std::span<const std::byte> data,
     return make_success();
 }
 
-inline auto endpoint::tagged_inject_data(std::span<const std::byte> data,
-                                         std::uint64_t tag,
-                                         std::uint64_t immediate_data,
-                                         fabric_addr dest_addr) -> void_result {
+auto endpoint::tagged_inject_data(std::span<const std::byte> data,
+                                  std::uint64_t tag,
+                                  std::uint64_t immediate_data,
+                                  fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -292,7 +291,7 @@ inline auto endpoint::tagged_inject_data(std::span<const std::byte> data,
     return make_success();
 }
 
-inline auto endpoint::cancel(context_ptr<void> ctx) -> void_result {
+auto endpoint::cancel(context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -306,7 +305,7 @@ inline auto endpoint::cancel(context_ptr<void> ctx) -> void_result {
     return make_success();
 }
 
-inline auto endpoint::connect(const address& peer_addr) -> void_result {
+auto endpoint::connect(const address& peer_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -325,7 +324,7 @@ inline auto endpoint::connect(const address& peer_addr) -> void_result {
     return make_success();
 }
 
-inline auto endpoint::accept() -> void_result {
+auto endpoint::accept() -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -339,7 +338,7 @@ inline auto endpoint::accept() -> void_result {
     return make_success();
 }
 
-inline auto endpoint::get_local_address() const -> result<address> {
+auto endpoint::get_local_address() const -> result<address> {
     if (!impl_ || !impl_->ep) {
         return make_error_result<address>(errc::invalid_argument);
     }
@@ -356,7 +355,7 @@ inline auto endpoint::get_local_address() const -> result<address> {
     return address_from_raw(raw_addr.data(), addrlen, impl_->addr_format);
 }
 
-inline auto endpoint::get_peer_address() const -> result<address> {
+auto endpoint::get_peer_address() const -> result<address> {
     if (!impl_ || !impl_->ep) {
         return make_error_result<address>(errc::invalid_argument);
     }
@@ -373,10 +372,10 @@ inline auto endpoint::get_peer_address() const -> result<address> {
     return address_from_raw(raw_addr.data(), addrlen, impl_->addr_format);
 }
 
-inline auto endpoint::read(std::span<std::byte> local_buffer,
-                           rma_addr remote_addr,
-                           mr_key key,
-                           context_ptr<void> ctx) -> void_result {
+auto endpoint::read(std::span<std::byte> local_buffer,
+                    rma_addr remote_addr,
+                    mr_key key,
+                    context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -397,10 +396,10 @@ inline auto endpoint::read(std::span<std::byte> local_buffer,
     return make_success();
 }
 
-inline auto endpoint::write(std::span<const std::byte> local_buffer,
-                            rma_addr remote_addr,
-                            mr_key key,
-                            context_ptr<void> ctx) -> void_result {
+auto endpoint::write(std::span<const std::byte> local_buffer,
+                     rma_addr remote_addr,
+                     mr_key key,
+                     context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -421,7 +420,7 @@ inline auto endpoint::write(std::span<const std::byte> local_buffer,
     return make_success();
 }
 
-inline auto endpoint::impl_internal_ptr() const noexcept -> void* {
+auto endpoint::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->ep : nullptr;
 }
 
@@ -429,7 +428,7 @@ inline auto endpoint::impl_internal_ptr() const noexcept -> void* {
 // endpoint_bind.cpp implementation
 // ============================================================================
 
-inline auto endpoint::bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result {
+auto endpoint::bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -449,15 +448,15 @@ inline auto endpoint::bind_cq(const completion_queue& cq, cq_bind_flags flags) -
     return make_success();
 }
 
-inline auto endpoint::bind_tx_cq(completion_queue& cq) -> void_result {
+auto endpoint::bind_tx_cq(completion_queue& cq) -> void_result {
     return bind_cq(cq, cq_bind::transmit);
 }
 
-inline auto endpoint::bind_rx_cq(completion_queue& cq) -> void_result {
+auto endpoint::bind_rx_cq(completion_queue& cq) -> void_result {
     return bind_cq(cq, cq_bind::recv);
 }
 
-inline auto endpoint::bind_eq(event_queue& eq, std::uint64_t flags) -> void_result {
+auto endpoint::bind_eq(event_queue& eq, std::uint64_t flags) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -476,7 +475,7 @@ inline auto endpoint::bind_eq(event_queue& eq, std::uint64_t flags) -> void_resu
     return make_success();
 }
 
-inline auto endpoint::bind_av(const address_vector& av, std::uint64_t flags) -> void_result {
+auto endpoint::bind_av(const address_vector& av, std::uint64_t flags) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -495,7 +494,7 @@ inline auto endpoint::bind_av(const address_vector& av, std::uint64_t flags) -> 
     return make_success();
 }
 
-inline auto endpoint::bind_counter(counter& cntr, std::uint64_t flags) -> void_result {
+auto endpoint::bind_counter(counter& cntr, std::uint64_t flags) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -514,7 +513,7 @@ inline auto endpoint::bind_counter(counter& cntr, std::uint64_t flags) -> void_r
     return make_success();
 }
 
-inline auto endpoint::bind_stx(shared_tx_context& stx) -> void_result {
+auto endpoint::bind_stx(shared_tx_context& stx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -533,7 +532,7 @@ inline auto endpoint::bind_stx(shared_tx_context& stx) -> void_result {
     return make_success();
 }
 
-inline auto endpoint::bind_srx(shared_rx_context& srx) -> void_result {
+auto endpoint::bind_srx(shared_rx_context& srx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -559,7 +558,7 @@ inline auto endpoint::bind_srx(shared_rx_context& srx) -> void_result {
 namespace {
 
 /// @brief Translates loom endpoint option names to libfabric option names.
-inline auto translate_optname(int optname) -> int {
+auto translate_optname(int optname) -> int {
     switch (optname) {
         case ep_opt::min_multi_recv:
             return FI_OPT_MIN_MULTI_RECV;
@@ -596,9 +595,8 @@ inline auto translate_optname(int optname) -> int {
 
 }  // namespace
 
-inline auto
-set_endpoint_option(endpoint& ep, int level, int optname, const void* optval, std::size_t optlen)
-    -> result<void> {
+auto set_endpoint_option(
+    endpoint& ep, int level, int optname, const void* optval, std::size_t optlen) -> result<void> {
     if (!ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -619,9 +617,8 @@ set_endpoint_option(endpoint& ep, int level, int optname, const void* optval, st
     return make_success();
 }
 
-inline auto
-get_endpoint_option(const endpoint& ep, int level, int optname, void* optval, std::size_t* optlen)
-    -> result<void> {
+auto get_endpoint_option(
+    const endpoint& ep, int level, int optname, void* optval, std::size_t* optlen) -> result<void> {
     if (!ep) {
         return make_error_result<void>(errc::invalid_argument);
     }

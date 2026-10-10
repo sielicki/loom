@@ -49,23 +49,22 @@ struct passive_endpoint_impl {
 
 namespace loom {
 
-inline passive_endpoint::passive_endpoint() = default;
+passive_endpoint::passive_endpoint() = default;
 
-inline passive_endpoint::passive_endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+passive_endpoint::passive_endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline passive_endpoint::~passive_endpoint() = default;
+passive_endpoint::~passive_endpoint() = default;
 
-inline passive_endpoint::passive_endpoint(passive_endpoint&&) noexcept = default;
+passive_endpoint::passive_endpoint(passive_endpoint&&) noexcept = default;
 
-inline auto passive_endpoint::operator=(passive_endpoint&&) noexcept -> passive_endpoint& = default;
+auto passive_endpoint::operator=(passive_endpoint&&) noexcept -> passive_endpoint& = default;
 
-inline auto passive_endpoint::impl_valid() const noexcept -> bool {
+auto passive_endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->pep;
 }
 
-inline auto passive_endpoint::create(const fabric& fab,
-                                     const fabric_info& info,
-                                     memory_resource* resource) -> result<passive_endpoint> {
+auto passive_endpoint::create(const fabric& fab, const fabric_info& info, memory_resource* resource)
+    -> result<passive_endpoint> {
     if (!fab || !info) {
         return make_error_result<passive_endpoint>(errc::invalid_argument);
     }
@@ -93,7 +92,7 @@ inline auto passive_endpoint::create(const fabric& fab,
     return passive_endpoint{std::move(impl)};
 }
 
-inline auto passive_endpoint::bind_eq(event_queue& eq, std::uint64_t flags) -> void_result {
+auto passive_endpoint::bind_eq(event_queue& eq, std::uint64_t flags) -> void_result {
     if (!impl_ || !impl_->pep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -112,7 +111,7 @@ inline auto passive_endpoint::bind_eq(event_queue& eq, std::uint64_t flags) -> v
     return make_success();
 }
 
-inline auto passive_endpoint::listen() -> void_result {
+auto passive_endpoint::listen() -> void_result {
     if (!impl_ || !impl_->pep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -126,7 +125,7 @@ inline auto passive_endpoint::listen() -> void_result {
     return make_success();
 }
 
-inline auto passive_endpoint::get_local_address() const -> result<address> {
+auto passive_endpoint::get_local_address() const -> result<address> {
     if (!impl_ || !impl_->pep) {
         return make_error_result<address>(errc::invalid_argument);
     }
@@ -143,7 +142,7 @@ inline auto passive_endpoint::get_local_address() const -> result<address> {
     return address_from_raw(raw_addr.data(), addrlen, impl_->addr_format);
 }
 
-inline auto passive_endpoint::reject(const void* handle) -> void_result {
+auto passive_endpoint::reject(const void* handle) -> void_result {
     if (!impl_ || !impl_->pep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -161,7 +160,7 @@ inline auto passive_endpoint::reject(const void* handle) -> void_result {
     return make_success();
 }
 
-inline auto passive_endpoint::impl_internal_ptr() const noexcept -> void* {
+auto passive_endpoint::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->pep : nullptr;
 }
 

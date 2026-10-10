@@ -30,25 +30,25 @@ struct group::impl {
 
 namespace loom::collective {
 
-inline group::group() = default;
+group::group() = default;
 
-inline group::group(group&&) noexcept = default;
-inline auto group::operator=(group&&) noexcept -> group& = default;
-inline group::~group() = default;
+group::group(group&&) noexcept = default;
+auto group::operator=(group&&) noexcept -> group& = default;
+group::~group() = default;
 
-inline auto group::impl_valid() const noexcept -> bool {
+auto group::impl_valid() const noexcept -> bool {
     return impl_ && impl_->coll_addr != fabric_addrs::unspecified;
 }
 
-inline auto group::address() const noexcept -> fabric_addr {
+auto group::address() const noexcept -> fabric_addr {
     return impl_ ? impl_->coll_addr : fabric_addrs::unspecified;
 }
 
-inline auto group::impl_internal_ptr() const noexcept -> void* {
+auto group::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->mc_group : nullptr;
 }
 
-inline auto create_group_impl(endpoint& ep, fabric_addr coll_addr, void* context) -> result<group> {
+auto create_group_impl(endpoint& ep, fabric_addr coll_addr, void* context) -> result<group> {
     auto impl = std::make_unique<group::impl>();
     impl->coll_addr = coll_addr;
 
@@ -96,7 +96,7 @@ constexpr inline auto to_fi_coll(operation op) noexcept -> ::fi_collective_op {
 
 namespace detail {
 
-inline auto is_supported_impl(domain& dom, operation op, atomic::datatype dt, atomic::operation aop)
+auto is_supported_impl(domain& dom, operation op, atomic::datatype dt, atomic::operation aop)
     -> bool {
     auto* fid_dom = static_cast<::fid_domain*>(dom.internal_ptr());
     if (fid_dom == nullptr) {

@@ -72,32 +72,32 @@ struct memory_region_impl {
 
 namespace loom {
 
-inline memory_region::memory_region() = default;
+memory_region::memory_region() = default;
 
-inline memory_region::memory_region(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+memory_region::memory_region(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline memory_region::~memory_region() = default;
+memory_region::~memory_region() = default;
 
-inline memory_region::memory_region(memory_region&&) noexcept = default;
+memory_region::memory_region(memory_region&&) noexcept = default;
 
-inline auto memory_region::operator=(memory_region&&) noexcept -> memory_region& = default;
+auto memory_region::operator=(memory_region&&) noexcept -> memory_region& = default;
 
-inline auto memory_region::impl_valid() const noexcept -> bool {
+auto memory_region::impl_valid() const noexcept -> bool {
     return impl_ && impl_->mr;
 }
 
-inline auto memory_region::register_memory(const domain& dom,
-                                           std::span<std::byte> buffer,
-                                           mr_access access,
-                                           memory_resource* resource) -> result<memory_region> {
+auto memory_region::register_memory(const domain& dom,
+                                    std::span<std::byte> buffer,
+                                    mr_access access,
+                                    memory_resource* resource) -> result<memory_region> {
     return register_memory(dom, buffer.data(), buffer.size(), access, resource);
 }
 
-inline auto memory_region::register_memory(const domain& dom,
-                                           void* addr,
-                                           std::size_t length,
-                                           mr_access access,
-                                           memory_resource* resource) -> result<memory_region> {
+auto memory_region::register_memory(const domain& dom,
+                                    void* addr,
+                                    std::size_t length,
+                                    mr_access access,
+                                    memory_resource* resource) -> result<memory_region> {
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
@@ -122,12 +122,12 @@ inline auto memory_region::register_memory(const domain& dom,
     return memory_region{std::move(impl)};
 }
 
-inline auto memory_region::register_hmem(const domain& dom,
-                                         void* addr,
-                                         std::size_t length,
-                                         mr_access access,
-                                         hmem_device device,
-                                         memory_resource* resource) -> result<memory_region> {
+auto memory_region::register_hmem(const domain& dom,
+                                  void* addr,
+                                  std::size_t length,
+                                  mr_access access,
+                                  hmem_device device,
+                                  memory_resource* resource) -> result<memory_region> {
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
@@ -198,13 +198,13 @@ inline auto memory_region::register_hmem(const domain& dom,
     return memory_region{std::move(impl)};
 }
 
-inline auto memory_region::register_dmabuf(const domain& dom,
-                                           void* addr,
-                                           std::size_t length,
-                                           mr_access access,
-                                           int fd,
-                                           std::uint64_t offset,
-                                           memory_resource* resource) -> result<memory_region> {
+auto memory_region::register_dmabuf(const domain& dom,
+                                    void* addr,
+                                    std::size_t length,
+                                    mr_access access,
+                                    int fd,
+                                    std::uint64_t offset,
+                                    memory_resource* resource) -> result<memory_region> {
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
@@ -242,29 +242,29 @@ inline auto memory_region::register_dmabuf(const domain& dom,
     return memory_region{std::move(impl)};
 }
 
-inline auto memory_region::descriptor() const noexcept -> mr_descriptor {
+auto memory_region::descriptor() const noexcept -> mr_descriptor {
     if (!impl_ || !impl_->mr) {
         return mr_descriptor{};
     }
     return mr_descriptor{fi_mr_desc(impl_->mr)};
 }
 
-inline auto memory_region::key() const noexcept -> std::uint64_t {
+auto memory_region::key() const noexcept -> std::uint64_t {
     if (!impl_ || !impl_->mr) {
         return 0;
     }
     return fi_mr_key(impl_->mr);
 }
 
-inline auto memory_region::address() const noexcept -> void* {
+auto memory_region::address() const noexcept -> void* {
     return impl_ ? impl_->addr : nullptr;
 }
 
-inline auto memory_region::length() const noexcept -> std::size_t {
+auto memory_region::length() const noexcept -> std::size_t {
     return impl_ ? impl_->length : 0;
 }
 
-inline auto memory_region::bind(endpoint& ep) -> result<void> {
+auto memory_region::bind(endpoint& ep) -> result<void> {
     if (!impl_ || !impl_->mr) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -279,7 +279,7 @@ inline auto memory_region::bind(endpoint& ep) -> result<void> {
     return make_success();
 }
 
-inline auto memory_region::enable() -> result<void> {
+auto memory_region::enable() -> result<void> {
     if (!impl_ || !impl_->mr) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -293,7 +293,7 @@ inline auto memory_region::enable() -> result<void> {
     return make_success();
 }
 
-inline auto memory_region::refresh() -> result<void> {
+auto memory_region::refresh() -> result<void> {
     if (!impl_ || !impl_->mr) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -307,7 +307,7 @@ inline auto memory_region::refresh() -> result<void> {
     return make_success();
 }
 
-inline auto memory_region::impl_internal_ptr() const noexcept -> void* {
+auto memory_region::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->mr : nullptr;
 }
 

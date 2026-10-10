@@ -69,21 +69,21 @@ struct fabric_impl {
 
 namespace loom {
 
-inline fabric_info::fabric_info() = default;
+fabric_info::fabric_info() = default;
 
-inline fabric_info::fabric_info(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+fabric_info::fabric_info(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline fabric_info::~fabric_info() = default;
+fabric_info::~fabric_info() = default;
 
-inline fabric_info::fabric_info(fabric_info&&) noexcept = default;
+fabric_info::fabric_info(fabric_info&&) noexcept = default;
 
-inline auto fabric_info::operator=(fabric_info&&) noexcept -> fabric_info& = default;
+auto fabric_info::operator=(fabric_info&&) noexcept -> fabric_info& = default;
 
-inline auto fabric_info::impl_valid() const noexcept -> bool {
+auto fabric_info::impl_valid() const noexcept -> bool {
     return impl_ && impl_->info != nullptr;
 }
 
-inline auto fabric_info::get_fabric_attr() const -> std::optional<fabric_attributes> {
+auto fabric_info::get_fabric_attr() const -> std::optional<fabric_attributes> {
     if (!impl_ || !impl_->info || !impl_->info->fabric_attr) {
         return std::nullopt;
     }
@@ -100,7 +100,7 @@ inline auto fabric_info::get_fabric_attr() const -> std::optional<fabric_attribu
     };
 }
 
-inline auto fabric_info::get_domain_attr() const -> std::optional<domain_attributes> {
+auto fabric_info::get_domain_attr() const -> std::optional<domain_attributes> {
     if (!impl_ || !impl_->info || !impl_->info->domain_attr) {
         return std::nullopt;
     }
@@ -118,7 +118,7 @@ inline auto fabric_info::get_domain_attr() const -> std::optional<domain_attribu
     };
 }
 
-inline auto fabric_info::get_endpoint_attr() const -> std::optional<endpoint_attributes> {
+auto fabric_info::get_endpoint_attr() const -> std::optional<endpoint_attributes> {
     if (!impl_ || !impl_->info || !impl_->info->ep_attr) {
         return std::nullopt;
     }
@@ -137,36 +137,36 @@ inline auto fabric_info::get_endpoint_attr() const -> std::optional<endpoint_att
     };
 }
 
-inline auto fabric_info::get_caps() const -> caps {
+auto fabric_info::get_caps() const -> caps {
     if (!impl_ || !impl_->info) {
         return caps{0ULL};
     }
     return detail::from_fi_caps(impl_->info->caps);
 }
 
-inline auto fabric_info::get_mode() const -> mode {
+auto fabric_info::get_mode() const -> mode {
     if (!impl_ || !impl_->info) {
         return mode{0ULL};
     }
     return detail::from_fi_mode(impl_->info->mode);
 }
 
-inline auto fabric_info::get_address_format() const -> address_format {
+auto fabric_info::get_address_format() const -> address_format {
     if (!impl_ || !impl_->info) {
         return address_format::unspecified;
     }
     return detail::from_fi_addr_format(impl_->info->addr_format);
 }
 
-inline auto fabric_info::begin() const -> iterator {
+auto fabric_info::begin() const -> iterator {
     return iterator{impl_ && impl_->info ? this : nullptr};
 }
 
-inline auto fabric_info::end() const -> iterator {
+auto fabric_info::end() const -> iterator {
     return iterator{nullptr};
 }
 
-inline auto fabric_info::iterator::operator++() -> iterator& {
+auto fabric_info::iterator::operator++() -> iterator& {
     if (current_ && current_->impl_ && current_->impl_->info) {
         current_ = current_->impl_->info->next ? current_ : nullptr;
     } else {
@@ -175,31 +175,31 @@ inline auto fabric_info::iterator::operator++() -> iterator& {
     return *this;
 }
 
-inline auto fabric_info::iterator::operator++(int) -> iterator {
+auto fabric_info::iterator::operator++(int) -> iterator {
     iterator tmp = *this;
     ++(*this);
     return tmp;
 }
 
-inline auto fabric_info::impl_internal_ptr() const noexcept -> void* {
+auto fabric_info::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->info : nullptr;
 }
 
-inline fabric::fabric() = default;
+fabric::fabric() = default;
 
-inline fabric::fabric(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+fabric::fabric(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline fabric::~fabric() = default;
+fabric::~fabric() = default;
 
-inline fabric::fabric(fabric&&) noexcept = default;
+fabric::fabric(fabric&&) noexcept = default;
 
-inline auto fabric::operator=(fabric&&) noexcept -> fabric& = default;
+auto fabric::operator=(fabric&&) noexcept -> fabric& = default;
 
-inline auto fabric::impl_valid() const noexcept -> bool {
+auto fabric::impl_valid() const noexcept -> bool {
     return impl_ && impl_->fabric != nullptr;
 }
 
-inline auto fabric::create(const fabric_info& info, memory_resource* resource) -> result<fabric> {
+auto fabric::create(const fabric_info& info, memory_resource* resource) -> result<fabric> {
     if (!info) {
         return make_error_result<fabric>(errc::invalid_argument);
     }
@@ -228,33 +228,32 @@ inline auto fabric::create(const fabric_info& info, memory_resource* resource) -
     return fabric{std::move(impl)};
 }
 
-inline auto fabric::get_name() const -> std::string_view {
+auto fabric::get_name() const -> std::string_view {
     if (!impl_) {
         return {};
     }
     return impl_->name;
 }
 
-inline auto fabric::get_provider_name() const -> std::string_view {
+auto fabric::get_provider_name() const -> std::string_view {
     if (!impl_) {
         return {};
     }
     return impl_->provider_name;
 }
 
-inline auto fabric::get_provider_version() const -> fabric_version {
+auto fabric::get_provider_version() const -> fabric_version {
     if (!impl_) {
         return fabric_version{0U};
     }
     return fabric_version{impl_->provider_version};
 }
 
-inline auto fabric::impl_internal_ptr() const noexcept -> void* {
+auto fabric::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->fabric : nullptr;
 }
 
-inline auto query_fabric(const fabric_hints& hints, memory_resource* resource)
-    -> result<fabric_info> {
+auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> result<fabric_info> {
     const std::unique_ptr<::fi_info, decltype(&::fi_freeinfo)> info_hints{::fi_allocinfo(),
                                                                           &::fi_freeinfo};
     if (!info_hints || !info_hints->ep_attr || !info_hints->domain_attr ||
@@ -315,7 +314,7 @@ inline auto query_fabric(const fabric_hints& hints, memory_resource* resource)
     return fabric_info{std::move(impl)};
 }
 
-inline auto get_fabric_version() noexcept -> fabric_version {
+auto get_fabric_version() noexcept -> fabric_version {
     return fabric_version{::fi_version()};
 }
 

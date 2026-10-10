@@ -64,23 +64,23 @@ static inline auto av_type_to_fi(av_type type) -> ::fi_av_type {
     }
 }
 
-inline address_vector::address_vector() = default;
+address_vector::address_vector() = default;
 
-inline address_vector::address_vector(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+address_vector::address_vector(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline address_vector::~address_vector() = default;
+address_vector::~address_vector() = default;
 
-inline address_vector::address_vector(address_vector&&) noexcept = default;
+address_vector::address_vector(address_vector&&) noexcept = default;
 
-inline auto address_vector::operator=(address_vector&&) noexcept -> address_vector& = default;
+auto address_vector::operator=(address_vector&&) noexcept -> address_vector& = default;
 
-inline auto address_vector::impl_valid() const noexcept -> bool {
+auto address_vector::impl_valid() const noexcept -> bool {
     return impl_ && impl_->av != nullptr;
 }
 
-inline auto address_vector::create(const domain& dom,
-                                   const address_vector_attr& attr,
-                                   memory_resource* resource) -> result<address_vector> {
+auto address_vector::create(const domain& dom,
+                            const address_vector_attr& attr,
+                            memory_resource* resource) -> result<address_vector> {
     if (!dom) {
         return make_error_result<address_vector>(errc::invalid_argument);
     }
@@ -125,7 +125,7 @@ inline auto address_vector::create(const domain& dom,
     return address_vector{std::move(impl)};
 }
 
-inline auto address_vector::insert(const address& addr, void* context) -> result<av_handle> {
+auto address_vector::insert(const address& addr, void* context) -> result<av_handle> {
     if (!impl_ || !impl_->av) {
         return make_error_result<av_handle>(errc::invalid_argument);
     }
@@ -155,9 +155,9 @@ inline auto address_vector::insert(const address& addr, void* context) -> result
     return av_handle{fi_addr};
 }
 
-inline auto address_vector::insert_batch(std::span<const address> addresses,
-                                         std::span<av_handle> handles,
-                                         std::span<void*> contexts) -> result<std::size_t> {
+auto address_vector::insert_batch(std::span<const address> addresses,
+                                  std::span<av_handle> handles,
+                                  std::span<void*> contexts) -> result<std::size_t> {
     if (!impl_ || !impl_->av) {
         return make_error_result<std::size_t>(errc::invalid_argument);
     }
@@ -222,7 +222,7 @@ inline auto address_vector::insert_batch(std::span<const address> addresses,
     return count;
 }
 
-inline auto address_vector::remove(av_handle handle) -> void_result {
+auto address_vector::remove(av_handle handle) -> void_result {
     if (!impl_ || !impl_->av) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -246,7 +246,7 @@ inline auto address_vector::remove(av_handle handle) -> void_result {
     return make_success();
 }
 
-inline auto address_vector::remove_batch(std::span<const av_handle> handles) -> void_result {
+auto address_vector::remove_batch(std::span<const av_handle> handles) -> void_result {
     if (!impl_ || !impl_->av) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -273,7 +273,7 @@ inline auto address_vector::remove_batch(std::span<const av_handle> handles) -> 
     return make_success();
 }
 
-inline auto address_vector::lookup(av_handle handle) const -> result<address> {
+auto address_vector::lookup(av_handle handle) const -> result<address> {
     if (!impl_ || !impl_->av) {
         return make_error_result<address>(errc::invalid_argument);
     }
@@ -301,7 +301,7 @@ inline auto address_vector::lookup(av_handle handle) const -> result<address> {
     return address_from_raw(addr_buf.data(), addrlen, impl_->addr_format);
 }
 
-inline auto address_vector::address_to_string(av_handle handle) const -> result<std::string> {
+auto address_vector::address_to_string(av_handle handle) const -> result<std::string> {
     if (!impl_ || !impl_->av) {
         return make_error_result<std::string>(errc::invalid_argument);
     }
@@ -346,19 +346,19 @@ inline auto address_vector::address_to_string(av_handle handle) const -> result<
     }
 }
 
-inline auto address_vector::get_type() const -> av_type {
+auto address_vector::get_type() const -> av_type {
     return impl_ ? impl_->type : av_type::unspecified;
 }
 
-inline auto address_vector::count() const noexcept -> std::size_t {
+auto address_vector::count() const noexcept -> std::size_t {
     return impl_ ? impl_->addr_count : 0;
 }
 
-inline auto address_vector::bind(endpoint& ep) -> void_result {
+auto address_vector::bind(endpoint& ep) -> void_result {
     return ep.bind_av(*this);
 }
 
-inline auto address_vector::impl_internal_ptr() const noexcept -> void* {
+auto address_vector::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->av : nullptr;
 }
 

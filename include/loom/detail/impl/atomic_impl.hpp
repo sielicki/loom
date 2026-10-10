@@ -13,12 +13,12 @@
 
 namespace loom::atomic {
 
-inline auto inject(endpoint& ep,
-                   operation op,
-                   datatype dt,
-                   const void* buf,
-                   std::size_t count,
-                   remote_memory remote) -> result<void> {
+auto inject(endpoint& ep,
+            operation op,
+            datatype dt,
+            const void* buf,
+            std::size_t count,
+            remote_memory remote) -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
@@ -43,7 +43,7 @@ inline auto inject(endpoint& ep,
     return make_success();
 }
 
-inline auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
+auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
     if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->writevalid) {
         return false;
@@ -58,8 +58,7 @@ inline auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count
     return ret == 0;
 }
 
-inline auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out)
-    -> bool {
+auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
     if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->readwritevalid) {
         return false;
@@ -75,8 +74,7 @@ inline auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t*
     return ret == 0;
 }
 
-inline auto is_compare_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out)
-    -> bool {
+auto is_compare_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
     if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->compwritevalid) {
         return false;

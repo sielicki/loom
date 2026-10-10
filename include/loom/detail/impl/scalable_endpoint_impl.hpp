@@ -58,24 +58,23 @@ struct scalable_endpoint_impl {
 
 namespace loom {
 
-inline scalable_endpoint::scalable_endpoint() = default;
+scalable_endpoint::scalable_endpoint() = default;
 
-inline scalable_endpoint::scalable_endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+scalable_endpoint::scalable_endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
-inline scalable_endpoint::~scalable_endpoint() = default;
+scalable_endpoint::~scalable_endpoint() = default;
 
-inline scalable_endpoint::scalable_endpoint(scalable_endpoint&&) noexcept = default;
+scalable_endpoint::scalable_endpoint(scalable_endpoint&&) noexcept = default;
 
-inline auto scalable_endpoint::operator=(scalable_endpoint&&) noexcept
-    -> scalable_endpoint& = default;
+auto scalable_endpoint::operator=(scalable_endpoint&&) noexcept -> scalable_endpoint& = default;
 
-inline auto scalable_endpoint::impl_valid() const noexcept -> bool {
+auto scalable_endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->sep;
 }
 
-inline auto scalable_endpoint::create(const domain& dom,
-                                      const fabric_info& info,
-                                      memory_resource* resource) -> result<scalable_endpoint> {
+auto scalable_endpoint::create(const domain& dom,
+                               const fabric_info& info,
+                               memory_resource* resource) -> result<scalable_endpoint> {
     if (!dom || !info) {
         return make_error_result<scalable_endpoint>(errc::invalid_argument);
     }
@@ -112,7 +111,7 @@ inline auto scalable_endpoint::create(const domain& dom,
     return scalable_endpoint{std::move(impl)};
 }
 
-inline auto scalable_endpoint::bind_av(address_vector& av, std::uint64_t flags) -> void_result {
+auto scalable_endpoint::bind_av(address_vector& av, std::uint64_t flags) -> void_result {
     if (!impl_ || !impl_->sep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -131,7 +130,7 @@ inline auto scalable_endpoint::bind_av(address_vector& av, std::uint64_t flags) 
     return make_success();
 }
 
-inline auto scalable_endpoint::enable() -> void_result {
+auto scalable_endpoint::enable() -> void_result {
     if (!impl_ || !impl_->sep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -145,7 +144,7 @@ inline auto scalable_endpoint::enable() -> void_result {
     return make_success();
 }
 
-inline auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
+auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
     if (!impl_ || !impl_->sep) {
         return make_error_result<endpoint>(errc::invalid_argument);
     }
@@ -167,7 +166,7 @@ inline auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint>
     return endpoint{std::move(ep_impl)};
 }
 
-inline auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
+auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
     if (!impl_ || !impl_->sep) {
         return make_error_result<endpoint>(errc::invalid_argument);
     }
@@ -189,15 +188,15 @@ inline auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint>
     return endpoint{std::move(ep_impl)};
 }
 
-inline auto scalable_endpoint::tx_context_count() const noexcept -> std::size_t {
+auto scalable_endpoint::tx_context_count() const noexcept -> std::size_t {
     return impl_ ? impl_->tx_ctx_cnt : 0;
 }
 
-inline auto scalable_endpoint::rx_context_count() const noexcept -> std::size_t {
+auto scalable_endpoint::rx_context_count() const noexcept -> std::size_t {
     return impl_ ? impl_->rx_ctx_cnt : 0;
 }
 
-inline auto scalable_endpoint::impl_internal_ptr() const noexcept -> void* {
+auto scalable_endpoint::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->sep : nullptr;
 }
 

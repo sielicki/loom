@@ -12,7 +12,7 @@
 
 namespace loom {
 
-inline auto address_from_raw(const void* data, std::size_t len, address_format format) noexcept
+auto address_from_raw(const void* data, std::size_t len, address_format format) noexcept
     -> address {
     if (data == nullptr || len == 0) {
         return unspecified_address{};
