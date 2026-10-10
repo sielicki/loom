@@ -73,6 +73,7 @@ template <typename BufferSequence>
  * This class provides async operations for fabric messaging that integrate
  * with Asio's completion token model, supporting callbacks, coroutines,
  * futures, and other Asio-compatible completion mechanisms.
+ * Per-operation cancellation supports Asio's terminal guarantee.
  *
  * @tparam Executor The executor type, defaults to any_io_executor.
  */

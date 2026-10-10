@@ -241,14 +241,16 @@ private:
  * @brief Cancellation handler that triggers fi_cancel on the endpoint.
  *
  * This class is installed on the handler's cancellation slot and will
- * call fi_cancel when cancellation is requested.
+ * call fi_cancel when terminal cancellation is requested. Libfabric does not
+ * promise the side-effect guarantees required for partial or total cancellation.
  */
 class cancellation_handler {
 public:
     cancellation_handler(endpoint* ep, void* ctx) noexcept : ep_(ep), ctx_(ctx) {}
 
     void operator()(::asio::cancellation_type type) {
-        if (ep_ && (type != ::asio::cancellation_type::none)) {
+        if (ep_ &&
+            (type & ::asio::cancellation_type::terminal) != ::asio::cancellation_type::none) {
             // Attempt to cancel the operation. The result indicates whether
             // fi_cancel succeeded, but we cannot propagate errors from here
             // as this is invoked asynchronously from the cancellation signal.

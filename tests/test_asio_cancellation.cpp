@@ -189,3 +189,33 @@ TEST_CASE("Failed Asio submissions leave no pending cancellation", "[asio][cance
     ioc.run();
     REQUIRE(completed);
 }
+
+TEST_CASE("Asio cancellation respects the requested guarantee", "[asio][cancellation]") {
+    using cancellation_type = ::asio::cancellation_type;
+    const auto type = GENERATE(cancellation_type::none,
+                               cancellation_type::terminal,
+                               cancellation_type::partial,
+                               cancellation_type::total,
+                               cancellation_type::partial | cancellation_type::total,
+                               cancellation_type::all);
+    const bool terminal = (type & cancellation_type::terminal) != cancellation_type::none;
+    CAPTURE(type);
+    cancellation_provider native;
+    ::asio::io_context ioc;
+    ::asio::cancellation_signal signal;
+    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    std::array<std::byte, 1> storage{};
+    bool completed{};
+    ep.async_receive(
+        ::asio::buffer(storage),
+        ::asio::bind_cancellation_slot(signal.slot(), [&](std::error_code error, std::size_t) {
+            REQUIRE(static_cast<bool>(error) == terminal);
+            completed = true;
+        }));
+    signal.emit(type);
+    REQUIRE(native.cancelled.size() == (terminal ? 1 : 0));
+    native.complete(native.pending.front(),
+                    terminal ? loom::make_error_code(loom::errc::canceled) : std::error_code{});
+    ioc.run();
+    REQUIRE(completed);
+}
