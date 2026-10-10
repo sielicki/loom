@@ -242,7 +242,7 @@ template <structured_triggered_context Ctx>
                            const threshold_condition& trigger,
                            msg::send_flags flags = msg::send_flag::none) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
-    if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr) {
+    if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
@@ -285,7 +285,7 @@ template <structured_triggered_context Ctx>
                            const threshold_condition& trigger,
                            msg::recv_flags flags = msg::recv_flag::none) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
-    if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr) {
+    if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
@@ -328,7 +328,7 @@ template <structured_triggered_context Ctx>
                                   const threshold_condition& trigger,
                                   msg::send_flags flags = msg::send_flag::none) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
-    if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr) {
+    if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
@@ -373,7 +373,7 @@ template <structured_triggered_context Ctx>
                                   const threshold_condition& trigger,
                                   msg::recv_flags flags = msg::recv_flag::none) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
-    if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr) {
+    if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
@@ -422,7 +422,7 @@ template <structured_triggered_context Ctx>
                         Ctx* context,
                         const threshold_condition& trigger) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (fid_ep == nullptr || context == nullptr || trigger.cntr == nullptr) {
+    if (fid_ep == nullptr || context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
@@ -477,7 +477,7 @@ template <structured_triggered_context Ctx>
                          Ctx* context,
                          const threshold_condition& trigger) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (fid_ep == nullptr || context == nullptr || trigger.cntr == nullptr) {
+    if (fid_ep == nullptr || context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
 

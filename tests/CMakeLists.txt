@@ -81,6 +81,7 @@ loom_add_test(test_fabric_query)
 loom_add_test(test_provider_aware)
 loom_add_test(test_provider_atomic)
 loom_add_test(test_trigger)
+loom_add_test(test_trigger_transport)
 
 # Exercise implementation mode without linking the compiled loom library.
 add_library(loom_test_implementation OBJECT loom_implementation.cpp)
@@ -96,6 +97,7 @@ add_executable(test_implementation
     test_completion_queue.cpp
     test_scalable_endpoint.cpp
     test_endpoint_limits.cpp
+    test_trigger_transport.cpp
 )
 target_link_libraries(test_implementation PRIVATE
     loom_test_implementation
