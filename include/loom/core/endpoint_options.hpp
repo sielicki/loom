@@ -150,7 +150,7 @@ get_endpoint_option(const endpoint& ep, int level, int optname, void* optval, st
  */
 [[nodiscard]] inline auto set_shared_memory_permitted(endpoint& ep, bool permitted)
     -> result<void> {
-    int val = permitted ? 1 : 0;
+    bool val = permitted;
     return set_endpoint_option(
         ep, ep_opt::level_endpoint, ep_opt::shared_memory_permitted, &val, sizeof(val));
 }
@@ -161,14 +161,14 @@ get_endpoint_option(const endpoint& ep, int level, int optname, void* optval, st
  * @return True if permitted, or error.
  */
 [[nodiscard]] inline auto get_shared_memory_permitted(const endpoint& ep) -> result<bool> {
-    int val{0};
+    bool val{false};
     std::size_t optlen = sizeof(val);
     auto res = get_endpoint_option(
         ep, ep_opt::level_endpoint, ep_opt::shared_memory_permitted, &val, &optlen);
     if (!res) {
         return std::unexpected(res.error());
     }
-    return val != 0;
+    return val;
 }
 
 /**
@@ -178,7 +178,7 @@ get_endpoint_option(const endpoint& ep, int level, int optname, void* optval, st
  * @return Success or error result.
  */
 [[nodiscard]] inline auto set_cuda_api_permitted(endpoint& ep, bool permitted) -> result<void> {
-    int val = permitted ? 1 : 0;
+    bool val = permitted;
     return set_endpoint_option(
         ep, ep_opt::level_endpoint, ep_opt::cuda_api_permitted, &val, sizeof(val));
 }
@@ -189,14 +189,14 @@ get_endpoint_option(const endpoint& ep, int level, int optname, void* optval, st
  * @return True if permitted, or error.
  */
 [[nodiscard]] inline auto get_cuda_api_permitted(const endpoint& ep) -> result<bool> {
-    int val{0};
+    bool val{false};
     std::size_t optlen = sizeof(val);
     auto res =
         get_endpoint_option(ep, ep_opt::level_endpoint, ep_opt::cuda_api_permitted, &val, &optlen);
     if (!res) {
         return std::unexpected(res.error());
     }
-    return val != 0;
+    return val;
 }
 
 /**
@@ -211,14 +211,14 @@ namespace efa {
  * @return True if reads are emulated, or error.
  */
 [[nodiscard]] inline auto get_emulated_read(const endpoint& ep) -> result<bool> {
-    int val{0};
+    bool val{false};
     std::size_t optlen = sizeof(val);
     auto res =
         get_endpoint_option(ep, ep_opt::level_endpoint, ep_opt::efa_emulated_read, &val, &optlen);
     if (!res) {
         return std::unexpected(res.error());
     }
-    return val != 0;
+    return val;
 }
 
 /**
@@ -227,14 +227,14 @@ namespace efa {
  * @return True if writes are emulated, or error.
  */
 [[nodiscard]] inline auto get_emulated_write(const endpoint& ep) -> result<bool> {
-    int val{0};
+    bool val{false};
     std::size_t optlen = sizeof(val);
     auto res =
         get_endpoint_option(ep, ep_opt::level_endpoint, ep_opt::efa_emulated_write, &val, &optlen);
     if (!res) {
         return std::unexpected(res.error());
     }
-    return val != 0;
+    return val;
 }
 
 /**
@@ -245,7 +245,7 @@ namespace efa {
  */
 [[nodiscard]] inline auto set_write_in_order_aligned_128_bytes(endpoint& ep, bool enable)
     -> result<void> {
-    int val = enable ? 1 : 0;
+    bool val = enable;
     return set_endpoint_option(ep,
                                ep_opt::level_endpoint,
                                ep_opt::efa_write_in_order_aligned_128_bytes,
@@ -259,14 +259,14 @@ namespace efa {
  * @return True if enabled, or error.
  */
 [[nodiscard]] inline auto get_write_in_order_aligned_128_bytes(const endpoint& ep) -> result<bool> {
-    int val{0};
+    bool val{false};
     std::size_t optlen = sizeof(val);
     auto res = get_endpoint_option(
         ep, ep_opt::level_endpoint, ep_opt::efa_write_in_order_aligned_128_bytes, &val, &optlen);
     if (!res) {
         return std::unexpected(res.error());
     }
-    return val != 0;
+    return val;
 }
 
 }  // namespace efa

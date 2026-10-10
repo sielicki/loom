@@ -2,6 +2,7 @@
 #include "loom/core/endpoint_options.hpp"
 
 #include <rdma/fi_endpoint.h>
+#include <rdma/fi_ext.h>
 
 #include "loom/core/error.hpp"
 
@@ -20,26 +21,16 @@ auto translate_optname(int optname) -> int {
             return FI_OPT_BUFFERED_MIN;
         case ep_opt::buffered_limit:
             return FI_OPT_BUFFERED_LIMIT;
-#ifdef FI_OPT_SHARED_MEMORY_PERMITTED
         case ep_opt::shared_memory_permitted:
             return FI_OPT_SHARED_MEMORY_PERMITTED;
-#endif
-#ifdef FI_OPT_CUDA_API_PERMITTED
         case ep_opt::cuda_api_permitted:
             return FI_OPT_CUDA_API_PERMITTED;
-#endif
-#ifdef FI_OPT_EFA_EMULATED_READ
         case ep_opt::efa_emulated_read:
             return FI_OPT_EFA_EMULATED_READ;
-#endif
-#ifdef FI_OPT_EFA_EMULATED_WRITE
         case ep_opt::efa_emulated_write:
             return FI_OPT_EFA_EMULATED_WRITE;
-#endif
-#ifdef FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES
         case ep_opt::efa_write_in_order_aligned_128_bytes:
             return FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES;
-#endif
         default:
             return optname;
     }
