@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "loom/core/allocator.hpp"
+#include "loom/core/endpoint.hpp"
 #include "loom/core/error.hpp"
 #include "loom/detail/native_address.hpp"
 
@@ -319,8 +320,8 @@ auto address_vector::count() const noexcept -> std::size_t {
     return impl_ ? impl_->addr_count : 0;
 }
 
-auto address_vector::bind(endpoint&) -> void_result {
-    return make_success();
+auto address_vector::bind(endpoint& ep) -> void_result {
+    return ep.bind_av(*this);
 }
 
 auto address_vector::impl_internal_ptr() const noexcept -> void* {

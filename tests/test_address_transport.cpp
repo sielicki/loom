@@ -14,8 +14,18 @@ struct provider {
     std::size_t address_size = sizeof(sockaddr_in);
     std::size_t calls{};
     bool fail_middle{};
+    fid* bound_address_vector{};
+    int bind_result{};
     std::vector<void*> contexts;
-    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops ops{
+        .size = sizeof(fi_ops),
+        .close = [](fid*) { return 0; },
+        .bind = [](fid* ep, fid* av, std::uint64_t) {
+            auto& self = *static_cast<provider*>(ep->context);
+            self.bound_address_vector = av;
+            return self.bind_result;
+        },
+    };
     fi_ops_cm cm{
         .size = sizeof(fi_ops_cm),
         .connect =
@@ -62,6 +72,18 @@ struct provider {
     }
 };
 }  // namespace
+
+TEST_CASE("address vector binding reaches the provider", "[address]") {
+    provider native;
+    auto av = native.vector(loom::address_format::inet);
+    auto ep = native.endpoint(loom::address_format::inet);
+    REQUIRE(av.bind(ep));
+    REQUIRE(native.bound_address_vector == &native.av_handle.fid);
+    native.bind_result = -FI_EINVAL;
+    REQUIRE(av.bind(ep).error() == loom::errc::invalid_argument);
+    loom::endpoint empty;
+    REQUIRE(av.bind(empty).error() == loom::errc::invalid_argument);
+}
 
 TEST_CASE("connection and AV insertion encode native IPv4 addresses", "[address]") {
     provider native;
