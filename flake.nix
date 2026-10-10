@@ -218,7 +218,7 @@
               meta = with lib; {
                 description = "Modern C++26 bindings for libfabric";
                 homepage = "https://github.com/sielicki/loom";
-                license = licenses.mit;
+                license = with licenses; [ bsd2 gpl2Only ];
                 platforms = platforms.unix;
                 maintainers = [ ];
               };
