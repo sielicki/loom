@@ -10,6 +10,7 @@
 #include "loom/core/endpoint.hpp"
 #include "loom/core/error.hpp"
 #include "loom/core/memory.hpp"
+#include "loom/detail/conversions.hpp"
 
 namespace loom::detail {
 
@@ -96,7 +97,8 @@ inline auto memory_region::register_memory(domain& dom,
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fid_mr* mr = nullptr;
-    auto ret = fi_mr_reg(fid_dom, addr, length, access.get(), 0, 0, 0, &mr, nullptr);
+    auto ret =
+        fi_mr_reg(fid_dom, addr, length, detail::to_fi_mr_access(access), 0, 0, 0, &mr, nullptr);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<memory_region>(-ret);
@@ -124,7 +126,7 @@ inline auto memory_region::register_hmem(domain& dom,
     fi_mr_attr mr_attr{};
     mr_attr.mr_iov = nullptr;
     mr_attr.iov_count = 0;
-    mr_attr.access = access.get();
+    mr_attr.access = detail::to_fi_mr_access(access);
     mr_attr.offset = 0;
     mr_attr.requested_key = 0;
     mr_attr.context = nullptr;
@@ -175,7 +177,7 @@ inline auto memory_region::register_dmabuf(domain& dom,
     fi_mr_attr mr_attr{};
     mr_attr.dmabuf = &dmabuf;
     mr_attr.iov_count = 1;
-    mr_attr.access = access.get() | FI_MR_DMABUF;
+    mr_attr.access = detail::to_fi_mr_access(access) | FI_MR_DMABUF;
     mr_attr.offset = offset;
     mr_attr.requested_key = 0;
     mr_attr.context = nullptr;

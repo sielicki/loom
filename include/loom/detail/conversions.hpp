@@ -19,6 +19,16 @@
  */
 namespace loom::detail {
 
+/// Translate memory permissions independently of loom's public bit layout.
+[[nodiscard]] constexpr auto to_fi_mr_access(mr_access access) noexcept -> std::uint64_t {
+    return (access.has(mr_access_flags::read) ? FI_READ : 0ULL) |
+           (access.has(mr_access_flags::write) ? FI_WRITE : 0ULL) |
+           (access.has(mr_access_flags::remote_read) ? FI_REMOTE_READ : 0ULL) |
+           (access.has(mr_access_flags::remote_write) ? FI_REMOTE_WRITE : 0ULL) |
+           (access.has(mr_access_flags::send) ? FI_SEND : 0ULL) |
+           (access.has(mr_access_flags::recv) ? FI_RECV : 0ULL);
+}
+
 /**
  * @brief Converts loom capabilities to libfabric capability flags.
  * @param c The loom caps to convert.

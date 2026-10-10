@@ -1,11 +1,42 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/loom.hpp>
 
+#include <array>
+#include <utility>
 #include <vector>
 
+#include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using namespace loom;
+
+TEST_CASE("registration translates access permissions", "[memory]") {
+    test::mock_domain provider;
+    std::array<std::byte, 64> buffer{};
+    constexpr std::array permissions{
+        std::pair{mr_access_flags::read, FI_READ},
+        std::pair{mr_access_flags::write, FI_WRITE},
+        std::pair{mr_access_flags::remote_read, FI_REMOTE_READ},
+        std::pair{mr_access_flags::remote_write, FI_REMOTE_WRITE},
+        std::pair{mr_access_flags::send, FI_SEND},
+        std::pair{mr_access_flags::recv, FI_RECV},
+        std::pair{mr_access_flags::send | mr_access_flags::recv, FI_SEND | FI_RECV},
+    };
+
+    for (const auto& [access, expected] : permissions) {
+        {
+            auto region = memory_region::register_memory(provider.dom, buffer, access);
+            REQUIRE(region);
+            REQUIRE(provider.access == expected);
+        }
+        {
+            auto region = memory_region::register_hmem(
+                provider.dom, buffer.data(), buffer.size(), access, hmem_device::cuda(0));
+            REQUIRE(region);
+            REQUIRE(provider.access == expected);
+        }
+    }
+}
 
 TEST_CASE("basic memory registration", "[memory]") {
     SECTION("requires fabric provider") {
