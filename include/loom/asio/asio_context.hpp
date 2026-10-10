@@ -57,8 +57,8 @@ public:
     using crtp_tag = crtp::asio_context_tag;
 
     asio_context_base() {
-        // Store back-pointer with validation support
-        store_safe_context(fi_ctx_, static_cast<Derived*>(this));
+        // The derived object does not exist during base construction.
+        store_safe_context(fi_ctx_, this);
     }
 
     virtual ~asio_context_base() {
@@ -92,7 +92,7 @@ public:
      * @return Pointer to the derived context, or nullptr if invalid.
      */
     [[nodiscard]] static auto from_fi_context(void* ctx) noexcept -> Derived* {
-        return recover_safe_context<Derived>(ctx);
+        return static_cast<Derived*>(recover_safe_context<asio_context_base>(ctx));
     }
 
     /**
