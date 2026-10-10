@@ -35,8 +35,8 @@ TEST_CASE("rma senders concept", "[stdexec][senders]") {
 }
 
 TEST_CASE("sender composition when_all", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     std::array<std::byte, 64> buf1{};
     std::array<std::byte, 64> buf2{};
 
@@ -47,8 +47,8 @@ TEST_CASE("sender composition when_all", "[stdexec][senders]") {
 }
 
 TEST_CASE("sender composition then", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     std::array<std::byte, 64> buffer{};
 
     auto composed = loom::async(ep).send(buffer, &cq) | stdexec::then([] { return 42; });
@@ -57,8 +57,8 @@ TEST_CASE("sender composition then", "[stdexec][senders]") {
 }
 
 TEST_CASE("sender composition let_value", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     std::array<std::byte, 64> send_buf{};
     std::array<std::byte, 64> recv_buf{};
 
@@ -69,8 +69,8 @@ TEST_CASE("sender composition let_value", "[stdexec][senders]") {
 }
 
 TEST_CASE("error handling", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     std::array<std::byte, 64> buffer{};
 
     auto with_error_handler = loom::async(ep).send(buffer, &cq) |
@@ -81,7 +81,7 @@ TEST_CASE("error handling", "[stdexec][senders]") {
 }
 
 TEST_CASE("scheduler schedule", "[stdexec][senders]") {
-    loom::completion_queue cq{nullptr};
+    loom::completion_queue cq{};
     loom::scheduler sched{std::shared_ptr<loom::completion_queue>(&cq, [](auto*) {})};
 
     auto schedule_sender = stdexec::schedule(sched);
@@ -90,27 +90,27 @@ TEST_CASE("scheduler schedule", "[stdexec][senders]") {
 }
 
 TEST_CASE("bulk operations", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
 
     std::vector<std::array<std::byte, 64>> buffers(10);
 
-    auto bulk_send = stdexec::just(std::views::iota(0, 10)) | stdexec::bulk(10, [&](int i) {
-                         return loom::async(ep).send(buffers[i], &cq);
+    auto bulk_send = stdexec::just() | stdexec::bulk(std::execution::seq, 10, [&](int i) {
+                         (void)loom::async(ep).send(buffers[static_cast<std::size_t>(i)], &cq);
                      });
 
     static_assert(stdexec::sender<decltype(bulk_send)>, "bulk result must be a sender");
 }
 
 TEST_CASE("rma read-modify-write chain", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     std::array<std::byte, 128> buffer{};
     loom::rma_addr addr{0x1000ULL};
     loom::mr_key key{42ULL};
 
     auto rmw = loom::rma_async(ep).read(buffer, addr, key, &cq) |
-               stdexec::then([&] { return buffer; }) | stdexec::let_value([&](auto& buf) {
+               stdexec::then([&](std::size_t) { return buffer; }) | stdexec::let_value([&](auto& buf) {
                    return loom::rma_async(ep).write(buf, addr, key, &cq);
                });
 
@@ -118,8 +118,8 @@ TEST_CASE("rma read-modify-write chain", "[stdexec][senders]") {
 }
 
 TEST_CASE("atomic fetch_add operations", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     loom::rma_addr addr{0x2000ULL};
     loom::mr_key key{99ULL};
     loom::memory_region* result_mr = nullptr;
@@ -131,8 +131,8 @@ TEST_CASE("atomic fetch_add operations", "[stdexec][senders]") {
 }
 
 TEST_CASE("atomic compare_swap operations", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     loom::rma_addr addr{0x3000ULL};
     loom::mr_key key{100ULL};
     loom::memory_region* result_mr = nullptr;
@@ -144,8 +144,8 @@ TEST_CASE("atomic compare_swap operations", "[stdexec][senders]") {
 }
 
 TEST_CASE("recv return type", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     std::array<std::byte, 64> buffer{};
 
     auto recv_op = loom::async(ep).recv(buffer, &cq) | stdexec::then([](std::size_t bytes) {
@@ -158,8 +158,8 @@ TEST_CASE("recv return type", "[stdexec][senders]") {
 }
 
 TEST_CASE("tagged operations", "[stdexec][senders]") {
-    loom::endpoint ep{nullptr};
-    loom::completion_queue cq{nullptr};
+    loom::endpoint ep{};
+    loom::completion_queue cq{};
     std::array<std::byte, 64> buffer{};
 
     auto tagged = loom::async(ep).tagged_send(buffer, 0x1234, &cq);

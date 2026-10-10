@@ -25,6 +25,8 @@
 
 namespace loom::execution {
 
+struct get_completion_queue_t {};
+
 /**
  * @brief Environment type for loom receivers.
  *
@@ -36,7 +38,9 @@ struct fabric_env {
     /**
      * @brief Query for the completion queue.
      */
-    [[nodiscard]] auto query(auto) const noexcept -> completion_queue* { return cq; }
+    [[nodiscard]] auto query(get_completion_queue_t) const noexcept -> completion_queue* {
+        return cq;
+    }
 };
 
 /**

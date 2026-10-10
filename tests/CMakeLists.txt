@@ -90,12 +90,9 @@ loom_add_test(test_fabric_integration)
 if(LOOM_HAS_STDEXEC)
     message(STATUS "Building stdexec/P2300 integration tests")
 
-    # TODO: test_async_senders has issues with stdexec sender concepts
-    # The senders need to properly implement enable_sender trait and
-    # there are incomplete type issues with PIMPL pattern
-    # loom_add_test(test_async_senders
-    #     LIBRARY loom::execution
-    # )
+    loom_add_test(test_async_senders
+        LIBRARY loom::execution
+    )
 else()
     message(STATUS "Skipping stdexec integration tests (LOOM_USE_STDEXEC=OFF)")
 endif()

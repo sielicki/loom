@@ -51,8 +51,10 @@ namespace loom::execution {
 class read_sender;
 class write_sender;
 template <typename T>
+    requires atomic::atomic_type<T>
 class fetch_add_sender;
 template <typename T>
+    requires atomic::atomic_type<T>
 class compare_swap_sender;
 
 }  // namespace loom::execution

@@ -91,7 +91,14 @@ public:
         return operation_state<Receiver>(cq_, std::move(receiver));
     }
 
-    [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_.get()}; }
+    struct environment {
+        std::shared_ptr<completion_queue> cq;
+
+        [[nodiscard]] auto query(decltype(loom::execution::get_completion_scheduler<set_value_t>))
+            const noexcept -> loom::scheduler;
+    };
+
+    [[nodiscard]] auto get_env() const noexcept -> environment { return {cq_}; }
 
     /**
      * @brief Returns the completion scheduler for set_value.
@@ -194,6 +201,12 @@ private:
 
 namespace execution {
 
+inline auto schedule_sender::environment::query(
+    decltype(loom::execution::get_completion_scheduler<set_value_t>)) const noexcept
+    -> loom::scheduler {
+    return loom::scheduler{cq};
+}
+
 inline auto schedule_sender::get_completion_scheduler() const noexcept -> loom::scheduler {
     return loom::scheduler{cq_};
 }
@@ -213,17 +226,6 @@ template <typename Tag>
 [[nodiscard]] inline auto tag_invoke([[maybe_unused]] Tag tag,
                                      const loom::scheduler& sched) noexcept -> schedule_sender {
     return sched.schedule();
-}
-
-/**
- * @brief Customization of get_completion_scheduler for schedule_sender.
- */
-template <typename Tag>
-    requires std::same_as<Tag, decltype(loom::execution::get_completion_scheduler)>
-[[nodiscard]] inline auto tag_invoke([[maybe_unused]] Tag tag,
-                                     [[maybe_unused]] set_value_t,
-                                     const schedule_sender& sender) noexcept -> loom::scheduler {
-    return sender.get_completion_scheduler();
 }
 
 }  // namespace loom::execution
