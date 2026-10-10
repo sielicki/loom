@@ -400,6 +400,7 @@ target_sources(loom PUBLIC
     FILES
         # Top-level headers
         include/loom/loom.hpp
+        include/loom/loom_impl.hpp
         include/loom/async.hpp
         include/loom/asio.hpp
         include/loom/execution.hpp
@@ -493,6 +494,25 @@ target_sources(loom PUBLIC
         # Detail headers
         include/loom/detail/conversions.hpp
         include/loom/detail/native_address.hpp
+
+        # Definitions for single translation unit implementation mode
+        include/loom/detail/impl/address_impl.hpp
+        include/loom/detail/impl/address_vector_impl.hpp
+        include/loom/detail/impl/atomic_impl.hpp
+        include/loom/detail/impl/collective_impl.hpp
+        include/loom/detail/impl/completion_queue_impl.hpp
+        include/loom/detail/impl/counter_impl.hpp
+        include/loom/detail/impl/domain_impl.hpp
+        include/loom/detail/impl/endpoint_impl.hpp
+        include/loom/detail/impl/error_impl.hpp
+        include/loom/detail/impl/event_queue_impl.hpp
+        include/loom/detail/impl/fabric_impl.hpp
+        include/loom/detail/impl/memory_impl.hpp
+        include/loom/detail/impl/passive_endpoint_impl.hpp
+        include/loom/detail/impl/rma_impl.hpp
+        include/loom/detail/impl/scalable_endpoint_impl.hpp
+        include/loom/detail/impl/shared_context_impl.hpp
+        include/loom/detail/impl/trigger_impl.hpp
 )
 
 # Include directories (for non-FILE_SET aware consumers)
