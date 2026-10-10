@@ -154,30 +154,59 @@ inline auto address_vector::insert_batch(std::span<const address> addresses,
         return make_error_result<std::size_t>(errc::invalid_argument);
     }
 
-    if (addresses.empty() || handles.size() < addresses.size()) {
+    if (handles.size() < addresses.size() ||
+        (!contexts.empty() && contexts.size() < addresses.size())) {
         return make_error_result<std::size_t>(errc::invalid_argument);
     }
+    if (addresses.empty()) {
+        return std::size_t{0};
+    }
 
-    std::vector<const void*> addr_ptrs;
-    addr_ptrs.reserve(addresses.size());
+    const auto format = impl_->addr_format == address_format::unspecified
+                            ? get_address_format(addresses.front())
+                            : impl_->addr_format;
+    std::vector<std::byte> packed;
+    std::size_t stride{};
     for (const auto& addr : addresses) {
-        addr_ptrs.push_back(get_address_data(addr));
+        const auto native = detail::to_native_address(addr, format);
+        if (!native) {
+            return std::unexpected(native.error());
+        }
+        std::visit(
+            [&](const auto& value) {
+                const auto bytes = std::as_bytes(std::span{&value, 1});
+                stride = bytes.size();
+                packed.insert(packed.end(), bytes.begin(), bytes.end());
+            },
+            *native);
     }
 
-    std::vector<::fi_addr_t> fi_addrs(addresses.size());
-
-    std::uint64_t flags = 0;
-    void* context = contexts.empty() ? nullptr : contexts.data();
-
-    int ret = ::fi_av_insert(
-        impl_->av, addr_ptrs.data(), addresses.size(), fi_addrs.data(), flags, context);
-
-    if (ret < 0) {
-        return make_error_result_from_fi_errno<std::size_t>(-ret);
+    std::vector<::fi_addr_t> fi_addrs(addresses.size(), FI_ADDR_NOTAVAIL);
+    std::size_t count{};
+    if (contexts.empty()) {
+        const int ret =
+            ::fi_av_insert(impl_->av, packed.data(), addresses.size(), fi_addrs.data(), 0, nullptr);
+        if (ret < 0) {
+            return make_error_result_from_fi_errno<std::size_t>(ret);
+        }
+        count = static_cast<std::size_t>(ret);
+    } else {
+        // libfabric accepts one context per call, not an array of contexts.
+        for (std::size_t i = 0; i < addresses.size(); ++i) {
+            const int ret = ::fi_av_insert(
+                impl_->av, packed.data() + i * stride, 1, &fi_addrs[i], 0, contexts[i]);
+            if (ret < 0) {
+                if (count == 0) {
+                    return make_error_result_from_fi_errno<std::size_t>(ret);
+                }
+                break;
+            }
+            count += static_cast<std::size_t>(ret);
+        }
     }
 
-    auto count = static_cast<std::size_t>(ret);
-    for (std::size_t i = 0; i < count; ++i) {
+    // Failures can occur at any index; do not copy only the successful prefix.
+    for (std::size_t i = 0; i < addresses.size(); ++i) {
         handles[i] = av_handle{fi_addrs[i]};
     }
 

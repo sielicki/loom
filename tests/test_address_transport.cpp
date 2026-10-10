@@ -13,6 +13,8 @@ struct provider {
     std::vector<std::byte> received;
     std::size_t address_size = sizeof(sockaddr_in);
     std::size_t calls{};
+    bool fail_middle{};
+    std::vector<void*> contexts;
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_cm cm{
         .size = sizeof(fi_ops_cm),
@@ -31,13 +33,14 @@ struct provider {
                std::size_t count,
                fi_addr_t* output,
                std::uint64_t,
-               void*) {
+               void* context) {
                 auto& self = *static_cast<provider*>(av->fid.context);
                 self.capture(addr, count);
+                self.contexts.push_back(context);
                 for (std::size_t i = 0; i < count; ++i) {
-                    output[i] = 100 + i;
+                    output[i] = self.fail_middle && i == 1 ? FI_ADDR_NOTAVAIL : 100 + i;
                 }
-                return static_cast<int>(count);
+                return static_cast<int>(count - (self.fail_middle && count > 1 ? 1 : 0));
             },
     };
     fid_ep ep_handle{.fid = {.context = this, .ops = &ops}, .cm = &cm};
@@ -122,4 +125,42 @@ TEST_CASE("address vectors inherit the domain format for round trips", "[address
     auto found = av->lookup(*handle);
     REQUIRE(found);
     REQUIRE(*found == addr);
+}
+
+TEST_CASE("batch insertion packs native addresses and preserves failed positions", "[address]") {
+    provider native;
+    native.fail_middle = true;
+    auto av = native.vector(loom::address_format::inet);
+    const std::array<loom::address, 3> addresses{loom::ipv4_address{0xC0000201U, 1000},
+                                                 loom::ipv4_address{0xC0000202U, 2000},
+                                                 loom::ipv4_address{0xC0000203U, 3000}};
+    std::array<loom::av_handle, 3> handles{};
+    REQUIRE(av.insert_batch(addresses, handles).value() == 2);
+    REQUIRE(native.calls == 1);
+    REQUIRE(native.received.size() == 3 * sizeof(sockaddr_in));
+    for (std::size_t i = 0; i < addresses.size(); ++i) {
+        sockaddr_in addr{};
+        std::memcpy(&addr, native.received.data() + i * sizeof(addr), sizeof(addr));
+        REQUIRE(addr.sin_family == AF_INET);
+        REQUIRE(ntohs(addr.sin_port) == (i + 1) * 1000);
+        REQUIRE(ntohl(addr.sin_addr.s_addr) == 0xC0000201U + i);
+    }
+    REQUIRE(handles[0].value == 100);
+    REQUIRE_FALSE(handles[1].valid());
+    REQUIRE(handles[2].value == 102);
+    REQUIRE(av.count() == 2);
+}
+
+TEST_CASE("batch insertion forwards individual contexts", "[address]") {
+    provider native;
+    auto av = native.vector(loom::address_format::inet);
+    const std::array<loom::address, 2> addresses{loom::ipv4_address{0xC0000201U, 1000},
+                                                 loom::ipv4_address{0xC0000202U, 2000}};
+    std::array<loom::av_handle, 2> handles{};
+    int first{}, second{};
+    std::array<void*, 2> contexts{&first, &second};
+    REQUIRE(av.insert_batch(addresses, handles, contexts).value() == 2);
+    REQUIRE(native.contexts == std::vector<void*>{&first, &second});
+    REQUIRE_FALSE(av.insert_batch(addresses, handles, std::span{contexts}.first(1)));
+    REQUIRE(native.calls == 2);
 }
