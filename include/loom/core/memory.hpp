@@ -136,7 +136,7 @@ public:
     /**
      * @brief Default constructor creating an empty memory region.
      */
-    memory_region() = default;
+    memory_region();
 
     /**
      * @brief Constructs a memory_region from an implementation pointer.

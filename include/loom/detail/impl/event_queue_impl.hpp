@@ -67,6 +67,8 @@ static inline auto fi_event_to_loom(std::uint32_t fi_event) -> event_type {
     }
 }
 
+inline event_queue::event_queue() = default;
+
 inline event_queue::event_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline event_queue::~event_queue() = default;

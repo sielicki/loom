@@ -62,6 +62,8 @@ static inline auto av_type_to_fi(av_type type) -> ::fi_av_type {
     }
 }
 
+inline address_vector::address_vector() = default;
+
 inline address_vector::address_vector(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline address_vector::~address_vector() = default;

@@ -58,6 +58,8 @@ static auto av_type_to_fi(av_type type) -> ::fi_av_type {
     }
 }
 
+address_vector::address_vector() = default;
+
 address_vector::address_vector(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 address_vector::~address_vector() = default;

@@ -53,6 +53,8 @@ struct completion_queue_impl {
 
 namespace loom {
 
+inline completion_queue::completion_queue() = default;
+
 inline completion_queue::completion_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline completion_queue::~completion_queue() = default;

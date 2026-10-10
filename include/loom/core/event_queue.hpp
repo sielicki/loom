@@ -95,7 +95,7 @@ public:
     /**
      * @brief Default constructor creating an empty event queue.
      */
-    event_queue() = default;
+    event_queue();
 
     /**
      * @brief Constructs from an implementation pointer.

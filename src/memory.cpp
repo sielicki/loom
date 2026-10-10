@@ -75,6 +75,8 @@ struct memory_region_impl {
 };
 }  // namespace detail
 
+memory_region::memory_region() = default;
+
 memory_region::memory_region(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 memory_region::~memory_region() = default;

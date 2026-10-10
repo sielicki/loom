@@ -49,6 +49,8 @@ struct scalable_endpoint_impl {
 
 namespace loom {
 
+inline scalable_endpoint::scalable_endpoint() = default;
+
 inline scalable_endpoint::scalable_endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline scalable_endpoint::~scalable_endpoint() = default;

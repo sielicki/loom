@@ -49,6 +49,8 @@ struct domain_impl {
 };
 }  // namespace detail
 
+domain::domain() = default;
+
 domain::domain(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 domain::~domain() = default;

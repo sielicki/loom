@@ -23,6 +23,8 @@ struct group::impl {
     }
 };
 
+group::group() = default;
+
 group::group(group&&) noexcept = default;
 auto group::operator=(group&&) noexcept -> group& = default;
 group::~group() = default;

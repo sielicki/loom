@@ -64,6 +64,8 @@ static auto fi_event_to_loom(std::uint32_t fi_event) -> event_type {
     }
 }
 
+event_queue::event_queue() = default;
+
 event_queue::event_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 event_queue::~event_queue() = default;

@@ -60,7 +60,7 @@ public:
     /**
      * @brief Default constructor creating an empty passive endpoint.
      */
-    passive_endpoint() = default;
+    passive_endpoint();
 
     /**
      * @brief Constructs from an implementation pointer.

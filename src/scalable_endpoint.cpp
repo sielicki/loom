@@ -70,6 +70,8 @@ struct endpoint_impl {
 };
 }  // namespace detail
 
+scalable_endpoint::scalable_endpoint() = default;
+
 scalable_endpoint::scalable_endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 scalable_endpoint::~scalable_endpoint() = default;

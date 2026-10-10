@@ -102,7 +102,7 @@ public:
     /**
      * @brief Default constructor creating an empty address vector.
      */
-    address_vector() = default;
+    address_vector();
 
     /**
      * @brief Constructs from an implementation pointer.

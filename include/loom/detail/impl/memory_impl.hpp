@@ -72,6 +72,8 @@ struct memory_region_impl {
 
 namespace loom {
 
+inline memory_region::memory_region() = default;
+
 inline memory_region::memory_region(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline memory_region::~memory_region() = default;

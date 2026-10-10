@@ -131,7 +131,7 @@ public:
     /**
      * @brief Default constructor.
      */
-    group() = default;
+    group();
 
     /**
      * @brief Deleted copy constructor.

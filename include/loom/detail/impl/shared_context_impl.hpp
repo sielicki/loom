@@ -109,6 +109,8 @@ struct shared_rx_context_impl {
 
 namespace loom {
 
+inline shared_tx_context::shared_tx_context() = default;
+
 inline shared_tx_context::shared_tx_context(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline shared_tx_context::~shared_tx_context() = default;
@@ -153,6 +155,8 @@ inline auto shared_tx_context::create(const domain& dom,
 inline auto shared_tx_context::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->stx : nullptr;
 }
+
+inline shared_rx_context::shared_rx_context() = default;
 
 inline shared_rx_context::shared_rx_context(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 

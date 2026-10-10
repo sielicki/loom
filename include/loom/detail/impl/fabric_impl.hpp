@@ -67,6 +67,8 @@ struct fabric_impl {
 
 namespace loom {
 
+inline fabric_info::fabric_info() = default;
+
 inline fabric_info::fabric_info(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline fabric_info::~fabric_info() = default;
@@ -180,6 +182,8 @@ inline auto fabric_info::iterator::operator++(int) -> iterator {
 inline auto fabric_info::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->info : nullptr;
 }
+
+inline fabric::fabric() = default;
 
 inline fabric::fabric(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 

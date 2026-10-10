@@ -64,7 +64,7 @@ public:
     /**
      * @brief Default constructor creating an empty counter.
      */
-    counter() = default;
+    counter();
 
     /**
      * @brief Constructs from an implementation pointer.

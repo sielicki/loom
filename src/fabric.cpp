@@ -120,6 +120,8 @@ struct fabric_impl {
 };
 }  // namespace detail
 
+fabric_info::fabric_info() = default;
+
 fabric_info::fabric_info(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 fabric_info::~fabric_info() = default;
@@ -233,6 +235,8 @@ auto fabric_info::iterator::operator++(int) -> iterator {
 auto fabric_info::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->info : nullptr;
 }
+
+fabric::fabric() = default;
 
 fabric::fabric(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 

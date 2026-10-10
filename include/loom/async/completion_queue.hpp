@@ -119,7 +119,7 @@ public:
     /**
      * @brief Default constructor creating an empty completion queue.
      */
-    completion_queue() = default;
+    completion_queue();
 
     /**
      * @brief Constructs a completion_queue from an implementation pointer.

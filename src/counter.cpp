@@ -40,6 +40,8 @@ struct counter_impl {
 
 }  // namespace detail
 
+counter::counter() = default;
+
 counter::counter(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 counter::~counter() = default;

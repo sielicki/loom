@@ -114,6 +114,8 @@ struct shared_rx_context_impl {
 
 }  // namespace detail
 
+shared_tx_context::shared_tx_context() = default;
+
 shared_tx_context::shared_tx_context(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 shared_tx_context::~shared_tx_context() = default;
@@ -157,6 +159,8 @@ auto shared_tx_context::create(const domain& dom,
 auto shared_tx_context::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->stx : nullptr;
 }
+
+shared_rx_context::shared_rx_context() = default;
 
 shared_rx_context::shared_rx_context(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 

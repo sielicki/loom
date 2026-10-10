@@ -53,7 +53,7 @@ public:
     /**
      * @brief Default constructor creating an empty shared_tx_context.
      */
-    shared_tx_context() = default;
+    shared_tx_context();
 
     /**
      * @brief Constructs a shared_tx_context from an implementation pointer.
@@ -105,7 +105,7 @@ public:
     /**
      * @brief Default constructor creating an empty shared_rx_context.
      */
-    shared_rx_context() = default;
+    shared_rx_context();
 
     /**
      * @brief Constructs a shared_rx_context from an implementation pointer.

@@ -93,7 +93,7 @@ public:
     /**
      * @brief Default constructor creating an empty fabric_info.
      */
-    fabric_info() = default;
+    fabric_info();
 
     /**
      * @brief Constructs a fabric_info from an implementation pointer.
@@ -217,7 +217,7 @@ public:
     /**
      * @brief Default constructor creating an empty fabric.
      */
-    fabric() = default;
+    fabric();
 
     /**
      * @brief Constructs a fabric from an implementation pointer.

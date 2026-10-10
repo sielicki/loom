@@ -50,6 +50,8 @@ struct completion_queue_impl {
 
 }  // namespace detail
 
+completion_queue::completion_queue() = default;
+
 completion_queue::completion_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 completion_queue::~completion_queue() = default;

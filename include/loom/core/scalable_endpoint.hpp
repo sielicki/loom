@@ -60,7 +60,7 @@ public:
     /**
      * @brief Default constructor creating an empty scalable endpoint.
      */
-    scalable_endpoint() = default;
+    scalable_endpoint();
 
     /**
      * @brief Constructs from an implementation pointer.

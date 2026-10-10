@@ -45,6 +45,8 @@ struct passive_endpoint_impl {
 };
 }  // namespace detail
 
+passive_endpoint::passive_endpoint() = default;
+
 passive_endpoint::passive_endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 passive_endpoint::~passive_endpoint() = default;

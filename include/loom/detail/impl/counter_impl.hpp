@@ -43,6 +43,8 @@ struct counter_impl {
 
 namespace loom {
 
+inline counter::counter() = default;
+
 inline counter::counter(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline counter::~counter() = default;

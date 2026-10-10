@@ -49,6 +49,8 @@ struct passive_endpoint_impl {
 
 namespace loom {
 
+inline passive_endpoint::passive_endpoint() = default;
+
 inline passive_endpoint::passive_endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline passive_endpoint::~passive_endpoint() = default;

@@ -59,7 +59,7 @@ public:
     /**
      * @brief Default constructor creating an empty domain.
      */
-    domain() = default;
+    domain();
 
     /**
      * @brief Constructs a domain from an implementation pointer.

@@ -53,6 +53,8 @@ struct domain_impl {
 
 namespace loom {
 
+inline domain::domain() = default;
+
 inline domain::domain(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 inline domain::~domain() = default;

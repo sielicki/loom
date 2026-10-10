@@ -30,6 +30,8 @@ struct group::impl {
 
 namespace loom::collective {
 
+inline group::group() = default;
+
 inline group::group(group&&) noexcept = default;
 inline auto group::operator=(group&&) noexcept -> group& = default;
 inline group::~group() = default;
