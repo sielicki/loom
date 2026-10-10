@@ -77,6 +77,27 @@ TEST_CASE("basic memory registration", "[memory]") {
     }
 }
 
+TEST_CASE("device registrations retain nonzero ordinals", "[memory]") {
+    test::mock_domain provider;
+    std::array<std::byte, 64> buffer{};
+    const std::array devices{
+        hmem_device::cuda(2),
+        hmem_device::level_zero(3),
+        hmem_device::neuron(4),
+        hmem_device::synapseai(5),
+#if FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION) >= FI_VERSION(2, 5)
+        hmem_device::rocr(6),
+#endif
+    };
+    for (const auto& device : devices) {
+        auto region = memory_region::register_hmem(
+            provider.dom, buffer.data(), buffer.size(), mr_access_flags::send, device);
+        REQUIRE(region);
+        REQUIRE(provider.iface == static_cast<fi_hmem_iface>(device.iface));
+        REQUIRE(provider.device_id == device.device_id);
+    }
+}
+
 TEST_CASE("hmem device creation", "[memory]") {
     auto cuda_dev = hmem_device::cuda(0);
     REQUIRE(cuda_dev.iface == hmem_iface::cuda);

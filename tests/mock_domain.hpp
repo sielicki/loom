@@ -10,6 +10,8 @@ namespace loom::test {
 struct mock_domain {
     std::uint64_t access{};
     std::uint64_t flags{};
+    fi_hmem_iface iface{};
+    int device_id{};
     std::size_t registrations{};
     std::size_t live_regions{};
 
@@ -44,8 +46,31 @@ struct mock_domain {
             },
         .regattr =
             [](fid* handle, const fi_mr_attr* attr, std::uint64_t flags, fid_mr** region) {
-                return static_cast<mock_domain*>(handle->context)
-                    ->register_region(attr->access, flags, region);
+                auto& self = *static_cast<mock_domain*>(handle->context);
+                self.iface = attr->iface;
+                switch (attr->iface) {
+                    case FI_HMEM_CUDA:
+                        self.device_id = attr->device.cuda;
+                        break;
+                    case FI_HMEM_ZE:
+                        self.device_id = attr->device.ze;
+                        break;
+                    case FI_HMEM_NEURON:
+                        self.device_id = attr->device.neuron;
+                        break;
+                    case FI_HMEM_SYNAPSEAI:
+                        self.device_id = attr->device.synapseai;
+                        break;
+#if FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION) >= FI_VERSION(2, 5)
+                    case FI_HMEM_ROCR:
+                        self.device_id = attr->device.rocr;
+                        break;
+#endif
+                    default:
+                        self.device_id = 0;
+                        break;
+                }
+                return self.register_region(attr->access, flags, region);
             },
     };
     fid_domain handle{

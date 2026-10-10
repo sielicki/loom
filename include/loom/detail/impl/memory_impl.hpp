@@ -5,6 +5,8 @@
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
 
+#include <utility>
+
 #include "loom/core/allocator.hpp"
 #include "loom/core/domain.hpp"
 #include "loom/core/endpoint.hpp"
@@ -134,6 +136,35 @@ inline auto memory_region::register_hmem(domain& dom,
     mr_attr.auth_key = nullptr;
     mr_attr.iface = static_cast<fi_hmem_iface>(device.iface);
     mr_attr.hmem_data = device.hmem_data;
+    if (!std::in_range<int>(device.device_id)) {
+        return make_error_result<memory_region>(errc::invalid_argument);
+    }
+    const auto ordinal = static_cast<int>(device.device_id);
+    switch (device.iface) {
+        case hmem_iface::system:
+            break;
+        case hmem_iface::cuda:
+            mr_attr.device.cuda = ordinal;
+            break;
+        case hmem_iface::rocr:
+#    if FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION) >= FI_VERSION(2, 5)
+            mr_attr.device.rocr = ordinal;
+            break;
+#    else
+            return make_error_result<memory_region>(errc::not_supported);
+#    endif
+        case hmem_iface::level_zero:
+            mr_attr.device.ze = ordinal;
+            break;
+        case hmem_iface::neuron:
+            mr_attr.device.neuron = ordinal;
+            break;
+        case hmem_iface::synapseai:
+            mr_attr.device.synapseai = ordinal;
+            break;
+        default:
+            return make_error_result<memory_region>(errc::invalid_argument);
+    }
 
     iovec iov{};
     iov.iov_base = addr;
