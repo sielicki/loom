@@ -117,6 +117,10 @@ TEST_CASE("as_context returns valid pointer", "[submission_context]") {
     auto* ctx = loom::make_callback_context([](loom::completion_event&) {});
 
     auto* raw = ctx->as_context();
+    // Providers may overwrite every FI_CONTEXT2 slot.
+    for (auto& slot : static_cast<fi_context2*>(raw)->internal) {
+        slot = nullptr;
+    }
     REQUIRE(raw != nullptr);
 
     auto* recovered = loom::default_submission_context::from_context(raw);

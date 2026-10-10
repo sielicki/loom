@@ -12,6 +12,8 @@
 #include <utility>
 #include <variant>
 
+#include "loom/core/safe_context.hpp"
+
 namespace loom {
 
 struct completion_event;
@@ -58,18 +60,21 @@ public:
 
     template <typename H>
         requires(std::same_as<std::decay_t<H>, Handlers> || ...)
-    explicit submission_context(H&& handler) : handler_(std::forward<H>(handler)) {}
+    explicit submission_context(H&& handler) : handler_(std::forward<H>(handler)) {
+        store_safe_context(fi_ctx_, this);
+    }
 
     submission_context(const submission_context&) = delete;
     auto operator=(const submission_context&) -> submission_context& = delete;
-    submission_context(submission_context&&) = default;
-    auto operator=(submission_context&&) -> submission_context& = default;
-    ~submission_context() = default;
+    // Provider contexts must stay at a stable address until completion.
+    submission_context(submission_context&&) = delete;
+    auto operator=(submission_context&&) -> submission_context& = delete;
+    ~submission_context() { invalidate_safe_context(fi_ctx_); }
 
-    [[nodiscard]] auto as_context() noexcept -> void* { return &fi_ctx_; }
+    [[nodiscard]] auto as_context() noexcept -> void* { return &fi_ctx_.provider; }
 
     [[nodiscard]] static auto from_context(void* ctx) noexcept -> submission_context* {
-        return static_cast<submission_context*>(ctx);
+        return recover_safe_context<submission_context>(ctx);
     }
 
     void set_value(completion_event& event) {
@@ -97,7 +102,7 @@ public:
     [[nodiscard]] auto handler_index() const noexcept -> std::size_t { return handler_.index(); }
 
 private:
-    ::fi_context2 fi_ctx_{};
+    safe_context fi_ctx_{};
     handler_variant handler_;
 };
 
