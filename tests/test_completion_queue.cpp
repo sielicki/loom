@@ -53,6 +53,14 @@ struct mock_cq {
 };
 }  // namespace
 
+TEST_CASE("immediate data uses the remote CQ data flag", "[completion_queue]") {
+    loom::completion_event event;
+    event.flags = FI_WRITE;
+    REQUIRE_FALSE(event.has_immediate_data());
+    event.flags = FI_REMOTE_CQ_DATA;
+    REQUIRE(event.has_immediate_data());
+}
+
 TEST_CASE("batch polling drains errors and resumes completions", "[completion_queue]") {
     mock_cq provider;
     std::array<loom::completion_event, 2> events;

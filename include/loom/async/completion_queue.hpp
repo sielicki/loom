@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
+#include <rdma/fabric.h>
+
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -89,7 +91,7 @@ struct completion_event : event_base<completion_event> {
      * @return True if immediate data was received.
      */
     [[nodiscard]] constexpr auto has_immediate_data() const noexcept -> bool {
-        return (flags & (1ULL << 4)) != 0;
+        return (flags & FI_REMOTE_CQ_DATA) != 0;
     }
 };
 
