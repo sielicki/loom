@@ -1,5 +1,5 @@
 {
-  description = "Loom - Modern C++26 bindings for libfabric with stdexec integration";
+  description = "Loom - Modern C++26 bindings for libfabric with P2300 execution support";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
