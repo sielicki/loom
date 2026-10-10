@@ -112,7 +112,7 @@ inline auto deferred_work::create_send(domain& dom,
                                        const msg::send_message<void*>& msg,
                                        msg::send_flags flags,
                                        memory_resource* resource) -> result<deferred_work> {
-    if (!dom || !ep) {
+    if (!dom || !ep || (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
 
@@ -161,7 +161,7 @@ inline auto deferred_work::create_recv(domain& dom,
                                        const msg::recv_message<void*>& msg,
                                        msg::recv_flags flags,
                                        memory_resource* resource) -> result<deferred_work> {
-    if (!dom || !ep) {
+    if (!dom || !ep || (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
 
@@ -210,7 +210,7 @@ inline auto deferred_work::create_tagged_send(domain& dom,
                                               const msg::tagged_send_message<void*>& msg,
                                               msg::send_flags flags,
                                               memory_resource* resource) -> result<deferred_work> {
-    if (!dom || !ep) {
+    if (!dom || !ep || (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
 
@@ -261,7 +261,7 @@ inline auto deferred_work::create_tagged_recv(domain& dom,
                                               const msg::tagged_recv_message<void*>& msg,
                                               msg::recv_flags flags,
                                               memory_resource* resource) -> result<deferred_work> {
-    if (!dom || !ep) {
+    if (!dom || !ep || (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
 
@@ -315,7 +315,7 @@ inline auto deferred_work::create_read(domain& dom,
                                        fabric_addr dest_addr,
                                        std::uint64_t flags,
                                        memory_resource* resource) -> result<deferred_work> {
-    if (!dom || !ep) {
+    if (!dom || !ep || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
 
@@ -378,7 +378,7 @@ inline auto deferred_work::create_write(domain& dom,
                                         std::uint64_t flags,
                                         std::uint64_t data,
                                         memory_resource* resource) -> result<deferred_work> {
-    if (!dom || !ep) {
+    if (!dom || !ep || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
 

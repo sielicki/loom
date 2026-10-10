@@ -2,6 +2,7 @@
 #include <loom/core/messaging.hpp>
 #include <loom/core/trigger.hpp>
 #include <loom/detail/impl/counter_impl.hpp>
+#include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 
 #include <array>
@@ -24,7 +25,34 @@ struct message_provider {
         return 0;
     }
 
-    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops ops{
+        .size = sizeof(fi_ops),
+        .close = [](fid*) { return 0; },
+        .control = [](fid*, int command, void* argument) -> int {
+            if (command == FI_CANCEL_WORK) {
+                return 0;
+            }
+            REQUIRE(command == FI_QUEUE_WORK);
+            const auto& work = *static_cast<const fi_deferred_work*>(argument);
+            switch (work.op_type) {
+                case FI_OP_SEND:
+                case FI_OP_RECV:
+                    return static_cast<int>(
+                        record(work.op.msg->ep, work.op.msg->msg.desc, work.op.msg->msg.iov_count));
+                case FI_OP_TSEND:
+                case FI_OP_TRECV:
+                    return static_cast<int>(record(work.op.tagged->ep,
+                                                   work.op.tagged->msg.desc,
+                                                   work.op.tagged->msg.iov_count));
+                case FI_OP_READ:
+                case FI_OP_WRITE:
+                    return static_cast<int>(
+                        record(work.op.rma->ep, work.op.rma->msg.desc, work.op.rma->msg.iov_count));
+                default:
+                    return -FI_EINVAL;
+            }
+        },
+    };
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
         .recvv =
@@ -68,6 +96,7 @@ struct message_provider {
     };
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .msg = &messages, .tagged = &tags};
     fid_cntr counter_handle{.fid = {.ops = &ops}};
+    fid_domain domain_handle{.fid = {.ops = &ops}};
 
     auto endpoint() -> loom::endpoint {
         return loom::endpoint{
@@ -80,10 +109,81 @@ struct message_provider {
         return loom::counter{loom::detail::make_pmr_unique<loom::detail::counter_impl>(
             loom::get_default_resource(), &counter_handle)};
     }
+    auto domain() -> loom::domain {
+        return loom::domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
+            loom::get_default_resource(), &domain_handle)};
+    }
 };
 
 struct context : loom::triggered_context<context> {};
 }  // namespace
+
+TEST_CASE("deferred operations reject mismatched descriptor counts", "[message][trigger]") {
+    const auto operation = GENERATE(0, 1, 2, 3, 4, 5);
+    const auto count = GENERATE(0, 1, 20, 21);
+    CAPTURE(operation, count);
+    message_provider native;
+    auto ep = native.endpoint();
+    auto counter = native.counter();
+    auto domain = native.domain();
+    const loom::trigger::threshold_condition trigger{&counter, 1};
+    std::array<std::byte, 20> storage{};
+    std::array<iovec, 20> iov{};
+    for (std::size_t i = 0; i < iov.size(); ++i) {
+        iov[i] = {storage.data() + i, 1};
+    }
+    const std::vector descriptors(static_cast<std::size_t>(count), loom::mr_descriptor{&storage});
+    const std::array remote{loom::rma::rma_iov{0x1000, storage.size(), 1}};
+    auto work = [&]() -> loom::result<loom::trigger::deferred_work> {
+        using namespace loom;
+        using trigger::deferred_work;
+        switch (operation) {
+            case 0:
+                return deferred_work::create_send(
+                    domain,
+                    ep,
+                    trigger,
+                    nullptr,
+                    msg::send_message<void*>{.iov = iov, .desc = descriptors});
+            case 1:
+                return deferred_work::create_recv(
+                    domain,
+                    ep,
+                    trigger,
+                    nullptr,
+                    msg::recv_message<void*>{.iov = iov, .desc = descriptors});
+            case 2:
+                return deferred_work::create_tagged_send(
+                    domain,
+                    ep,
+                    trigger,
+                    nullptr,
+                    msg::tagged_send_message<void*>{.iov = iov, .desc = descriptors});
+            case 3:
+                return deferred_work::create_tagged_recv(
+                    domain,
+                    ep,
+                    trigger,
+                    nullptr,
+                    msg::tagged_recv_message<void*>{.iov = iov, .desc = descriptors});
+            case 4:
+                return deferred_work::create_read(
+                    domain, ep, trigger, nullptr, iov, descriptors, remote);
+            default:
+                return deferred_work::create_write(
+                    domain, ep, trigger, nullptr, iov, descriptors, remote);
+        }
+    }();
+    if (count == 0 || count == 20) {
+        REQUIRE(work);
+        REQUIRE(native.calls == 1);
+        REQUIRE(native.descriptors ==
+                std::vector<void*>(static_cast<std::size_t>(count), &storage));
+    } else {
+        REQUIRE(work.error() == loom::errc::invalid_argument);
+        REQUIRE(native.calls == 0);
+    }
+}
 
 TEST_CASE("message vectors preserve registrations and reject mismatched counts", "[message]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
