@@ -17,10 +17,14 @@
 #include <rdma/fabric.h>
 
 #include <cstddef>
+#include <limits>
 #include <memory>
+#include <span>
+#include <stdexcept>
 #include <system_error>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "loom/async/completion_queue.hpp"
 #include "loom/core/crtp/crtp_tags.hpp"
@@ -30,6 +34,7 @@
 #include <asio/associated_allocator.hpp>
 #include <asio/associated_cancellation_slot.hpp>
 #include <asio/associated_executor.hpp>
+#include <asio/buffer.hpp>
 #include <asio/cancellation_signal.hpp>
 #include <asio/cancellation_state.hpp>
 #include <asio/dispatch.hpp>
@@ -38,6 +43,14 @@
 #include <asio/post.hpp>
 
 namespace loom::asio {
+
+namespace detail {
+struct asio_buffers {
+    std::span<const iovec> iov;
+    std::span<const mr_descriptor> descriptors;
+    std::size_t bytes{};
+};
+}  // namespace detail
 
 /**
  * @class asio_context_base
@@ -160,6 +173,9 @@ public:
     virtual void impl_set_value(completion_event& event) = 0;
     virtual void impl_set_error(std::error_code ec) = 0;
     virtual void impl_set_stopped() = 0;
+    virtual void discard() = 0;
+
+    [[nodiscard]] virtual auto buffers() const noexcept -> detail::asio_buffers = 0;
 };
 
 /**
@@ -207,6 +223,10 @@ public:
     using executor_type = Executor;
     using allocator_type = typename ::asio::associated_allocator<Handler>::type;
     using cancellation_slot_type = typename ::asio::associated_cancellation_slot<Handler>::type;
+    using iov_allocator =
+        typename std::allocator_traits<allocator_type>::template rebind_alloc<iovec>;
+    using descriptor_allocator =
+        typename std::allocator_traits<allocator_type>::template rebind_alloc<mr_descriptor>;
 
     /**
      * @brief Constructs a context with a handler and executor.
@@ -216,7 +236,9 @@ public:
     asio_context(Handler handler, Executor executor)
         : handler_(std::move(handler)), executor_(std::move(executor)), work_(executor_),
           allocator_(::asio::get_associated_allocator(handler_)),
-          cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)) {}
+          cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)),
+          buffer_iov_(iov_allocator{allocator_}),
+          buffer_descriptors_(descriptor_allocator{allocator_}) {}
 
     /**
      * @brief Constructs a context with a handler, executor, and endpoint for cancellation.
@@ -227,13 +249,40 @@ public:
     asio_context(Handler handler, Executor executor, endpoint* ep)
         : handler_(std::move(handler)), executor_(std::move(executor)), work_(executor_),
           allocator_(::asio::get_associated_allocator(handler_)),
-          cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)), endpoint_(ep) {
+          cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)), endpoint_(ep),
+          buffer_iov_(iov_allocator{allocator_}),
+          buffer_descriptors_(descriptor_allocator{allocator_}) {
         setup_cancellation();
     }
 
     ~asio_context() override {
         if (endpoint_ && cancellation_slot_.is_connected()) {
             cancellation_slot_.clear();
+        }
+    }
+
+    void discard() override { destroy_self(); }
+
+    [[nodiscard]] auto buffers() const noexcept -> detail::asio_buffers override {
+        return {buffer_iov_, buffer_descriptors_, buffer_bytes_};
+    }
+
+    template <bool Mutable, typename BufferSequence>
+    void prepare_buffers(const BufferSequence& buffers, mr_descriptor descriptor) {
+        using buffer_type =
+            std::conditional_t<Mutable, ::asio::mutable_buffer, ::asio::const_buffer>;
+        const auto end = ::asio::buffer_sequence_end(buffers);
+        for (auto it = ::asio::buffer_sequence_begin(buffers); it != end; ++it) {
+            const buffer_type buffer{*it};
+            if (buffer.size() > std::numeric_limits<std::size_t>::max() - buffer_bytes_) {
+                throw std::length_error("Asio buffer sequence size overflows size_t");
+            }
+            buffer_iov_.push_back(
+                {const_cast<void*>(static_cast<const void*>(buffer.data())), buffer.size()});
+            if (descriptor) {
+                buffer_descriptors_.push_back(descriptor);
+            }
+            buffer_bytes_ += buffer.size();
         }
     }
 
@@ -361,6 +410,9 @@ private:
     allocator_type allocator_;
     cancellation_slot_type cancellation_slot_;
     endpoint* endpoint_{nullptr};
+    std::vector<iovec, iov_allocator> buffer_iov_;
+    std::vector<mr_descriptor, descriptor_allocator> buffer_descriptors_;
+    std::size_t buffer_bytes_{};
 };
 
 /**
@@ -393,6 +445,33 @@ template <typename Handler, typename Executor>
     auto associated = ::asio::get_associated_executor(handler, executor);
     return asio_context<std::decay_t<Handler>, decltype(associated)>::create(
         std::forward<Handler>(handler), std::move(associated), ep);
+}
+
+struct asio_context_deleter {
+    void operator()(asio_context_erased* context) const { context->discard(); }
+};
+using owned_asio_context = std::unique_ptr<asio_context_erased, asio_context_deleter>;
+
+template <bool Mutable, typename Handler, typename Executor, typename BufferSequence>
+[[nodiscard]] auto make_buffered_asio_context(Handler&& handler,
+                                              Executor&& executor,
+                                              endpoint* ep,
+                                              const BufferSequence& buffers,
+                                              mr_descriptor descriptor = {}) -> owned_asio_context {
+    auto associated = ::asio::get_associated_executor(handler, executor);
+    using context_type = asio_context<std::decay_t<Handler>, decltype(associated)>;
+    auto* concrete =
+        context_type::create(std::forward<Handler>(handler), std::move(associated), ep);
+    owned_asio_context context{concrete};
+    concrete->template prepare_buffers<Mutable>(buffers, descriptor);
+    return context;
+}
+
+inline void finish_asio_submission(owned_asio_context context, void_result result) {
+    auto* pending = context.release();
+    if (!result) {
+        pending->fail(result.error());
+    }
 }
 
 /**

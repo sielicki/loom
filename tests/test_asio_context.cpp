@@ -51,13 +51,22 @@ template <typename T>
 struct tracking_allocator {
     using value_type = T;
     int* deallocations{};
-    explicit tracking_allocator(int* count) : deallocations(count) {}
+    int* allocations_remaining{};
+    explicit tracking_allocator(int* count, int* remaining = nullptr)
+        : deallocations(count), allocations_remaining(remaining) {}
     tracking_allocator(const tracking_allocator&) = default;
     tracking_allocator(tracking_allocator&& other) noexcept
-        : deallocations(std::exchange(other.deallocations, nullptr)) {}
+        : deallocations(std::exchange(other.deallocations, nullptr)),
+          allocations_remaining(other.allocations_remaining) {}
     template <typename U>
-    tracking_allocator(const tracking_allocator<U>& other) : deallocations(other.deallocations) {}
-    auto allocate(std::size_t count) -> T* { return std::allocator<T>{}.allocate(count); }
+    tracking_allocator(const tracking_allocator<U>& other)
+        : deallocations(other.deallocations), allocations_remaining(other.allocations_remaining) {}
+    auto allocate(std::size_t count) -> T* {
+        if (allocations_remaining && (*allocations_remaining)-- == 0) {
+            throw std::bad_alloc{};
+        }
+        return std::allocator<T>{}.allocate(count);
+    }
     void deallocate(T* pointer, std::size_t count) noexcept {
         if (deallocations) {
             ++*deallocations;
@@ -66,6 +75,28 @@ struct tracking_allocator {
     }
 };
 }  // namespace
+
+TEST_CASE("buffer metadata uses the handler allocator and cleans up on failure",
+          "[asio][context]") {
+    ::asio::io_context ioc;
+    ::asio::cancellation_signal cancellation;
+    loom::endpoint ep;
+    int deallocations{};
+    int budget{1};
+    std::array<std::byte, 8> storage{};
+    auto handler = ::asio::bind_allocator(
+        tracking_allocator<std::byte>{&deallocations, &budget},
+        ::asio::bind_cancellation_slot(cancellation.slot(), [](std::error_code, std::size_t) {
+            FAIL("Initiation did not finish");
+        }));
+    REQUIRE_THROWS_AS(loom::asio::make_buffered_asio_context<false>(
+                          handler, ioc.get_executor(), &ep, ::asio::buffer(storage)),
+                      std::bad_alloc);
+    REQUIRE(deallocations == 1);
+    REQUIRE_FALSE(cancellation.slot().has_handler());
+    REQUIRE(ioc.poll() == 0);
+    REQUIRE(ioc.stopped());
+}
 
 TEST_CASE("completion preserves allocator state and clears cancellation", "[asio][context]") {
     ::asio::io_context ioc;

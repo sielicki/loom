@@ -10,6 +10,7 @@
  * completion token model.
  */
 
+#include <array>
 #include <cstddef>
 #include <span>
 #include <system_error>
@@ -20,6 +21,7 @@
 #include "loom/asio/fabric_service.hpp"
 #include "loom/core/endpoint.hpp"
 #include "loom/core/memory.hpp"
+#include "loom/core/messaging.hpp"
 #include "loom/core/rma.hpp"
 #include "loom/core/types.hpp"
 #include <asio/any_io_executor.hpp>
@@ -224,13 +226,12 @@ public:
                     CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers](auto handler) {
-                auto span = buffers_to_const_span(buffers);
-                auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
+                auto ctx = make_buffered_asio_context<false>(
+                    std::move(handler), executor_, &endpoint_, buffers);
 
-                auto result = endpoint_.send(span, context_ptr<void>{ctx->as_fi_context()});
-                if (!result) {
-                    ctx->fail(result.error());
-                }
+                auto result =
+                    endpoint_.sendv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+                finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
     }
@@ -253,13 +254,12 @@ public:
                   CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers](auto handler) {
-                auto span = buffers_to_span(buffers);
-                auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
+                auto ctx = make_buffered_asio_context<true>(
+                    std::move(handler), executor_, &endpoint_, buffers);
 
-                auto result = endpoint_.recv(span, context_ptr<void>{ctx->as_fi_context()});
-                if (!result) {
-                    ctx->fail(result.error());
-                }
+                auto result =
+                    endpoint_.recvv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+                finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
     }
@@ -282,13 +282,16 @@ public:
         CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers, tag](auto handler) {
-                auto span = buffers_to_const_span(buffers);
-                auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
+                auto ctx = make_buffered_asio_context<false>(
+                    std::move(handler), executor_, &endpoint_, buffers);
 
-                auto result = endpoint_.tagged_send(span, tag, ctx->as_fi_context());
-                if (!result) {
-                    ctx->fail(result.error());
-                }
+                auto result = loom::tagged_sendv(endpoint_,
+                                                 ctx->buffers().iov,
+                                                 ctx->buffers().descriptors,
+                                                 fabric_addrs::unspecified,
+                                                 tag,
+                                                 ctx->as_fi_context());
+                finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
     }
@@ -313,13 +316,17 @@ public:
         CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers, tag, ignore](auto handler) {
-                auto span = buffers_to_span(buffers);
-                auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
+                auto ctx = make_buffered_asio_context<true>(
+                    std::move(handler), executor_, &endpoint_, buffers);
 
-                auto result = endpoint_.tagged_recv(span, tag, ignore, ctx->as_fi_context());
-                if (!result) {
-                    ctx->fail(result.error());
-                }
+                auto result = loom::tagged_recvv(endpoint_,
+                                                 ctx->buffers().iov,
+                                                 ctx->buffers().descriptors,
+                                                 fabric_addrs::unspecified,
+                                                 tag,
+                                                 ignore,
+                                                 ctx->as_fi_context());
+                finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
     }
@@ -344,13 +351,17 @@ public:
                    CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers, &local_mr, remote](auto handler) {
-                auto span = buffers_to_const_span(buffers);
-                auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
+                auto ctx = make_buffered_asio_context<false>(
+                    std::move(handler), executor_, &endpoint_, buffers, local_mr.descriptor());
 
-                auto result = rma::write(endpoint_, span, local_mr, remote, ctx->as_fi_context());
-                if (!result) {
-                    ctx->fail(result.error());
-                }
+                const std::array remote_iov{
+                    rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
+                auto result = rma::writev(endpoint_,
+                                          ctx->buffers().iov,
+                                          ctx->buffers().descriptors,
+                                          remote_iov,
+                                          ctx->as_fi_context());
+                finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
     }
@@ -375,13 +386,17 @@ public:
                     CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers, &local_mr, remote](auto handler) {
-                auto span = buffers_to_span(buffers);
-                auto* ctx = make_asio_context(std::move(handler), executor_, &endpoint_);
+                auto ctx = make_buffered_asio_context<true>(
+                    std::move(handler), executor_, &endpoint_, buffers, local_mr.descriptor());
 
-                auto result = rma::read(endpoint_, span, local_mr, remote, ctx->as_fi_context());
-                if (!result) {
-                    ctx->fail(result.error());
-                }
+                const std::array remote_iov{
+                    rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
+                auto result = rma::readv(endpoint_,
+                                         ctx->buffers().iov,
+                                         ctx->buffers().descriptors,
+                                         remote_iov,
+                                         ctx->as_fi_context());
+                finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
     }

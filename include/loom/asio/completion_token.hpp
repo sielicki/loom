@@ -10,6 +10,7 @@
  * for use_awaitable, use_future, and deferred.
  */
 
+#include <array>
 #include <cstddef>
 #include <span>
 #include <system_error>
@@ -20,6 +21,7 @@
 #include "loom/async/completion_queue.hpp"
 #include "loom/core/endpoint.hpp"
 #include "loom/core/memory.hpp"
+#include "loom/core/messaging.hpp"
 #include "loom/core/rma.hpp"
 #include "loom/core/types.hpp"
 #include <asio/associated_allocator.hpp>
@@ -219,13 +221,11 @@ struct initiate_fabric_send {
     template <typename Handler, typename ConstBufferSequence>
     void operator()(Handler&& handler, const ConstBufferSequence& buffers) const {
         auto executor = ::asio::get_associated_executor(handler);
-        auto* ctx = make_asio_context(std::forward<Handler>(handler), executor, ep_);
+        auto ctx = make_buffered_asio_context<false>(
+            std::forward<Handler>(handler), executor, ep_, buffers);
 
-        auto span = to_const_span(buffers);
-        auto result = ep_->send(span, context_ptr<void>{ctx->as_fi_context()});
-        if (!result) {
-            ctx->fail(result.error());
-        }
+        auto result = ep_->sendv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+        finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
 
@@ -247,13 +247,11 @@ struct initiate_fabric_recv {
     template <typename Handler, typename MutableBufferSequence>
     void operator()(Handler&& handler, const MutableBufferSequence& buffers) const {
         auto executor = ::asio::get_associated_executor(handler);
-        auto* ctx = make_asio_context(std::forward<Handler>(handler), executor, ep_);
+        auto ctx = make_buffered_asio_context<true>(
+            std::forward<Handler>(handler), executor, ep_, buffers);
 
-        auto span = to_mutable_span(buffers);
-        auto result = ep_->recv(span, context_ptr<void>{ctx->as_fi_context()});
-        if (!result) {
-            ctx->fail(result.error());
-        }
+        auto result = ep_->recvv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+        finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
 
@@ -277,13 +275,16 @@ struct initiate_fabric_tagged_send {
     void
     operator()(Handler&& handler, const ConstBufferSequence& buffers, std::uint64_t tag) const {
         auto executor = ::asio::get_associated_executor(handler);
-        auto* ctx = make_asio_context(std::forward<Handler>(handler), executor, ep_);
+        auto ctx = make_buffered_asio_context<false>(
+            std::forward<Handler>(handler), executor, ep_, buffers);
 
-        auto span = to_const_span(buffers);
-        auto result = ep_->tagged_send(span, tag, ctx->as_fi_context());
-        if (!result) {
-            ctx->fail(result.error());
-        }
+        auto result = loom::tagged_sendv(*ep_,
+                                         ctx->buffers().iov,
+                                         ctx->buffers().descriptors,
+                                         fabric_addrs::unspecified,
+                                         tag,
+                                         ctx->as_fi_context());
+        finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
 
@@ -310,13 +311,17 @@ struct initiate_fabric_tagged_recv {
                     std::uint64_t tag,
                     std::uint64_t ignore) const {
         auto executor = ::asio::get_associated_executor(handler);
-        auto* ctx = make_asio_context(std::forward<Handler>(handler), executor, ep_);
+        auto ctx = make_buffered_asio_context<true>(
+            std::forward<Handler>(handler), executor, ep_, buffers);
 
-        auto span = to_mutable_span(buffers);
-        auto result = ep_->tagged_recv(span, tag, ignore, ctx->as_fi_context());
-        if (!result) {
-            ctx->fail(result.error());
-        }
+        auto result = loom::tagged_recvv(*ep_,
+                                         ctx->buffers().iov,
+                                         ctx->buffers().descriptors,
+                                         fabric_addrs::unspecified,
+                                         tag,
+                                         ignore,
+                                         ctx->as_fi_context());
+        finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
 
@@ -343,13 +348,13 @@ struct initiate_fabric_write {
                     memory_region& mr,
                     remote_memory remote) const {
         auto executor = ::asio::get_associated_executor(handler);
-        auto* ctx = make_asio_context(std::forward<Handler>(handler), executor, ep_);
+        auto ctx = make_buffered_asio_context<false>(
+            std::forward<Handler>(handler), executor, ep_, buffers, mr.descriptor());
 
-        auto span = to_const_span(buffers);
-        auto result = rma::write(*ep_, span, mr, remote, ctx->as_fi_context());
-        if (!result) {
-            ctx->fail(result.error());
-        }
+        const std::array remote_iov{rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
+        auto result = rma::writev(
+            *ep_, ctx->buffers().iov, ctx->buffers().descriptors, remote_iov, ctx->as_fi_context());
+        finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
 
@@ -376,13 +381,13 @@ struct initiate_fabric_read {
                     memory_region& mr,
                     remote_memory remote) const {
         auto executor = ::asio::get_associated_executor(handler);
-        auto* ctx = make_asio_context(std::forward<Handler>(handler), executor, ep_);
+        auto ctx = make_buffered_asio_context<true>(
+            std::forward<Handler>(handler), executor, ep_, buffers, mr.descriptor());
 
-        auto span = to_mutable_span(buffers);
-        auto result = rma::read(*ep_, span, mr, remote, ctx->as_fi_context());
-        if (!result) {
-            ctx->fail(result.error());
-        }
+        const std::array remote_iov{rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
+        auto result = rma::readv(
+            *ep_, ctx->buffers().iov, ctx->buffers().descriptors, remote_iov, ctx->as_fi_context());
+        finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
 
