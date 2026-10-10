@@ -4,6 +4,9 @@
 #include <rdma/fabric.h>
 #include <rdma/fi_domain.h>
 
+#include <string>
+#include <utility>
+
 #include "loom/core/allocator.hpp"
 #include "loom/core/domain.hpp"
 #include "loom/core/error.hpp"
@@ -20,6 +23,9 @@ struct domain_impl {
     progress_mode control_progress{progress_mode::unspecified};  ///< Control progress mode.
     progress_mode data_progress{progress_mode::unspecified};     ///< Data progress mode.
 
+    address_format addr_format{address_format::unspecified};
+    std::string name;
+
     /// @brief Default constructor.
     domain_impl() = default;
 
@@ -31,8 +37,11 @@ struct domain_impl {
     explicit domain_impl(::fid_domain* dom,
                          threading_mode thread = threading_mode::unspecified,
                          progress_mode ctrl_prog = progress_mode::unspecified,
-                         progress_mode data_prog = progress_mode::unspecified)
-        : domain(dom), threading(thread), control_progress(ctrl_prog), data_progress(data_prog) {}
+                         progress_mode data_prog = progress_mode::unspecified,
+                         address_format format = address_format::unspecified,
+                         std::string domain_name = {})
+        : domain(dom), threading(thread), control_progress(ctrl_prog), data_progress(data_prog),
+          addr_format(format), name(std::move(domain_name)) {}
 
     /// @brief Destructor that closes the libfabric domain.
     ~domain_impl() {
@@ -93,20 +102,28 @@ inline auto domain::create(const fabric& fab, const fabric_info& info, memory_re
         data_prog = detail::from_fi_progress(info_ptr->domain_attr->data_progress);
     }
 
+    const auto format = detail::from_fi_addr_format(info_ptr->addr_format);
+    const std::string domain_name =
+        info_ptr->domain_attr && info_ptr->domain_attr->name ? info_ptr->domain_attr->name : "";
+
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::domain_impl>(
-            resource, dom, threading, control_prog, data_prog);
+            resource, dom, threading, control_prog, data_prog, format, domain_name);
         return domain{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::domain_impl>(
-        default_resource, dom, threading, control_prog, data_prog);
+        default_resource, dom, threading, control_prog, data_prog, format, domain_name);
     return domain{std::move(impl)};
 }
 
 inline auto domain::get_name() const -> std::string_view {
-    return "";
+    return impl_ ? std::string_view{impl_->name} : std::string_view{};
+}
+
+inline auto domain::get_address_format() const noexcept -> address_format {
+    return impl_ ? impl_->addr_format : address_format::unspecified;
 }
 
 inline auto domain::get_threading() const -> threading_mode {

@@ -162,6 +162,8 @@ TEST_CASE("domain::create from fabric", "[domain][integration]") {
 
     REQUIRE(static_cast<bool>(domain_result));
     REQUIRE(domain_result->impl_valid());
+    REQUIRE(domain_result->get_name() == info_result->get_domain_attr()->name);
+    REQUIRE(domain_result->get_address_format() == info_result->get_address_format());
 }
 
 TEST_CASE("domain properties are accessible", "[domain][integration]") {

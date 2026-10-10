@@ -95,6 +95,7 @@ public:
                        memory_resource* resource = nullptr) -> result<domain>;
 
     [[nodiscard]] auto get_name() const -> std::string_view;
+    [[nodiscard]] auto get_address_format() const noexcept -> address_format;
     [[nodiscard]] auto get_threading() const -> threading_mode;
     [[nodiscard]] auto get_control_progress() const -> progress_mode;
     [[nodiscard]] auto get_data_progress() const -> progress_mode;
