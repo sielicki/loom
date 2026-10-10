@@ -56,6 +56,23 @@
         "type": "github"
       }
     },
+    "libfabric-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789694456,
+        "narHash": "sha256-YDqCgRW+ZJSyf6+9aZebVEA5SAQHMwxofwuYkfGhT4M=",
+        "owner": "ofiwg",
+        "repo": "libfabric",
+        "rev": "9011331bb34bb90b38a7aad53857df4430c5db45",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ofiwg",
+        "ref": "v2.7.0",
+        "repo": "libfabric",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1767379071,
@@ -106,6 +123,7 @@
       "inputs": {
         "flake-parts": "flake-parts",
         "libfabric": "libfabric",
+        "libfabric-src": "libfabric-src",
         "nixpkgs": "nixpkgs",
         "systems": "systems",
         "treefmt-nix": "treefmt-nix"

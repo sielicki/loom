@@ -9,6 +9,10 @@
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
     libfabric.url = "github:sielicki/libfabric";
     libfabric.inputs.nixpkgs.follows = "nixpkgs";
+    libfabric-src = {
+      url = "github:ofiwg/libfabric/v2.7.0";
+      flake = false;
+    };
   };
 
   outputs =
@@ -49,8 +53,11 @@
             ./cmake
           ]);
 
-          # Use libfabric from external flake
-          libfabric = inputs'.libfabric.packages.default;
+          # Retain provider packaging while pinning the upstream stable source.
+          libfabric = inputs'.libfabric.packages.default.override {
+            version = "2.7.0";
+            src = inputs.libfabric-src;
+          };
 
           # Use our custom stdexec derivation (header-only)
           stdexec = pkgs.callPackage ./nix/pkgs/stdexec { };
@@ -220,6 +227,7 @@
           packages =
             rec {
               default = loom;
+              inherit libfabric;
 
               # Standard build - use appropriate compiler for platform
               loom =

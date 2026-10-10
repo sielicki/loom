@@ -15,6 +15,12 @@ loom provides an opinionated, idiomatic, and strongly-typed C++26 interface over
 - C++26 compiler
 - libfabric
 
+The Nix flake pins upstream libfabric 2.7.0 and retains the external
+libfabric flake's provider packaging. Use `nix develop` for the development
+environment or `nix build .#libfabric` to build that dependency directly.
+`flake.lock` records the exact source revision. CMake can also use an
+installed libfabric through `pkg-config`.
+
 ## Examples
 
 ```cpp
