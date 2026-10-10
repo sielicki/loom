@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
-#include <cstring>
+#include <optional>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 #include "loom/core/atomic.hpp"
 #include "loom/core/concepts/provider_traits.hpp"
 #include "loom/core/memory.hpp"
 #include "loom/core/result.hpp"
-#include "loom/core/rma.hpp"
 
 /**
  * @namespace loom
@@ -111,37 +111,15 @@ struct fetch_add_op {
     }
 
     /**
-     * @brief Executes the operation using staged RMA emulation.
-     * @param staging_mr Memory region for staging buffer.
-     * @param staging_buffer Staging buffer for read-modify-write.
+     * @brief Submits through the provider atomic interface (legacy staged entry point).
+     * @param staging_mr Retained for source compatibility; no application staging is needed.
+     * @param staging_buffer Retained for source compatibility.
      * @return Success or error result.
      */
-    [[nodiscard]] auto execute_staged(memory_region& staging_mr,
-                                      std::span<std::byte> staging_buffer) const
+    [[nodiscard]] auto execute_staged([[maybe_unused]] memory_region& staging_mr,
+                                      [[maybe_unused]] std::span<std::byte> staging_buffer) const
         -> loom::result<void> {
-        static_assert(sizeof(T) <= 64, "Staging buffer must fit atomic type");
-
-        auto read_result =
-            rma::read(*ep, staging_buffer.subspan(0, sizeof(T)), staging_mr, remote, nullptr);
-        if (!read_result) {
-            return read_result;
-        }
-
-        T current_value{};
-        std::memcpy(&current_value, staging_buffer.data(), sizeof(T));
-
-        if (result != nullptr) {
-            *result = current_value;
-        }
-
-        T new_value = current_value + operand;
-        std::memcpy(staging_buffer.data(), &new_value, sizeof(T));
-
-        return rma::write(*ep,
-                          std::span<const std::byte>(staging_buffer.data(), sizeof(T)),
-                          staging_mr,
-                          remote,
-                          context);
+        return execute_native();
     }
 };
 
@@ -167,31 +145,15 @@ struct atomic_add_op {
     }
 
     /**
-     * @brief Executes the operation using staged RMA emulation.
-     * @param staging_mr Memory region for staging buffer.
-     * @param staging_buffer Staging buffer for read-modify-write.
+     * @brief Submits through the provider atomic interface (legacy staged entry point).
+     * @param staging_mr Retained for source compatibility; no application staging is needed.
+     * @param staging_buffer Retained for source compatibility.
      * @return Success or error result.
      */
-    [[nodiscard]] auto execute_staged(memory_region& staging_mr,
-                                      std::span<std::byte> staging_buffer) const
+    [[nodiscard]] auto execute_staged([[maybe_unused]] memory_region& staging_mr,
+                                      [[maybe_unused]] std::span<std::byte> staging_buffer) const
         -> loom::result<void> {
-        auto read_result =
-            rma::read(*ep, staging_buffer.subspan(0, sizeof(T)), staging_mr, remote, nullptr);
-        if (!read_result) {
-            return read_result;
-        }
-
-        T current_value{};
-        std::memcpy(&current_value, staging_buffer.data(), sizeof(T));
-
-        T new_value = current_value + operand;
-        std::memcpy(staging_buffer.data(), &new_value, sizeof(T));
-
-        return rma::write(*ep,
-                          std::span<const std::byte>(staging_buffer.data(), sizeof(T)),
-                          staging_mr,
-                          remote,
-                          context);
+        return execute_native();
     }
 };
 
@@ -219,37 +181,15 @@ struct compare_swap_op {
     }
 
     /**
-     * @brief Executes the operation using staged RMA emulation.
-     * @param staging_mr Memory region for staging buffer.
-     * @param staging_buffer Staging buffer for read-modify-write.
+     * @brief Submits through the provider atomic interface (legacy staged entry point).
+     * @param staging_mr Retained for source compatibility; no application staging is needed.
+     * @param staging_buffer Retained for source compatibility.
      * @return Success or error result.
      */
-    [[nodiscard]] auto execute_staged(memory_region& staging_mr,
-                                      std::span<std::byte> staging_buffer) const
+    [[nodiscard]] auto execute_staged([[maybe_unused]] memory_region& staging_mr,
+                                      [[maybe_unused]] std::span<std::byte> staging_buffer) const
         -> loom::result<void> {
-        auto read_result =
-            rma::read(*ep, staging_buffer.subspan(0, sizeof(T)), staging_mr, remote, nullptr);
-        if (!read_result) {
-            return read_result;
-        }
-
-        T current_value{};
-        std::memcpy(&current_value, staging_buffer.data(), sizeof(T));
-
-        if (old_value != nullptr) {
-            *old_value = current_value;
-        }
-
-        if (current_value == compare_value) {
-            std::memcpy(staging_buffer.data(), &swap_value, sizeof(T));
-            return rma::write(*ep,
-                              std::span<const std::byte>(staging_buffer.data(), sizeof(T)),
-                              staging_mr,
-                              remote,
-                              context);
-        }
-
-        return make_success();
+        return execute_native();
     }
 };
 
@@ -286,35 +226,15 @@ struct generic_fetch_op {
     }
 
     /**
-     * @brief Executes the operation using staged RMA emulation.
-     * @param staging_mr Memory region for staging buffer.
-     * @param staging_buffer Staging buffer for read-modify-write.
+     * @brief Submits through the provider atomic interface (legacy staged entry point).
+     * @param staging_mr Retained for source compatibility; no application staging is needed.
+     * @param staging_buffer Retained for source compatibility.
      * @return Success or error result.
      */
-    [[nodiscard]] auto execute_staged(memory_region& staging_mr,
-                                      std::span<std::byte> staging_buffer) const
+    [[nodiscard]] auto execute_staged([[maybe_unused]] memory_region& staging_mr,
+                                      [[maybe_unused]] std::span<std::byte> staging_buffer) const
         -> loom::result<void> {
-        auto read_result =
-            rma::read(*ep, staging_buffer.subspan(0, sizeof(T)), staging_mr, remote, nullptr);
-        if (!read_result) {
-            return read_result;
-        }
-
-        T current_value{};
-        std::memcpy(&current_value, staging_buffer.data(), sizeof(T));
-
-        if (result != nullptr) {
-            *result = current_value;
-        }
-
-        T new_value = detail::perform_local_atomic_op(op, current_value, operand);
-        std::memcpy(staging_buffer.data(), &new_value, sizeof(T));
-
-        return rma::write(*ep,
-                          std::span<const std::byte>(staging_buffer.data(), sizeof(T)),
-                          staging_mr,
-                          remote,
-                          context);
+        return execute_native();
     }
 };
 
@@ -322,8 +242,10 @@ struct generic_fetch_op {
  * @class provider_atomic_context
  * @brief Provider-aware context for atomic operations.
  *
- * Automatically selects between native and staged atomic implementations
- * based on provider capabilities.
+ * Uses libfabric's atomic interface for every provider. The provider supplies
+ * the atomicity guarantees, whether implemented in hardware or software.
+ * Query atomic support before submitting operations; unsupported operations
+ * return the provider's error without attempting a non-atomic RMA fallback.
  *
  * @tparam P The provider tag type.
  */
@@ -352,18 +274,8 @@ public:
      */
     template <typename Op>
     [[nodiscard]] auto execute(Op&& op) -> loom::result<void> {
-        if constexpr (native_atomic_provider<P>) {
-            return std::forward<Op>(op).execute_native();
-        } else if constexpr (staged_atomic_provider<P>) {
-            if (!staging_mr_) {
-                return make_error_result<void>(errc::not_supported);
-            }
-            return std::forward<Op>(op).execute_staged(
-                *staging_mr_, std::span<std::byte>(staging_buffer_.data(), staging_buffer_.size()));
-        } else {
-            static_assert(native_atomic_provider<P> || staged_atomic_provider<P>,
-                          "Provider must support either native or staged atomics");
-        }
+        // The operation and its operand storage must survive until completion.
+        return std::forward<Op>(op).execute_native();
     }
 
     /**
@@ -379,17 +291,14 @@ public:
     [[nodiscard]] auto has_staging_mr() const noexcept -> bool { return staging_mr_.has_value(); }
 
     /**
-     * @brief Checks if this provider requires staged atomics.
-     * @return True if the provider uses staged atomics.
+     * @brief Checks whether application staging is required (always false).
+     * @return False; libfabric manages any provider-side software implementation.
      */
-    [[nodiscard]] static constexpr auto requires_staging() noexcept -> bool {
-        return staged_atomic_provider<P>;
-    }
+    [[nodiscard]] static constexpr auto requires_staging() noexcept -> bool { return false; }
 
 private:
     domain* domain_;                                        ///< Fabric domain reference
     std::optional<memory_region> staging_mr_;               ///< Optional staging memory region
-    alignas(64) std::array<std::byte, 64> staging_buffer_;  ///< Cache-aligned staging buffer
 };
 
 /**

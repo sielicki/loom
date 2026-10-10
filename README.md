@@ -124,6 +124,13 @@ auto main() -> int {
 
 loom provides type-safe remote atomic operations with automatic datatype deduction:
 
+Provider-aware atomics also use libfabric's atomic interface. The selected
+provider supplies the atomicity guarantees in hardware or software; query
+support with `atomic::is_valid`, `is_fetch_valid`, or `is_compare_valid`.
+`provider_atomic_context` requires no application staging buffer. Its legacy
+staging entry points submit provider atomic operations rather than a separate
+RMA read/modify/write sequence, which cannot guarantee atomicity.
+
 ```cpp
 #include <loom/loom.hpp>
 #include <loom/async/completion_queue.hpp>
