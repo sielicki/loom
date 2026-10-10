@@ -24,6 +24,8 @@ TEST_CASE("completion honors the handler executor association", "[asio][context]
     auto handler = ::asio::bind_executor(associated.get_executor(),
                                          [&](std::error_code, std::size_t) { completed = true; });
     auto* ctx = loom::asio::make_asio_context(std::move(handler), fallback.get_executor());
+    associated.poll();
+    REQUIRE_FALSE(associated.stopped());
     ctx->complete(loom::completion_event{});
     fallback.poll();
     REQUIRE_FALSE(completed);

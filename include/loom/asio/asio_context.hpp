@@ -34,6 +34,7 @@
 #include <asio/cancellation_state.hpp>
 #include <asio/dispatch.hpp>
 #include <asio/execution_context.hpp>
+#include <asio/executor_work_guard.hpp>
 #include <asio/post.hpp>
 
 namespace loom::asio {
@@ -213,7 +214,7 @@ public:
      * @param executor The executor to dispatch on.
      */
     asio_context(Handler handler, Executor executor)
-        : handler_(std::move(handler)), executor_(std::move(executor)),
+        : handler_(std::move(handler)), executor_(std::move(executor)), work_(executor_),
           allocator_(::asio::get_associated_allocator(handler_)),
           cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)) {}
 
@@ -224,7 +225,7 @@ public:
      * @param ep The endpoint for cancellation support.
      */
     asio_context(Handler handler, Executor executor, endpoint* ep)
-        : handler_(std::move(handler)), executor_(std::move(executor)),
+        : handler_(std::move(handler)), executor_(std::move(executor)), work_(executor_),
           allocator_(::asio::get_associated_allocator(handler_)),
           cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)), endpoint_(ep) {
         setup_cancellation();
@@ -245,11 +246,14 @@ public:
         auto ec = event.error;
         auto handler = std::move(handler_);
         auto executor = executor_;
+        auto work = std::move(work_);
 
         destroy_self();
 
         ::asio::dispatch(
-            executor, [handler = std::move(handler), ec, bytes]() mutable { handler(ec, bytes); });
+            executor, [handler = std::move(handler), work = std::move(work), ec, bytes]() mutable {
+                handler(ec, bytes);
+            });
     }
 
     /**
@@ -259,10 +263,14 @@ public:
     void impl_set_error(std::error_code ec) override {
         auto handler = std::move(handler_);
         auto executor = executor_;
+        auto work = std::move(work_);
 
         destroy_self();
 
-        ::asio::post(executor, [handler = std::move(handler), ec]() mutable { handler(ec, 0); });
+        ::asio::post(executor,
+                     [handler = std::move(handler), work = std::move(work), ec]() mutable {
+                         handler(ec, 0);
+                     });
     }
 
     /**
@@ -349,6 +357,7 @@ private:
 
     Handler handler_;
     Executor executor_;
+    ::asio::executor_work_guard<Executor> work_;
     allocator_type allocator_;
     cancellation_slot_type cancellation_slot_;
     endpoint* endpoint_{nullptr};
