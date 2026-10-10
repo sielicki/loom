@@ -85,6 +85,11 @@ inline auto address_vector::create(const domain& dom,
         return make_error_result<address_vector>(errc::invalid_argument);
     }
 
+    // Insertions return their handles synchronously and cannot retain EQ state.
+    if (attr.flags & (av_flags::async | FI_EVENT)) {
+        return make_error_result<address_vector>(errc::not_supported);
+    }
+
     const auto format = dom.get_address_format();
     if (attr.addr_format != address_format::unspecified && attr.addr_format != format) {
         return make_error_result<address_vector>(errc::invalid_argument);
@@ -93,7 +98,9 @@ inline auto address_vector::create(const domain& dom,
 
     av_attr.type = av_type_to_fi(attr.type);
     av_attr.count = attr.count;
-    av_attr.flags = attr.flags;
+    av_attr.flags = (attr.flags & ~(av_flags::read_only | av_flags::symmetric)) |
+                    ((attr.flags & av_flags::read_only) ? FI_READ : 0ULL) |
+                    ((attr.flags & av_flags::symmetric) ? FI_SYMMETRIC : 0ULL);
     av_attr.rx_ctx_bits = static_cast<int>(attr.rx_ctx_bits);
     av_attr.ep_per_node = attr.ep_per_node;
     av_attr.name = attr.name;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/detail/impl/address_vector_impl.hpp>
+#include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 
 #include <array>
@@ -16,6 +17,8 @@ struct provider {
     bool fail_middle{};
     fid* bound_address_vector{};
     int bind_result{};
+    std::uint64_t open_flags{};
+    int open_calls{};
     std::vector<void*> contexts;
     fi_ops ops{
         .size = sizeof(fi_ops),
@@ -55,6 +58,23 @@ struct provider {
     };
     fid_ep ep_handle{.fid = {.context = this, .ops = &ops}, .cm = &cm};
     fid_av av_handle{.fid = {.context = this, .ops = &ops}, .ops = &av_ops};
+    fi_ops_domain domain_ops{
+        .size = sizeof(fi_ops_domain),
+        .av_open = [](fid_domain* dom, fi_av_attr* attr, fid_av** av, void*) {
+            auto& self = *static_cast<provider*>(dom->fid.context);
+            ++self.open_calls;
+            self.open_flags = attr->flags;
+            attr->type = FI_AV_TABLE;
+            *av = &self.av_handle;
+            return 0;
+        },
+    };
+    fid_domain domain_handle{.fid = {.context = this, .ops = &ops}, .ops = &domain_ops};
+
+    auto domain() -> loom::domain {
+        return loom::domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
+            loom::get_default_resource(), &domain_handle)};
+    }
 
     auto endpoint(loom::address_format format) -> loom::endpoint {
         return loom::endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
@@ -72,6 +92,25 @@ struct provider {
     }
 };
 }  // namespace
+
+TEST_CASE("address vector creation translates flags", "[address]") {
+    provider native;
+    auto dom = native.domain();
+    loom::address_vector_attr attr;
+    attr.flags = loom::av_flags::read_only | loom::av_flags::symmetric;
+    REQUIRE(loom::address_vector::create(dom, attr));
+    REQUIRE(native.open_flags == (FI_READ | FI_SYMMETRIC));
+}
+
+TEST_CASE("synchronous address vectors reject asynchronous creation", "[address]") {
+    provider native;
+    auto dom = native.domain();
+    loom::address_vector_attr attr;
+    SECTION("loom flag") { attr.flags = loom::av_flags::async; }
+    SECTION("native flag") { attr.flags = FI_EVENT; }
+    REQUIRE(loom::address_vector::create(dom, attr).error() == loom::errc::not_supported);
+    REQUIRE(native.open_calls == 0);
+}
 
 TEST_CASE("address vector binding reaches the provider", "[address]") {
     provider native;

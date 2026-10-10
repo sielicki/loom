@@ -84,7 +84,7 @@ struct address_vector_attr {
 namespace av_flags {
 inline constexpr std::uint64_t read_only = 1ULL << 0;  ///< Read-only address vector
 inline constexpr std::uint64_t symmetric = 1ULL << 1;  ///< Symmetric addressing
-inline constexpr std::uint64_t async = 1ULL << 2;      ///< Async address insertion
+inline constexpr std::uint64_t async = 1ULL << 2;      ///< Unsupported by synchronous insertion
 }  // namespace av_flags
 
 /**
@@ -93,6 +93,8 @@ inline constexpr std::uint64_t async = 1ULL << 2;      ///< Async address insert
  *
  * Address vectors map fabric addresses to local handles for
  * efficient endpoint addressing in connectionless communication.
+ * Insertions are synchronous; requesting asynchronous AV creation returns
+ * errc::not_supported.
  */
 class address_vector : public fabric_object_base<address_vector> {
 public:
