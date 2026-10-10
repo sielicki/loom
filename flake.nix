@@ -212,7 +212,7 @@
               doCheck = enableTests;
               checkPhase = lib.optionalString enableTests ''
                 runHook preCheck
-                ctest --output-on-failure --timeout 300 || echo "Some tests may require network setup"
+                ctest --output-on-failure --timeout 300
                 runHook postCheck
               '';
 
