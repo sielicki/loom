@@ -11,23 +11,9 @@
 #include "loom/core/event_queue.hpp"
 #include "loom/core/shared_context.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/impl/endpoint_impl.hpp"
 
 namespace loom {
-
-namespace detail {
-
-/// @brief Internal implementation of the endpoint (forward declaration for bind operations).
-struct endpoint_impl {
-    ::fid_ep* ep{nullptr};  ///< Underlying libfabric endpoint handle.
-
-    /// @brief Destructor that closes the libfabric endpoint.
-    ~endpoint_impl() {
-        if (ep) {
-            ::fi_close(&ep->fid);
-        }
-    }
-};
-}  // namespace detail
 
 auto endpoint::bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result {
     if (!impl_ || !impl_->ep) {

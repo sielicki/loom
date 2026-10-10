@@ -18,44 +18,13 @@
 #include "loom/core/event_queue.hpp"
 #include "loom/core/fabric.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/impl/endpoint_impl.hpp"
 
 namespace loom {
 class completion_queue;
 }  // namespace loom
 
 namespace loom {
-
-namespace detail {
-
-/// @brief Internal implementation of the endpoint.
-struct endpoint_impl {
-    ::fid_ep* ep{nullptr};                    ///< Underlying libfabric endpoint handle.
-    endpoint_type type{endpoint_types::msg};  ///< Endpoint type (msg, rdm, dgram).
-    address_format addr_format{address_format::unspecified};  ///< Address format.
-
-    /// @brief Default constructor.
-    endpoint_impl() = default;
-
-    /// @brief Constructs endpoint_impl with a libfabric endpoint handle.
-    /// @param ep_ The libfabric endpoint pointer.
-    /// @param type_ The endpoint type.
-    /// @param fmt The address format.
-    endpoint_impl(::fid_ep* ep_, endpoint_type type_, address_format fmt)
-        : ep(ep_), type(type_), addr_format(fmt) {}
-
-    /// @brief Destructor that closes the libfabric endpoint.
-    ~endpoint_impl() {
-        if (ep) {
-            ::fi_close(&ep->fid);
-        }
-    }
-
-    endpoint_impl(const endpoint_impl&) = delete;
-    auto operator=(const endpoint_impl&) -> endpoint_impl& = delete;
-    endpoint_impl(endpoint_impl&&) = delete;
-    auto operator=(endpoint_impl&&) -> endpoint_impl& = delete;
-};
-}  // namespace detail
 
 endpoint::endpoint() = default;
 
