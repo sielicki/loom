@@ -9,6 +9,7 @@
 #include "loom/core/error.hpp"
 #include "loom/core/memory.hpp"
 #include "loom/core/rma.hpp"
+#include "loom/detail/impl/endpoint_impl.hpp"
 
 #ifdef LOOM_IMPLEMENTATION
 
@@ -50,12 +51,12 @@ auto inject_write_data(endpoint& ep,
     return make_success();
 }
 
-auto get_max_rma_size(const endpoint&) -> std::size_t {
-    return 1ULL << 30;
+auto get_max_rma_size(const endpoint& ep) -> std::size_t {
+    return ep.impl_ ? ep.impl_->size_limit(FI_OPT_MAX_RMA_SIZE, ep.impl_->max_msg_size) : 0;
 }
 
-auto get_inject_size(const endpoint&) -> std::size_t {
-    return 4096;
+auto get_inject_size(const endpoint& ep) -> std::size_t {
+    return ep.impl_ ? ep.impl_->size_limit(FI_OPT_INJECT_RMA_SIZE, ep.impl_->inject_size) : 0;
 }
 
 }  // namespace loom::rma

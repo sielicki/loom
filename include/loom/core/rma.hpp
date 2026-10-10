@@ -388,14 +388,18 @@ auto write_to(endpoint& ep,
 /**
  * @brief Gets the maximum RMA transfer size for an endpoint.
  * @param ep The endpoint to query.
- * @return Maximum RMA transfer size in bytes.
+ * @return Maximum RMA transfer size in bytes, or zero if unavailable.
+ * Uses the endpoint option, falling back to its creation attributes when
+ * the provider does not implement the query.
  */
 auto get_max_rma_size(const endpoint& ep) -> std::size_t;
 
 /**
  * @brief Gets the maximum inject size for RMA operations.
  * @param ep The endpoint to query.
- * @return Maximum inject size in bytes.
+ * @return Maximum inject size in bytes, or zero if unavailable.
+ * Uses the endpoint option, falling back to its creation attributes when
+ * the provider does not implement the query.
  */
 auto get_inject_size(const endpoint& ep) -> std::size_t;
 

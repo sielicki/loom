@@ -22,6 +22,8 @@ struct scalable_endpoint_impl {
     std::size_t rx_ctx_cnt{0};  ///< Number of receive contexts.
     endpoint_type type{endpoint_types::msg};
     address_format addr_format{address_format::unspecified};
+    std::size_t max_msg_size{};
+    std::size_t inject_size{};
 
     /// @brief Default constructor.
     scalable_endpoint_impl() = default;
@@ -32,12 +34,17 @@ struct scalable_endpoint_impl {
     /// @param rx_cnt The number of receive contexts.
     /// @param type_ The endpoint type inherited by transmit and receive contexts.
     /// @param format The address format inherited by those contexts.
+    /// @param max_msg_size_ The maximum transfer size from the creation attributes.
+    /// @param inject_size_ The inject limit inherited by transmit contexts.
     scalable_endpoint_impl(::fid_ep* sep_,
                            std::size_t tx_cnt,
                            std::size_t rx_cnt,
                            endpoint_type type_,
-                           address_format format)
-        : sep(sep_), tx_ctx_cnt(tx_cnt), rx_ctx_cnt(rx_cnt), type(type_), addr_format(format) {}
+                           address_format format,
+                           std::size_t max_msg_size_ = 0,
+                           std::size_t inject_size_ = 0)
+        : sep(sep_), tx_ctx_cnt(tx_cnt), rx_ctx_cnt(rx_cnt), type(type_), addr_format(format),
+          max_msg_size(max_msg_size_), inject_size(inject_size_) {}
 
     /// @brief Destructor that closes the libfabric scalable endpoint.
     ~scalable_endpoint_impl() {
@@ -91,6 +98,8 @@ auto scalable_endpoint::create(const domain& dom,
 
     std::size_t tx_ctx_cnt = 0;
     std::size_t rx_ctx_cnt = 0;
+    const auto max_msg_size = info_ptr->ep_attr ? info_ptr->ep_attr->max_msg_size : 0;
+    const auto inject_size = info_ptr->tx_attr ? info_ptr->tx_attr->inject_size : 0;
     endpoint_type type{endpoint_types::msg};
     const auto format = detail::from_fi_addr_format(info_ptr->addr_format);
     if (info_ptr->ep_attr) {
@@ -101,13 +110,13 @@ auto scalable_endpoint::create(const domain& dom,
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
-            resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format);
+            resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format, max_msg_size, inject_size);
         return scalable_endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
-        default_resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format);
+        default_resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format, max_msg_size, inject_size);
     return scalable_endpoint{std::move(impl)};
 }
 
@@ -162,7 +171,7 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
 
     auto* resource = std::pmr::get_default_resource();
     auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
-        resource, tx_ep, impl_->type, impl_->addr_format);
+        resource, tx_ep, impl_->type, impl_->addr_format, impl_->max_msg_size, impl_->inject_size);
     return endpoint{std::move(ep_impl)};
 }
 
@@ -184,7 +193,7 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
 
     auto* resource = std::pmr::get_default_resource();
     auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
-        resource, rx_ep, impl_->type, impl_->addr_format);
+        resource, rx_ep, impl_->type, impl_->addr_format, impl_->max_msg_size);
     return endpoint{std::move(ep_impl)};
 }
 

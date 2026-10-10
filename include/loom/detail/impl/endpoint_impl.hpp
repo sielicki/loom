@@ -34,6 +34,8 @@ struct endpoint_impl {
     ::fid_ep* ep{nullptr};                    ///< Underlying libfabric endpoint handle.
     endpoint_type type{endpoint_types::msg};  ///< Endpoint type (msg, rdm, dgram).
     address_format addr_format{address_format::unspecified};  ///< Address format.
+    std::size_t max_msg_size{};
+    std::size_t inject_size{};
 
     /// @brief Default constructor.
     endpoint_impl() = default;
@@ -42,8 +44,31 @@ struct endpoint_impl {
     /// @param ep_ The libfabric endpoint pointer.
     /// @param type_ The endpoint type.
     /// @param fmt The address format.
-    endpoint_impl(::fid_ep* ep_, endpoint_type type_, address_format fmt)
-        : ep(ep_), type(type_), addr_format(fmt) {}
+    /// @param max_msg_size_ The maximum transfer size from the creation attributes.
+    /// @param inject_size_ The inject limit from the creation attributes.
+    endpoint_impl(::fid_ep* ep_,
+                  endpoint_type type_,
+                  address_format fmt,
+                  std::size_t max_msg_size_ = 0,
+                  std::size_t inject_size_ = 0)
+        : ep(ep_), type(type_), addr_format(fmt), max_msg_size(max_msg_size_),
+          inject_size(inject_size_) {}
+
+    [[nodiscard]] auto size_limit(int option, std::size_t fallback) const -> std::size_t {
+        if (!ep) {
+            return 0;
+        }
+        if (!ep->ops || !ep->ops->getopt) {
+            return fallback;
+        }
+        std::size_t value{};
+        auto length = sizeof(value);
+        const auto result = ::fi_getopt(&ep->fid, FI_OPT_ENDPOINT, option, &value, &length);
+        if (result == -FI_ENOPROTOOPT || result == -FI_ENOSYS) {
+            return fallback;
+        }
+        return result == 0 && length == sizeof(value) ? value : 0;
+    }
 
     /// @brief Destructor that closes the libfabric endpoint.
     ~endpoint_impl() {
@@ -100,15 +125,18 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
 
     auto ep_type = detail::from_fi_ep_type(info_ptr->ep_attr->type);
     auto addr_fmt = detail::from_fi_addr_format(info_ptr->addr_format);
+    const auto max_msg_size = info_ptr->ep_attr->max_msg_size;
+    const auto inject_size = info_ptr->tx_attr ? info_ptr->tx_attr->inject_size : 0;
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::endpoint_impl>(resource, ep, ep_type, addr_fmt);
+        auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
+            resource, ep, ep_type, addr_fmt, max_msg_size, inject_size);
         return endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::endpoint_impl>(default_resource, ep, ep_type, addr_fmt);
+    auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
+        default_resource, ep, ep_type, addr_fmt, max_msg_size, inject_size);
     return endpoint{std::move(impl)};
 }
 

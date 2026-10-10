@@ -73,6 +73,12 @@ namespace detail {
 struct endpoint_impl;
 }  // namespace detail
 
+class endpoint;
+namespace rma {
+auto get_max_rma_size(const endpoint& ep) -> std::size_t;
+auto get_inject_size(const endpoint& ep) -> std::size_t;
+}  // namespace rma
+
 /**
  * @class endpoint
  * @brief Represents a communication endpoint for fabric operations.
@@ -203,6 +209,8 @@ private:
     impl_ptr impl_;
     friend class completion_queue;
     friend class event_queue;
+    friend auto rma::get_max_rma_size(const endpoint&) -> std::size_t;
+    friend auto rma::get_inject_size(const endpoint&) -> std::size_t;
 };
 
 }  // namespace loom
