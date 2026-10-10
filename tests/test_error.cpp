@@ -2,6 +2,8 @@
 #include <loom/core/error.hpp>
 #include <loom/core/result.hpp>
 
+#include <rdma/fi_errno.h>
+
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("error_code creation", "[error]") {
@@ -61,6 +63,10 @@ TEST_CASE("make_error_code_from_fi_errno", "[error]") {
     REQUIRE(ec.value() == -12);
     REQUIRE(ec.category() == loom::loom_category());
     REQUIRE_FALSE(ec.message().empty());
+
+    const auto provider_error = loom::make_error_code_from_fi_errno(FI_ENOMEM);
+    REQUIRE(provider_error == loom::errc::no_memory);
+    REQUIRE(provider_error.message() == fi_strerror(FI_ENOMEM));
 }
 
 TEST_CASE("result success", "[error]") {

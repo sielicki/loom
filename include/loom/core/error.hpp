@@ -98,7 +98,7 @@ inline auto make_error_code(errc e) noexcept -> std::error_code {
  * @return A std::error_code in the loom category.
  */
 inline auto make_error_code_from_fi_errno(int fi_errno) noexcept -> std::error_code {
-    return {fi_errno, loom_category()};
+    return {fi_errno > 0 ? -fi_errno : fi_errno, loom_category()};
 }
 
 }  // namespace loom
