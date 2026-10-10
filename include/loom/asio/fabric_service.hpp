@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "loom/asio/asio_context.hpp"
@@ -142,6 +143,7 @@ private:
     std::mutex mutex_;
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdown_{false};
+    bool resume_after_fork_{};
 };
 
 // Implementation
@@ -163,17 +165,20 @@ inline void fabric_service::notify_fork(::asio::execution_context::fork_event ev
     switch (event) {
         case ::asio::execution_context::fork_prepare:
             // Stop polling before fork to avoid issues with shared state
+            resume_after_fork_ = is_running();
             stop();
             break;
 
         case ::asio::execution_context::fork_parent:
             // Parent can resume polling after fork
-            if (!shutdown_.load(std::memory_order_acquire)) {
+            if (std::exchange(resume_after_fork_, false) &&
+                !shutdown_.load(std::memory_order_acquire)) {
                 start();
             }
             break;
 
         case ::asio::execution_context::fork_child:
+            resume_after_fork_ = false;
             // Child process: clear completion queues as they're inherited but
             // the underlying fabric resources may not be valid across fork.
             // Applications should re-register CQs after fork in the child.

@@ -15,6 +15,7 @@
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace std::literals;
 
@@ -91,6 +92,21 @@ TEST_CASE("fabric_service start and stop", "[asio][fabric_service]") {
 
     service.stop();
     REQUIRE_FALSE(service.is_running());
+}
+
+TEST_CASE("fabric_service preserves polling state across a parent fork notification",
+          "[asio][fabric_service]") {
+    const bool running = GENERATE(false, true);
+    ::asio::io_context ioc;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    if (running) {
+        service.start();
+    }
+    ioc.notify_fork(::asio::execution_context::fork_prepare);
+    REQUIRE_FALSE(service.is_running());
+    ioc.notify_fork(::asio::execution_context::fork_parent);
+    REQUIRE(service.is_running() == running);
+    service.stop();
 }
 
 TEST_CASE("fabric_service accepts its first queue after starting", "[asio][fabric_service]") {
