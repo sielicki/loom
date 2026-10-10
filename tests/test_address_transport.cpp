@@ -4,6 +4,7 @@
 #include <loom/detail/impl/endpoint_impl.hpp>
 
 #include <array>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -19,6 +20,11 @@ struct provider {
     int bind_result{};
     std::uint64_t open_flags{};
     int open_calls{};
+    std::vector<std::byte> stored_address;
+    std::string printable_address;
+    bool report_small_buffer{};
+    int lookup_calls{};
+    int straddr_calls{};
     std::vector<void*> contexts;
     fi_ops ops{
         .size = sizeof(fi_ops),
@@ -55,6 +61,27 @@ struct provider {
                 }
                 return static_cast<int>(count - (self.fail_middle && count > 1 ? 1 : 0));
             },
+        .lookup = [](fid_av* av, fi_addr_t, void* address, std::size_t* length) {
+            auto& self = *static_cast<provider*>(av->fid.context);
+            ++self.lookup_calls;
+            const auto capacity = *length;
+            std::memcpy(address, self.stored_address.data(),
+                        std::min(capacity, self.stored_address.size()));
+            *length = self.stored_address.size();
+            return self.report_small_buffer && capacity < *length ? -FI_ETOOSMALL : 0;
+        },
+        .straddr = [](fid_av* av, const void* address, char* output,
+                      std::size_t* length) -> const char* {
+            auto& self = *static_cast<provider*>(av->fid.context);
+            ++self.straddr_calls;
+            REQUIRE(std::memcmp(address, self.stored_address.data(),
+                                self.stored_address.size()) == 0);
+            const auto count = std::min(*length - 1, self.printable_address.size());
+            std::memcpy(output, self.printable_address.data(), count);
+            output[count] = '\0';
+            *length = self.printable_address.size() + 1;
+            return output;
+        },
     };
     fid_ep ep_handle{.fid = {.context = this, .ops = &ops}, .cm = &cm};
     fid_av av_handle{.fid = {.context = this, .ops = &ops}, .ops = &av_ops};
@@ -92,6 +119,33 @@ struct provider {
     }
 };
 }  // namespace
+
+TEST_CASE("address lookup retries provider-sized buffers", "[address]") {
+    provider native;
+    native.stored_address.resize(512, std::byte{0x42});
+    sockaddr_in expected{};
+    expected.sin_family = AF_INET;
+    expected.sin_port = htons(4321);
+    expected.sin_addr.s_addr = htonl(0xC0000201U);
+    std::memcpy(native.stored_address.data(), &expected, sizeof(expected));
+    auto av = native.vector(loom::address_format::inet);
+    SECTION("truncated success") { native.report_small_buffer = false; }
+    SECTION("buffer-size error") { native.report_small_buffer = true; }
+    REQUIRE(av.lookup(loom::av_handle{100}).value() ==
+            loom::address{loom::ipv4_address{0xC0000201U, 4321}});
+    REQUIRE(native.lookup_calls == 2);
+}
+
+TEST_CASE("address formatting resizes and omits the terminator", "[address]") {
+    provider native;
+    native.stored_address.resize(512, std::byte{0x42});
+    auto av = native.vector(loom::address_format::inet);
+    SECTION("short text") { native.printable_address = "192.0.2.1:4321"; }
+    SECTION("long text") { native.printable_address.assign(600, 'x'); }
+    REQUIRE(av.address_to_string(loom::av_handle{100}).value() == native.printable_address);
+    REQUIRE(native.lookup_calls == 2);
+    REQUIRE(native.straddr_calls == (native.printable_address.size() > 256 ? 2 : 1));
+}
 
 TEST_CASE("address vector creation translates flags", "[address]") {
     provider native;

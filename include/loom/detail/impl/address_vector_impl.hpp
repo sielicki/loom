@@ -286,9 +286,16 @@ inline auto address_vector::lookup(av_handle handle) const -> result<address> {
     ::fi_addr_t fi_addr = handle.value;
     std::size_t addrlen = addr_buf.size();
 
-    int ret = ::fi_av_lookup(impl_->av, fi_addr, addr_buf.data(), &addrlen);
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<address>(-ret);
+    for (;;) {
+        addrlen = addr_buf.size();
+        const int ret = ::fi_av_lookup(impl_->av, fi_addr, addr_buf.data(), &addrlen);
+        if (ret != 0 && (ret != -FI_ETOOSMALL || addrlen <= addr_buf.size())) {
+            return make_error_result_from_fi_errno<address>(ret);
+        }
+        if (addrlen <= addr_buf.size()) {
+            break;
+        }
+        addr_buf.resize(addrlen);
     }
 
     return address_from_raw(addr_buf.data(), addrlen, impl_->addr_format);
@@ -303,24 +310,41 @@ inline auto address_vector::address_to_string(av_handle handle) const -> result<
         return make_error_result<std::string>(errc::invalid_argument);
     }
 
-    char buf[256];
-    std::size_t len = sizeof(buf);
-
     std::vector<std::byte> addr_buf(256);
     ::fi_addr_t fi_addr = handle.value;
     std::size_t addrlen = addr_buf.size();
 
-    int ret_lookup = ::fi_av_lookup(impl_->av, fi_addr, addr_buf.data(), &addrlen);
-    if (ret_lookup != 0) {
-        return make_error_result_from_fi_errno<std::string>(-ret_lookup);
+    for (;;) {
+        addrlen = addr_buf.size();
+        const int ret = ::fi_av_lookup(impl_->av, fi_addr, addr_buf.data(), &addrlen);
+        if (ret != 0 && (ret != -FI_ETOOSMALL || addrlen <= addr_buf.size())) {
+            return make_error_result_from_fi_errno<std::string>(ret);
+        }
+        if (addrlen <= addr_buf.size()) {
+            break;
+        }
+        addr_buf.resize(addrlen);
     }
 
-    const char* ret_str = ::fi_av_straddr(impl_->av, addr_buf.data(), buf, &len);
-    if (!ret_str) {
-        return make_error_result<std::string>(errc::invalid_argument);
+    std::string text(256, '\0');
+    for (;;) {
+        auto length = text.size();
+        const auto* converted =
+            ::fi_av_straddr(impl_->av, addr_buf.data(), text.data(), &length);
+        if (length > text.size()) {
+            text.resize(length);
+            continue;
+        }
+        if (!converted) {
+            return make_error_result<std::string>(errc::invalid_argument);
+        }
+        const auto terminator = text.find('\0');
+        if (terminator == std::string::npos) {
+            return make_error_result<std::string>(errc::invalid_argument);
+        }
+        text.resize(terminator);
+        return text;
     }
-
-    return std::string(buf, len);
 }
 
 inline auto address_vector::get_type() const -> av_type {
