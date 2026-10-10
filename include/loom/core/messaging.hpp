@@ -4,10 +4,10 @@
 #include <rdma/fi_endpoint.h>
 #include <rdma/fi_tagged.h>
 
-#include <array>
 #include <cstdint>
 #include <ranges>
 #include <span>
+#include <vector>
 
 #include <sys/uio.h>
 
@@ -117,23 +117,15 @@ namespace detail {
     return result;
 }
 
-/**
- * @brief Converts memory region descriptors to raw pointers.
- * @tparam N Maximum output array size.
- * @param desc Span of memory region descriptors.
- * @param out Output array for raw descriptor pointers.
- * @return Pointer to raw descriptor array, or nullptr if empty.
- */
-template <std::size_t N>
-[[nodiscard]] inline auto descriptors_to_raw(std::span<const mr_descriptor> desc,
-                                             std::array<void*, N>& out) noexcept -> void** {
-    if (desc.empty()) {
-        return nullptr;
+/// Convert every registration descriptor without imposing a provider limit.
+[[nodiscard]] inline auto descriptors_to_raw(std::span<const mr_descriptor> desc)
+    -> std::vector<void*> {
+    std::vector<void*> raw;
+    raw.reserve(desc.size());
+    for (const auto descriptor : desc) {
+        raw.push_back(descriptor.raw());
     }
-    for (std::size_t i = 0; i < desc.size() && i < N; ++i) {
-        out[i] = desc[i].raw();
-    }
-    return out.data();
+    return raw;
 }
 
 }  // namespace detail
@@ -195,7 +187,7 @@ struct tagged_recv_message {
     Ctx context{};                                    ///< User context for completion
 };
 
-/// @brief Maximum number of I/O vectors per message.
+/// @brief Compatibility capacity; actual transfer limits come from the provider.
 inline constexpr std::size_t max_iov_count = 16;
 
 /**
@@ -215,11 +207,14 @@ template <context_like Ctx>
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    std::array<void*, max_iov_count> raw_desc{};
+    if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = detail::descriptors_to_raw(msg.desc);
 
     ::fi_msg fi_m{};
     fi_m.msg_iov = msg.iov.data();
-    fi_m.desc = detail::descriptors_to_raw(msg.desc, raw_desc);
+    fi_m.desc = raw_desc.empty() ? nullptr : raw_desc.data();
     fi_m.iov_count = msg.iov.size();
     fi_m.addr = msg.dest_addr.get();
     fi_m.context = to_raw_context(msg.context);
@@ -250,11 +245,14 @@ template <context_like Ctx>
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    std::array<void*, max_iov_count> raw_desc{};
+    if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = detail::descriptors_to_raw(msg.desc);
 
     ::fi_msg fi_m{};
     fi_m.msg_iov = msg.iov.data();
-    fi_m.desc = detail::descriptors_to_raw(msg.desc, raw_desc);
+    fi_m.desc = raw_desc.empty() ? nullptr : raw_desc.data();
     fi_m.iov_count = msg.iov.size();
     fi_m.addr = msg.src_addr.get();
     fi_m.context = to_raw_context(msg.context);
@@ -285,11 +283,14 @@ template <context_like Ctx>
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    std::array<void*, max_iov_count> raw_desc{};
+    if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = detail::descriptors_to_raw(msg.desc);
 
     ::fi_msg_tagged fi_m{};
     fi_m.msg_iov = msg.iov.data();
-    fi_m.desc = detail::descriptors_to_raw(msg.desc, raw_desc);
+    fi_m.desc = raw_desc.empty() ? nullptr : raw_desc.data();
     fi_m.iov_count = msg.iov.size();
     fi_m.addr = msg.dest_addr.get();
     fi_m.tag = msg.tag;
@@ -322,11 +323,14 @@ template <context_like Ctx>
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    std::array<void*, max_iov_count> raw_desc{};
+    if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = detail::descriptors_to_raw(msg.desc);
 
     ::fi_msg_tagged fi_m{};
     fi_m.msg_iov = msg.iov.data();
-    fi_m.desc = detail::descriptors_to_raw(msg.desc, raw_desc);
+    fi_m.desc = raw_desc.empty() ? nullptr : raw_desc.data();
     fi_m.iov_count = msg.iov.size();
     fi_m.addr = msg.src_addr.get();
     fi_m.tag = msg.tag;
@@ -859,9 +863,12 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    std::array<void*, msg::max_iov_count> raw_desc{};
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
-    void** desc_ptr = msg::detail::descriptors_to_raw(desc_span, raw_desc);
+    if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = msg::detail::descriptors_to_raw(desc_span);
+    auto* desc_ptr = raw_desc.empty() ? nullptr : raw_desc.data();
 
     auto iov_data = std::ranges::data(iov);
     auto iov_size = std::ranges::size(iov);
@@ -902,9 +909,12 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    std::array<void*, msg::max_iov_count> raw_desc{};
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
-    void** desc_ptr = msg::detail::descriptors_to_raw(desc_span, raw_desc);
+    if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = msg::detail::descriptors_to_raw(desc_span);
+    auto* desc_ptr = raw_desc.empty() ? nullptr : raw_desc.data();
 
     auto iov_data = std::ranges::data(iov);
     auto iov_size = std::ranges::size(iov);
@@ -938,9 +948,12 @@ sendv(endpoint& ep, Iov&& iov, Desc&& descriptors, fabric_addr dest, Ctx ctx = {
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    std::array<void*, msg::max_iov_count> raw_desc{};
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
-    void** desc_ptr = msg::detail::descriptors_to_raw(desc_span, raw_desc);
+    if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = msg::detail::descriptors_to_raw(desc_span);
+    auto* desc_ptr = raw_desc.empty() ? nullptr : raw_desc.data();
 
     auto iov_data = std::ranges::data(iov);
     auto iov_size = std::ranges::size(iov);
@@ -973,9 +986,12 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    std::array<void*, msg::max_iov_count> raw_desc{};
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
-    void** desc_ptr = msg::detail::descriptors_to_raw(desc_span, raw_desc);
+    if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = msg::detail::descriptors_to_raw(desc_span);
+    auto* desc_ptr = raw_desc.empty() ? nullptr : raw_desc.data();
 
     auto iov_data = std::ranges::data(iov);
     auto iov_size = std::ranges::size(iov);

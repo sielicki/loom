@@ -249,11 +249,14 @@ template <structured_triggered_context Ctx>
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
 
-    std::array<void*, msg::max_iov_count> raw_desc{};
+    if (!m.desc.empty() && m.desc.size() != m.iov.size()) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = msg::detail::descriptors_to_raw(m.desc);
 
     ::fi_msg fi_m{};
     fi_m.msg_iov = m.iov.data();
-    fi_m.desc = msg::detail::descriptors_to_raw(m.desc, raw_desc);
+    fi_m.desc = raw_desc.empty() ? nullptr : raw_desc.data();
     fi_m.iov_count = m.iov.size();
     fi_m.addr = m.dest_addr.get();
     fi_m.context = m.context->raw();
@@ -289,11 +292,14 @@ template <structured_triggered_context Ctx>
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
 
-    std::array<void*, msg::max_iov_count> raw_desc{};
+    if (!m.desc.empty() && m.desc.size() != m.iov.size()) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = msg::detail::descriptors_to_raw(m.desc);
 
     ::fi_msg fi_m{};
     fi_m.msg_iov = m.iov.data();
-    fi_m.desc = msg::detail::descriptors_to_raw(m.desc, raw_desc);
+    fi_m.desc = raw_desc.empty() ? nullptr : raw_desc.data();
     fi_m.iov_count = m.iov.size();
     fi_m.addr = m.src_addr.get();
     fi_m.context = m.context->raw();
@@ -329,11 +335,14 @@ template <structured_triggered_context Ctx>
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
 
-    std::array<void*, msg::max_iov_count> raw_desc{};
+    if (!m.desc.empty() && m.desc.size() != m.iov.size()) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = msg::detail::descriptors_to_raw(m.desc);
 
     ::fi_msg_tagged fi_m{};
     fi_m.msg_iov = m.iov.data();
-    fi_m.desc = msg::detail::descriptors_to_raw(m.desc, raw_desc);
+    fi_m.desc = raw_desc.empty() ? nullptr : raw_desc.data();
     fi_m.iov_count = m.iov.size();
     fi_m.addr = m.dest_addr.get();
     fi_m.tag = m.tag;
@@ -371,11 +380,14 @@ template <structured_triggered_context Ctx>
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
 
-    std::array<void*, msg::max_iov_count> raw_desc{};
+    if (!m.desc.empty() && m.desc.size() != m.iov.size()) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    auto raw_desc = msg::detail::descriptors_to_raw(m.desc);
 
     ::fi_msg_tagged fi_m{};
     fi_m.msg_iov = m.iov.data();
-    fi_m.desc = msg::detail::descriptors_to_raw(m.desc, raw_desc);
+    fi_m.desc = raw_desc.empty() ? nullptr : raw_desc.data();
     fi_m.iov_count = m.iov.size();
     fi_m.addr = m.src_addr.get();
     fi_m.tag = m.tag;
