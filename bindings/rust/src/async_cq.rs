@@ -6,8 +6,8 @@
 //! that integrate with the tokio runtime.
 
 use crate::{
-    error, ffi, CompletionEvent, CompletionQueue, CqBindFlags, Domain, Endpoint, Error,
-    FabricInfo, Result,
+    error, ffi, CompletionEvent, CompletionQueue, CqBindFlags, Domain, Endpoint, Error, FabricInfo,
+    Result,
 };
 use cxx::UniquePtr;
 use std::collections::HashMap;
@@ -177,6 +177,14 @@ impl OperationTracker {
 ///
 /// This wraps an [`Endpoint`] and uses an [`AsyncCompletionQueue`] to
 /// provide async operations that integrate with tokio.
+///
+/// The caller must account for cancellation when borrowing a buffer:
+///
+/// ```compile_fail
+/// async fn submit(ep: &mut loom_fabric::AsyncEndpoint, data: &[u8]) {
+///     ep.send(data).await.unwrap();
+/// }
+/// ```
 pub struct AsyncEndpoint {
     inner: Endpoint,
     tx_cq: Arc<AsyncCompletionQueue>,
@@ -235,7 +243,14 @@ impl AsyncEndpoint {
     /// Async send operation.
     ///
     /// Sends the data and waits for completion asynchronously.
-    pub async fn send(&mut self, data: &[u8]) -> Result<()> {
+    ///
+    /// # Safety
+    ///
+    /// Once polled, this future may leave an operation in flight when dropped.
+    /// Keep the buffer alive and inaccessible to conflicting reads or writes
+    /// until the matching completion is consumed, even if the future is dropped
+    /// or returns an unrelated queue error. Dropping does not cancel the request.
+    pub async unsafe fn send(&mut self, data: &[u8]) -> Result<()> {
         let ctx = self.next_context();
 
         // Post the send
@@ -255,7 +270,14 @@ impl AsyncEndpoint {
     ///
     /// Posts a receive and waits for completion asynchronously.
     /// Returns the number of bytes received.
-    pub async fn recv(&mut self, buf: &mut [u8]) -> Result<usize> {
+    ///
+    /// # Safety
+    ///
+    /// Once polled, this future may leave an operation in flight when dropped.
+    /// Keep the buffer alive and inaccessible to conflicting reads or writes
+    /// until the matching completion is consumed, even if the future is dropped
+    /// or returns an unrelated queue error. Dropping does not cancel the request.
+    pub async unsafe fn recv(&mut self, buf: &mut [u8]) -> Result<usize> {
         let ctx = self.next_context();
 
         // Post the receive
@@ -272,7 +294,14 @@ impl AsyncEndpoint {
     }
 
     /// Async tagged send operation.
-    pub async fn tagged_send(&mut self, data: &[u8], tag: u64) -> Result<()> {
+    ///
+    /// # Safety
+    ///
+    /// Once polled, this future may leave an operation in flight when dropped.
+    /// Keep the buffer alive and inaccessible to conflicting reads or writes
+    /// until the matching completion is consumed, even if the future is dropped
+    /// or returns an unrelated queue error. Dropping does not cancel the request.
+    pub async unsafe fn tagged_send(&mut self, data: &[u8], tag: u64) -> Result<()> {
         let ctx = self.next_context();
 
         self.inner.tagged_send(data, tag, ctx)?;
@@ -287,7 +316,19 @@ impl AsyncEndpoint {
     }
 
     /// Async tagged receive operation.
-    pub async fn tagged_recv(&mut self, buf: &mut [u8], tag: u64, ignore: u64) -> Result<usize> {
+    ///
+    /// # Safety
+    ///
+    /// Once polled, this future may leave an operation in flight when dropped.
+    /// Keep the buffer alive and inaccessible to conflicting reads or writes
+    /// until the matching completion is consumed, even if the future is dropped
+    /// or returns an unrelated queue error. Dropping does not cancel the request.
+    pub async unsafe fn tagged_recv(
+        &mut self,
+        buf: &mut [u8],
+        tag: u64,
+        ignore: u64,
+    ) -> Result<usize> {
         let ctx = self.next_context();
 
         self.inner.tagged_recv(buf, tag, ignore, ctx)?;

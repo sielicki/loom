@@ -57,7 +57,8 @@ fn main() -> loom_fabric::Result<()> {
 
     // Send data
     let data = b"Hello, fabric!";
-    endpoint.send(data, 0)?;
+    // SAFETY: data remains alive and unchanged through the completion below.
+    unsafe { endpoint.send(data, 0)? };
 
     // Wait for completion
     let event = cq.wait(Some(1000))?; // 1 second timeout
@@ -88,11 +89,13 @@ async fn main() -> loom_fabric::Result<()> {
 
     // Async send
     let data = b"Hello, async fabric!";
-    endpoint.send(data).await?;
+    // SAFETY: this future is awaited to completion without cancellation.
+    unsafe { endpoint.send(data).await? };
 
     // Async receive
     let mut buf = vec![0u8; 1024];
-    let n = endpoint.recv(&mut buf).await?;
+    // SAFETY: buf is not accessed until completion; the future is not cancelled.
+    let n = unsafe { endpoint.recv(&mut buf).await? };
     println!("Received {} bytes", n);
 
     Ok(())
@@ -114,3 +117,10 @@ cargo build
 ## License
 
 BSD-2-Clause OR GPL-2.0-only (same as loom and libfabric)
+
+Borrowed-buffer submissions are unsafe: libfabric keeps using buffers after
+submission, and dropping a Rust future does not cancel the fabric operation.
+Keep submitted buffers and registrations alive until their completions are
+consumed. Receive buffers must remain inaccessible and send buffers must
+remain unmodified while an operation is pending. An unrelated queue error
+also does not release an outstanding operation's buffer.

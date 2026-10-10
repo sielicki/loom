@@ -5,7 +5,7 @@
 //! Rust bindings for [loom](https://github.com/sielicki/loom), a modern C++26
 //! libfabric binding library.
 //!
-//! This crate provides safe, ergonomic Rust wrappers around loom's C++ API,
+//! This crate provides typed Rust wrappers around loom's C++ API,
 //! enabling high-performance RDMA and fabric networking from Rust applications.
 //!
 //! ## Features
@@ -421,6 +421,14 @@ impl MemoryRegion {
 // ============================================================================
 
 /// A fabric endpoint for communication.
+///
+/// Submitting borrowed buffers requires an explicit lifetime guarantee:
+///
+/// ```compile_fail
+/// fn submit(ep: &mut loom_fabric::Endpoint, data: &[u8]) {
+///     ep.send(data, 0).unwrap();
+/// }
+/// ```
 pub struct Endpoint {
     inner: UniquePtr<ffi::ffi::EndpointHandle>,
 }
@@ -461,10 +469,7 @@ impl Endpoint {
 
     /// Bind an address vector to the endpoint.
     pub fn bind_av(&mut self, av: &AddressVector) -> Result<()> {
-        Ok(ffi::ffi::endpoint_bind_av(
-            self.inner.pin_mut(),
-            &av.inner,
-        )?)
+        Ok(ffi::ffi::endpoint_bind_av(self.inner.pin_mut(), &av.inner)?)
     }
 
     /// Post a send operation.
@@ -473,7 +478,14 @@ impl Endpoint {
     ///
     /// * `data` - Data to send.
     /// * `context` - User context for completion matching.
-    pub fn send(&mut self, data: &[u8], context: usize) -> Result<()> {
+    ///
+    /// # Safety
+    ///
+    /// The buffer and any registered memory or operation context must remain
+    /// valid until the matching completion is consumed. Receive buffers must
+    /// not be accessed, and send buffers must not be mutated, before then.
+    /// A successful return only means the operation was submitted.
+    pub unsafe fn send(&mut self, data: &[u8], context: usize) -> Result<()> {
         Ok(ffi::ffi::endpoint_send(
             self.inner.pin_mut(),
             data,
@@ -487,12 +499,15 @@ impl Endpoint {
     ///
     /// * `buf` - Buffer to receive into.
     /// * `context` - User context for completion matching.
-    pub fn recv(&mut self, buf: &mut [u8], context: usize) -> Result<()> {
-        Ok(ffi::ffi::endpoint_recv(
-            self.inner.pin_mut(),
-            buf,
-            context,
-        )?)
+    ///
+    /// # Safety
+    ///
+    /// The buffer and any registered memory or operation context must remain
+    /// valid until the matching completion is consumed. Receive buffers must
+    /// not be accessed, and send buffers must not be mutated, before then.
+    /// A successful return only means the operation was submitted.
+    pub unsafe fn recv(&mut self, buf: &mut [u8], context: usize) -> Result<()> {
+        Ok(ffi::ffi::endpoint_recv(self.inner.pin_mut(), buf, context)?)
     }
 
     /// Post a tagged send operation.
@@ -502,7 +517,14 @@ impl Endpoint {
     /// * `data` - Data to send.
     /// * `tag` - Message tag for matching.
     /// * `context` - User context for completion matching.
-    pub fn tagged_send(&mut self, data: &[u8], tag: u64, context: usize) -> Result<()> {
+    ///
+    /// # Safety
+    ///
+    /// The buffer and any registered memory or operation context must remain
+    /// valid until the matching completion is consumed. Receive buffers must
+    /// not be accessed, and send buffers must not be mutated, before then.
+    /// A successful return only means the operation was submitted.
+    pub unsafe fn tagged_send(&mut self, data: &[u8], tag: u64, context: usize) -> Result<()> {
         Ok(ffi::ffi::endpoint_tagged_send(
             self.inner.pin_mut(),
             data,
@@ -519,7 +541,14 @@ impl Endpoint {
     /// * `tag` - Message tag for matching.
     /// * `ignore` - Bits to ignore in tag matching.
     /// * `context` - User context for completion matching.
-    pub fn tagged_recv(
+    ///
+    /// # Safety
+    ///
+    /// The buffer and any registered memory or operation context must remain
+    /// valid until the matching completion is consumed. Receive buffers must
+    /// not be accessed, and send buffers must not be mutated, before then.
+    /// A successful return only means the operation was submitted.
+    pub unsafe fn tagged_recv(
         &mut self,
         buf: &mut [u8],
         tag: u64,
