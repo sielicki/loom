@@ -21,6 +21,7 @@ fn main() {
 
     // C++26 is required for loom
     build.std("c++26");
+    build.file("src/bridge.cpp");
 
     // Add loom include path
     build.include(&loom_include);
@@ -78,6 +79,7 @@ fn main() {
 
     // Re-run if source files change
     println!("cargo:rerun-if-changed=src/ffi.rs");
+    println!("cargo:rerun-if-changed=src/bridge.cpp");
     println!(
         "cargo:rerun-if-changed={}",
         loom_include.join("loom/cxx_bridge.hpp").display()

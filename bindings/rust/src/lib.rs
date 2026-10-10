@@ -18,7 +18,7 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! use loom_fabric::{Fabric, Domain, Endpoint, CompletionQueue, Capabilities};
+//! use loom_fabric::{Fabric, Domain, Endpoint, CompletionQueue, Capabilities, CqBindFlags};
 //!
 //! fn main() -> loom_fabric::Result<()> {
 //!     // Query for a fabric provider
@@ -50,7 +50,6 @@ mod async_cq;
 pub use error::{Error, Result};
 
 use cxx::UniquePtr;
-use std::pin::Pin;
 
 // ============================================================================
 // Capability flags
@@ -363,8 +362,13 @@ impl AddressVector {
     /// Insert an address into the address vector.
     ///
     /// Returns the fabric address that can be used for communication.
-    pub fn insert(&mut self, addr: &[u8]) -> Result<u64> {
-        Ok(ffi::ffi::av_insert(Pin::new(&mut self.inner), addr)?)
+    ///
+    /// # Safety
+    ///
+    /// `addr` must contain a complete address in this provider's native
+    /// format, such as one returned by an endpoint using the same provider.
+    pub unsafe fn insert(&mut self, addr: &[u8]) -> Result<u64> {
+        Ok(ffi::ffi::av_insert(self.inner.pin_mut(), addr)?)
     }
 }
 
@@ -438,7 +442,7 @@ impl Endpoint {
     /// The endpoint must be bound to completion queues and address vectors
     /// before being enabled.
     pub fn enable(&mut self) -> Result<()> {
-        Ok(ffi::ffi::endpoint_enable(Pin::new(&mut self.inner))?)
+        Ok(ffi::ffi::endpoint_enable(self.inner.pin_mut())?)
     }
 
     /// Bind a completion queue to the endpoint.
@@ -449,7 +453,7 @@ impl Endpoint {
     /// * `flags` - Bind flags (transmit, recv, or both).
     pub fn bind_cq(&mut self, cq: &CompletionQueue, flags: CqBindFlags) -> Result<()> {
         Ok(ffi::ffi::endpoint_bind_cq(
-            Pin::new(&mut self.inner),
+            self.inner.pin_mut(),
             &cq.inner,
             flags.bits(),
         )?)
@@ -458,7 +462,7 @@ impl Endpoint {
     /// Bind an address vector to the endpoint.
     pub fn bind_av(&mut self, av: &AddressVector) -> Result<()> {
         Ok(ffi::ffi::endpoint_bind_av(
-            Pin::new(&mut self.inner),
+            self.inner.pin_mut(),
             &av.inner,
         )?)
     }
@@ -471,7 +475,7 @@ impl Endpoint {
     /// * `context` - User context for completion matching.
     pub fn send(&mut self, data: &[u8], context: usize) -> Result<()> {
         Ok(ffi::ffi::endpoint_send(
-            Pin::new(&mut self.inner),
+            self.inner.pin_mut(),
             data,
             context,
         )?)
@@ -485,7 +489,7 @@ impl Endpoint {
     /// * `context` - User context for completion matching.
     pub fn recv(&mut self, buf: &mut [u8], context: usize) -> Result<()> {
         Ok(ffi::ffi::endpoint_recv(
-            Pin::new(&mut self.inner),
+            self.inner.pin_mut(),
             buf,
             context,
         )?)
@@ -500,7 +504,7 @@ impl Endpoint {
     /// * `context` - User context for completion matching.
     pub fn tagged_send(&mut self, data: &[u8], tag: u64, context: usize) -> Result<()> {
         Ok(ffi::ffi::endpoint_tagged_send(
-            Pin::new(&mut self.inner),
+            self.inner.pin_mut(),
             data,
             tag,
             context,
@@ -523,7 +527,7 @@ impl Endpoint {
         context: usize,
     ) -> Result<()> {
         Ok(ffi::ffi::endpoint_tagged_recv(
-            Pin::new(&mut self.inner),
+            self.inner.pin_mut(),
             buf,
             tag,
             ignore,
@@ -536,7 +540,7 @@ impl Endpoint {
     /// This is more efficient for small messages but doesn't provide
     /// completion notification.
     pub fn inject(&mut self, data: &[u8]) -> Result<()> {
-        Ok(ffi::ffi::endpoint_inject(Pin::new(&mut self.inner), data)?)
+        Ok(ffi::ffi::endpoint_inject(self.inner.pin_mut(), data)?)
     }
 
     /// Get the local address/name of the endpoint.
