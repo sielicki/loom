@@ -11,6 +11,7 @@
 #include "loom/core/error.hpp"
 #include "loom/core/fabric.hpp"
 #include "loom/core/scalable_endpoint.hpp"
+#include "loom/detail/impl/endpoint_impl.hpp"
 
 namespace loom::detail {
 
@@ -19,6 +20,8 @@ struct scalable_endpoint_impl {
     ::fid_ep* sep{nullptr};     ///< Underlying libfabric scalable endpoint handle.
     std::size_t tx_ctx_cnt{0};  ///< Number of transmit contexts.
     std::size_t rx_ctx_cnt{0};  ///< Number of receive contexts.
+    endpoint_type type{endpoint_types::msg};
+    address_format addr_format{address_format::unspecified};
 
     /// @brief Default constructor.
     scalable_endpoint_impl() = default;
@@ -27,8 +30,14 @@ struct scalable_endpoint_impl {
     /// @param sep_ The libfabric scalable endpoint pointer.
     /// @param tx_cnt The number of transmit contexts.
     /// @param rx_cnt The number of receive contexts.
-    scalable_endpoint_impl(::fid_ep* sep_, std::size_t tx_cnt, std::size_t rx_cnt)
-        : sep(sep_), tx_ctx_cnt(tx_cnt), rx_ctx_cnt(rx_cnt) {}
+    /// @param type_ The endpoint type inherited by transmit and receive contexts.
+    /// @param format The address format inherited by those contexts.
+    scalable_endpoint_impl(::fid_ep* sep_,
+                           std::size_t tx_cnt,
+                           std::size_t rx_cnt,
+                           endpoint_type type_,
+                           address_format format)
+        : sep(sep_), tx_ctx_cnt(tx_cnt), rx_ctx_cnt(rx_cnt), type(type_), addr_format(format) {}
 
     /// @brief Destructor that closes the libfabric scalable endpoint.
     ~scalable_endpoint_impl() {
@@ -83,20 +92,23 @@ inline auto scalable_endpoint::create(const domain& dom,
 
     std::size_t tx_ctx_cnt = 0;
     std::size_t rx_ctx_cnt = 0;
+    endpoint_type type{endpoint_types::msg};
+    const auto format = detail::from_fi_addr_format(info_ptr->addr_format);
     if (info_ptr->ep_attr) {
         tx_ctx_cnt = info_ptr->ep_attr->tx_ctx_cnt;
         rx_ctx_cnt = info_ptr->ep_attr->rx_ctx_cnt;
+        type = detail::from_fi_ep_type(info_ptr->ep_attr->type);
     }
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
-            resource, sep, tx_ctx_cnt, rx_ctx_cnt);
+            resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format);
         return scalable_endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
-        default_resource, sep, tx_ctx_cnt, rx_ctx_cnt);
+        default_resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format);
     return scalable_endpoint{std::move(impl)};
 }
 
@@ -150,7 +162,8 @@ inline auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint>
     }
 
     auto* resource = std::pmr::get_default_resource();
-    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource, tx_ep);
+    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
+        resource, tx_ep, impl_->type, impl_->addr_format);
     return endpoint{std::move(ep_impl)};
 }
 
@@ -171,7 +184,8 @@ inline auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint>
     }
 
     auto* resource = std::pmr::get_default_resource();
-    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource, rx_ep);
+    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
+        resource, rx_ep, impl_->type, impl_->addr_format);
     return endpoint{std::move(ep_impl)};
 }
 

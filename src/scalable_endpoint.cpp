@@ -9,66 +9,11 @@
 #include "loom/core/domain.hpp"
 #include "loom/core/error.hpp"
 #include "loom/core/fabric.hpp"
+#include "loom/detail/impl/scalable_endpoint_impl.hpp"
 
 namespace loom {
 
-namespace detail {
 
-/// @brief Internal implementation of the scalable endpoint.
-struct scalable_endpoint_impl {
-    ::fid_ep* sep{nullptr};     ///< Underlying libfabric scalable endpoint handle.
-    std::size_t tx_ctx_cnt{0};  ///< Number of transmit contexts.
-    std::size_t rx_ctx_cnt{0};  ///< Number of receive contexts.
-
-    /// @brief Default constructor.
-    scalable_endpoint_impl() = default;
-
-    /// @brief Constructs scalable_endpoint_impl with a libfabric SEP handle and context counts.
-    /// @param sep_ The libfabric scalable endpoint pointer.
-    /// @param tx_cnt The number of transmit contexts.
-    /// @param rx_cnt The number of receive contexts.
-    scalable_endpoint_impl(::fid_ep* sep_, std::size_t tx_cnt, std::size_t rx_cnt)
-        : sep(sep_), tx_ctx_cnt(tx_cnt), rx_ctx_cnt(rx_cnt) {}
-
-    /// @brief Destructor that closes the libfabric scalable endpoint.
-    ~scalable_endpoint_impl() {
-        if (sep) {
-            ::fi_close(&sep->fid);
-        }
-    }
-
-    scalable_endpoint_impl(const scalable_endpoint_impl&) = delete;
-    auto operator=(const scalable_endpoint_impl&) -> scalable_endpoint_impl& = delete;
-    scalable_endpoint_impl(scalable_endpoint_impl&&) = delete;
-    auto operator=(scalable_endpoint_impl&&) -> scalable_endpoint_impl& = delete;
-};
-
-/// @brief Internal implementation of the endpoint (for tx/rx contexts).
-struct endpoint_impl {
-    ::fid_ep* ep{nullptr};                    ///< Underlying libfabric endpoint handle.
-    endpoint_type type{endpoint_types::msg};  ///< Endpoint type.
-    address_format addr_format{address_format::unspecified};  ///< Address format.
-
-    /// @brief Default constructor.
-    endpoint_impl() = default;
-
-    /// @brief Constructs endpoint_impl with a libfabric endpoint handle.
-    /// @param ep_ The libfabric endpoint pointer.
-    explicit endpoint_impl(::fid_ep* ep_) : ep(ep_) {}
-
-    /// @brief Destructor that closes the libfabric endpoint.
-    ~endpoint_impl() {
-        if (ep) {
-            ::fi_close(&ep->fid);
-        }
-    }
-
-    endpoint_impl(const endpoint_impl&) = delete;
-    auto operator=(const endpoint_impl&) -> endpoint_impl& = delete;
-    endpoint_impl(endpoint_impl&&) = delete;
-    auto operator=(endpoint_impl&&) -> endpoint_impl& = delete;
-};
-}  // namespace detail
 
 scalable_endpoint::scalable_endpoint() = default;
 
@@ -103,20 +48,23 @@ auto scalable_endpoint::create(const domain& dom,
 
     std::size_t tx_ctx_cnt = 0;
     std::size_t rx_ctx_cnt = 0;
+    endpoint_type type{endpoint_types::msg};
+    const auto format = detail::from_fi_addr_format(info_ptr->addr_format);
     if (info_ptr->ep_attr) {
         tx_ctx_cnt = info_ptr->ep_attr->tx_ctx_cnt;
         rx_ctx_cnt = info_ptr->ep_attr->rx_ctx_cnt;
+        type = detail::from_fi_ep_type(info_ptr->ep_attr->type);
     }
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
-            resource, sep, tx_ctx_cnt, rx_ctx_cnt);
+            resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format);
         return scalable_endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
-        default_resource, sep, tx_ctx_cnt, rx_ctx_cnt);
+        default_resource, sep, tx_ctx_cnt, rx_ctx_cnt, type, format);
     return scalable_endpoint{std::move(impl)};
 }
 
@@ -170,7 +118,8 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
     }
 
     auto* resource = std::pmr::get_default_resource();
-    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource, tx_ep);
+    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
+        resource, tx_ep, impl_->type, impl_->addr_format);
     return endpoint{std::move(ep_impl)};
 }
 
@@ -191,7 +140,8 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
     }
 
     auto* resource = std::pmr::get_default_resource();
-    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource, rx_ep);
+    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
+        resource, rx_ep, impl_->type, impl_->addr_format);
     return endpoint{std::move(ep_impl)};
 }
 
