@@ -190,6 +190,10 @@ public:
      */
     [[nodiscard]] auto get_wait_fd() const -> result<int>;
 
+    /// Prepare this queue for a native wait using its parent fabric.
+    /// False means poll again; call this before every potentially blocking wait.
+    [[nodiscard]] auto try_wait(const fabric& parent) const -> result<bool>;
+
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;
     [[nodiscard]] auto impl_valid() const noexcept -> bool;
 

@@ -15,6 +15,7 @@
 #include "loom/core/allocator.hpp"
 #include "loom/core/domain.hpp"
 #include "loom/core/error.hpp"
+#include "loom/core/fabric.hpp"
 
 namespace loom {
 
@@ -272,8 +273,8 @@ auto completion_queue::supports_blocking_wait() const noexcept -> bool {
         return false;
     }
     fi_wait_obj object = FI_WAIT_NONE;
-    return ::fi_control(&impl_->cq->fid, FI_GETWAITOBJ, &object) == 0 &&
-           object != FI_WAIT_NONE && object != FI_WAIT_UNSPEC;
+    return ::fi_control(&impl_->cq->fid, FI_GETWAITOBJ, &object) == 0 && object != FI_WAIT_NONE &&
+           object != FI_WAIT_UNSPEC;
 }
 
 auto completion_queue::requires_manual_progress() const noexcept -> bool {
@@ -281,6 +282,22 @@ auto completion_queue::requires_manual_progress() const noexcept -> bool {
         return true;
     }
     return impl_->progress.requires_manual_data_progress();
+}
+
+auto completion_queue::try_wait(const fabric& parent) const -> result<bool> {
+    if (!impl_ || !impl_->cq || !parent) {
+        return make_error_result<bool>(errc::invalid_argument);
+    }
+    auto* fabric_ptr = static_cast<::fid_fabric*>(parent.internal_ptr());
+    auto* descriptor = &impl_->cq->fid;
+    const int ret = ::fi_trywait(fabric_ptr, &descriptor, 1);
+    if (ret == -FI_EAGAIN) {
+        return false;
+    }
+    if (ret != 0) {
+        return make_error_result_from_fi_errno<bool>(ret);
+    }
+    return true;
 }
 
 auto completion_queue::get_wait_fd() const -> result<int> {

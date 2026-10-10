@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/detail/impl/completion_queue_impl.hpp>
+#include <loom/detail/impl/fabric_impl.hpp>
 
 #include <array>
+
 #include <catch2/catch_test_macros.hpp>
 
 namespace {
@@ -14,19 +16,20 @@ struct mock_cq {
     fi_ops ops{
         .size = sizeof(fi_ops),
         .close = [](fid*) { return 0; },
-        .control = [](fid* handle, int command, void* output) {
-            auto& self = *static_cast<mock_cq*>(handle->context);
-            if (command == FI_GETWAITOBJ) {
-                *static_cast<fi_wait_obj*>(output) = self.wait_object;
-                return 0;
-            }
-            if (command == FI_GETWAIT) {
-                self.wait_requested = true;
-                *static_cast<int*>(output) = 23;
-                return 0;
-            }
-            return -FI_ENOSYS;
-        },
+        .control =
+            [](fid* handle, int command, void* output) {
+                auto& self = *static_cast<mock_cq*>(handle->context);
+                if (command == FI_GETWAITOBJ) {
+                    *static_cast<fi_wait_obj*>(output) = self.wait_object;
+                    return 0;
+                }
+                if (command == FI_GETWAIT) {
+                    self.wait_requested = true;
+                    *static_cast<int*>(output) = 23;
+                    return 0;
+                }
+                return -FI_ENOSYS;
+            },
     };
     fi_ops_cq cq_ops{
         .size = sizeof(fi_ops_cq),
@@ -35,7 +38,8 @@ struct mock_cq {
             if (self.read_status != 1) {
                 return self.read_status;
             }
-            *static_cast<fi_cq_tagged_entry*>(buffer) = {.op_context = &self.context, .len = 7, .tag = 99};
+            *static_cast<fi_cq_tagged_entry*>(buffer) = {
+                .op_context = &self.context, .len = 7, .tag = 99};
             self.read_status = -FI_EAGAIN;
             return 1;
         },
@@ -97,4 +101,32 @@ TEST_CASE("wait descriptors require a file descriptor wait object", "[completion
     provider.wait_object = FI_WAIT_FD;
     REQUIRE(provider.queue.get_wait_fd().value() == 23);
     REQUIRE(provider.wait_requested);
+}
+
+TEST_CASE("native waits consult the fabric before blocking", "[completion_queue]") {
+    mock_cq provider;
+    struct wait_state {
+        int status{};
+        fid* expected{};
+    } state{0, &provider.handle.fid};
+    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_fabric fabric_ops{
+        .size = sizeof(fi_ops_fabric),
+        .trywait =
+            [](fid_fabric* fabric, fid** descriptors, int count) {
+                auto& self = *static_cast<wait_state*>(fabric->fid.context);
+                CHECK(count == 1);
+                CHECK(descriptors[0] == self.expected);
+                return self.status;
+            },
+    };
+    fid_fabric handle{.fid = {.context = &state, .ops = &ops}, .ops = &fabric_ops};
+    loom::fabric fabric{loom::detail::make_pmr_unique<loom::detail::fabric_impl>(
+        loom::get_default_resource(), &handle, nullptr)};
+    REQUIRE(provider.queue.try_wait(fabric).value());
+    state.status = -FI_EAGAIN;
+    REQUIRE_FALSE(provider.queue.try_wait(fabric).value());
+    state.status = -FI_EINVAL;
+    REQUIRE(provider.queue.try_wait(fabric).error() == loom::errc::invalid_argument);
+    REQUIRE_FALSE(provider.queue.try_wait(loom::fabric{}));
 }
