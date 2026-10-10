@@ -128,6 +128,9 @@ if(LOOM_HAS_ASIO)
     loom_add_test(test_asio_vectors
         LIBRARY loom::asio
     )
+    loom_add_test(test_asio_cancellation
+        LIBRARY loom::asio
+    )
 else()
     message(STATUS "Skipping Asio integration tests (LOOM_USE_ASIO=OFF)")
 endif()

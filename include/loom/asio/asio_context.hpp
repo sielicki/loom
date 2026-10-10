@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -50,6 +51,41 @@ struct asio_buffers {
     std::span<const iovec> iov;
     std::span<const mr_descriptor> descriptors;
     std::size_t bytes{};
+};
+
+// Pending operations share ownership so their native endpoint and cancellation
+// address survive moves and destruction of the public I/O object.
+class endpoint_state {
+public:
+    explicit endpoint_state(loom::endpoint ep = {}) : endpoint(std::move(ep)) {}
+
+    void add(void* context) {
+        const std::lock_guard lock{mutex_};
+        pending_.push_back(context);
+    }
+
+    void remove(void* context) {
+        const std::lock_guard lock{mutex_};
+        std::erase(pending_, context);
+    }
+
+    [[nodiscard]] auto cancel() -> std::error_code {
+        const std::lock_guard lock{mutex_};
+        std::error_code error;
+        for (auto* context : pending_) {
+            const auto result = endpoint.cancel(context_ptr<void>{context});
+            if (!result && !error) {
+                error = result.error();
+            }
+        }
+        return error;
+    }
+
+    loom::endpoint endpoint;
+
+private:
+    std::mutex mutex_;
+    std::vector<void*> pending_;
 };
 }  // namespace detail
 
@@ -164,7 +200,11 @@ protected:
 class asio_context_erased : public asio_context_base<asio_context_erased> {
 public:
     asio_context_erased() = default;
-    ~asio_context_erased() override = default;
+    ~asio_context_erased() override {
+        if (endpoint_state_) {
+            endpoint_state_->remove(as_fi_context());
+        }
+    }
 
     asio_context_erased(const asio_context_erased&) = delete;
     auto operator=(const asio_context_erased&) -> asio_context_erased& = delete;
@@ -181,6 +221,11 @@ public:
     // Send and local RMA completions do not carry a received-message length.
     void set_transfer_size(std::size_t bytes) noexcept { transfer_size_ = bytes; }
 
+    void retain_endpoint(std::shared_ptr<detail::endpoint_state> state) {
+        state->add(as_fi_context());
+        endpoint_state_ = std::move(state);
+    }
+
 protected:
     [[nodiscard]] auto completion_size(const completion_event& event) const noexcept
         -> std::size_t {
@@ -189,6 +234,7 @@ protected:
 
 private:
     std::optional<std::size_t> transfer_size_;
+    std::shared_ptr<detail::endpoint_state> endpoint_state_;
 };
 
 /**

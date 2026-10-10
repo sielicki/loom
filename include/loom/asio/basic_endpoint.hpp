@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <span>
 #include <system_error>
 #include <type_traits>
@@ -86,7 +87,8 @@ public:
      * @brief Constructs an endpoint wrapper with an executor.
      * @param ex The executor to use for async operations.
      */
-    explicit basic_endpoint(const executor_type& ex) : executor_(ex) {}
+    explicit basic_endpoint(const executor_type& ex)
+        : executor_(ex), state_(std::make_shared<detail::endpoint_state>()) {}
 
     /**
      * @brief Constructs an endpoint wrapper with an executor and existing endpoint.
@@ -94,7 +96,7 @@ public:
      * @param ep The loom endpoint to wrap (moved).
      */
     basic_endpoint(const executor_type& ex, loom::endpoint ep)
-        : executor_(ex), endpoint_(std::move(ep)) {}
+        : executor_(ex), state_(std::make_shared<detail::endpoint_state>(std::move(ep))) {}
 
     /**
      * @brief Move constructor.
@@ -104,12 +106,20 @@ public:
     /**
      * @brief Move assignment operator.
      */
-    auto operator=(basic_endpoint&&) noexcept -> basic_endpoint& = default;
+    auto operator=(basic_endpoint&& other) noexcept -> basic_endpoint& {
+        if (this != &other) {
+            close();
+            executor_ = std::move(other.executor_);
+            state_ = std::move(other.state_);
+            empty_endpoint_ = std::move(other.empty_endpoint_);
+        }
+        return *this;
+    }
 
     basic_endpoint(const basic_endpoint&) = delete;
     auto operator=(const basic_endpoint&) -> basic_endpoint& = delete;
 
-    ~basic_endpoint() = default;
+    ~basic_endpoint() { close(); }
 
     /**
      * @brief Returns the associated executor.
@@ -133,81 +143,79 @@ public:
      * @brief Returns the native loom endpoint handle.
      * @return Pointer to the underlying endpoint.
      */
-    [[nodiscard]] auto native_handle() noexcept -> native_handle_type { return &endpoint_; }
+    [[nodiscard]] auto native_handle() noexcept -> native_handle_type { return &get(); }
 
     /**
      * @brief Returns a const pointer to the native endpoint.
      * @return Const pointer to the underlying endpoint.
      */
-    [[nodiscard]] auto native_handle() const noexcept -> const loom::endpoint* {
-        return &endpoint_;
-    }
+    [[nodiscard]] auto native_handle() const noexcept -> const loom::endpoint* { return &get(); }
 
     /**
      * @brief Returns a reference to the underlying endpoint.
      * @return Reference to the loom endpoint.
      */
-    [[nodiscard]] auto get() noexcept -> loom::endpoint& { return endpoint_; }
+    [[nodiscard]] auto get() noexcept -> loom::endpoint& {
+        return state_ ? state_->endpoint : empty_endpoint_;
+    }
 
     /**
      * @brief Returns a const reference to the underlying endpoint.
      * @return Const reference to the loom endpoint.
      */
-    [[nodiscard]] auto get() const noexcept -> const loom::endpoint& { return endpoint_; }
+    [[nodiscard]] auto get() const noexcept -> const loom::endpoint& {
+        return state_ ? state_->endpoint : empty_endpoint_;
+    }
 
     /**
      * @brief Checks if the endpoint is valid/open.
      * @return True if the endpoint is valid.
      */
-    [[nodiscard]] auto is_open() const noexcept -> bool { return endpoint_.impl_valid(); }
+    [[nodiscard]] auto is_open() const noexcept -> bool { return get().impl_valid(); }
 
     /**
      * @brief Closes the endpoint, releasing underlying resources.
      *
      * After closing, is_open() will return false and no further operations
      * should be performed on this endpoint.
+     * Pending operations are offered for cancellation and retain the native
+     * endpoint until their completions are consumed. Keep progressing their
+     * completion queues and retain their buffers until the handlers run.
      */
-    void close() { endpoint_ = loom::endpoint{}; }
+    void close() {
+        std::error_code ignored;
+        close(ignored);
+    }
 
     /**
      * @brief Closes the endpoint, with error code output.
      * @param ec Set to the error code if an error occurs.
      */
     void close(std::error_code& ec) {
-        ec.clear();
-        endpoint_ = loom::endpoint{};
+        cancel(ec);
+        state_.reset();
+        empty_endpoint_ = loom::endpoint{};
     }
 
     /**
      * @brief Cancels all pending asynchronous operations on this endpoint.
      *
-     * This causes all outstanding async operations to complete with
-     * operation_canceled error.
+     * Attempts to cancel operations started by this wrapper. Completion may
+     * still succeed if the operation has finished or cancellation is unsupported.
      *
      * Any errors from the cancellation operation itself are silently ignored.
      * Use cancel(std::error_code&) if you need error information.
      */
     void cancel() {
-        if (is_open()) {
-            [[maybe_unused]] auto result = endpoint_.cancel(context_ptr<void>{nullptr});
-            // Errors during cancellation are ignored in this overload.
-            // The important outcome is that pending operations will be cancelled.
-        }
+        std::error_code ignored;
+        cancel(ignored);
     }
 
     /**
      * @brief Cancels all pending asynchronous operations, with error code output.
      * @param ec Set to the error code if an error occurs.
      */
-    void cancel(std::error_code& ec) {
-        ec.clear();
-        if (is_open()) {
-            auto result = endpoint_.cancel(context_ptr<void>{nullptr});
-            if (!result) {
-                ec = result.error();
-            }
-        }
-    }
+    void cancel(std::error_code& ec) { ec = state_ ? state_->cancel() : std::error_code{}; }
 
     /**
      * @brief Asynchronously sends data.
@@ -226,12 +234,14 @@ public:
                     CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers](auto handler) {
+                auto state = operation_state();
                 auto ctx = make_buffered_asio_context<false>(
-                    std::move(handler), executor_, &endpoint_, buffers);
+                    std::move(handler), executor_, &state->endpoint, buffers);
+                ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
-                auto result =
-                    endpoint_.sendv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+                auto result = state->endpoint.sendv(ctx->buffers().iov,
+                                                    context_ptr<void>{ctx->as_fi_context()});
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
@@ -255,11 +265,13 @@ public:
                   CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers](auto handler) {
+                auto state = operation_state();
                 auto ctx = make_buffered_asio_context<true>(
-                    std::move(handler), executor_, &endpoint_, buffers);
+                    std::move(handler), executor_, &state->endpoint, buffers);
+                ctx->retain_endpoint(state);
 
-                auto result =
-                    endpoint_.recvv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+                auto result = state->endpoint.recvv(ctx->buffers().iov,
+                                                    context_ptr<void>{ctx->as_fi_context()});
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
@@ -283,11 +295,13 @@ public:
         CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers, tag](auto handler) {
+                auto state = operation_state();
                 auto ctx = make_buffered_asio_context<false>(
-                    std::move(handler), executor_, &endpoint_, buffers);
+                    std::move(handler), executor_, &state->endpoint, buffers);
+                ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
-                auto result = loom::tagged_sendv(endpoint_,
+                auto result = loom::tagged_sendv(state->endpoint,
                                                  ctx->buffers().iov,
                                                  ctx->buffers().descriptors,
                                                  fabric_addrs::unspecified,
@@ -318,10 +332,12 @@ public:
         CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers, tag, ignore](auto handler) {
+                auto state = operation_state();
                 auto ctx = make_buffered_asio_context<true>(
-                    std::move(handler), executor_, &endpoint_, buffers);
+                    std::move(handler), executor_, &state->endpoint, buffers);
+                ctx->retain_endpoint(state);
 
-                auto result = loom::tagged_recvv(endpoint_,
+                auto result = loom::tagged_recvv(state->endpoint,
                                                  ctx->buffers().iov,
                                                  ctx->buffers().descriptors,
                                                  fabric_addrs::unspecified,
@@ -353,13 +369,18 @@ public:
                    CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers, &local_mr, remote](auto handler) {
-                auto ctx = make_buffered_asio_context<false>(
-                    std::move(handler), executor_, &endpoint_, buffers, local_mr.descriptor());
+                auto state = operation_state();
+                auto ctx = make_buffered_asio_context<false>(std::move(handler),
+                                                             executor_,
+                                                             &state->endpoint,
+                                                             buffers,
+                                                             local_mr.descriptor());
+                ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
                 const std::array remote_iov{
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-                auto result = rma::writev(endpoint_,
+                auto result = rma::writev(state->endpoint,
                                           ctx->buffers().iov,
                                           ctx->buffers().descriptors,
                                           remote_iov,
@@ -389,13 +410,18 @@ public:
                     CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
             [this, buffers, &local_mr, remote](auto handler) {
-                auto ctx = make_buffered_asio_context<true>(
-                    std::move(handler), executor_, &endpoint_, buffers, local_mr.descriptor());
+                auto state = operation_state();
+                auto ctx = make_buffered_asio_context<true>(std::move(handler),
+                                                            executor_,
+                                                            &state->endpoint,
+                                                            buffers,
+                                                            local_mr.descriptor());
+                ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
                 const std::array remote_iov{
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-                auto result = rma::readv(endpoint_,
+                auto result = rma::readv(state->endpoint,
                                          ctx->buffers().iov,
                                          ctx->buffers().descriptors,
                                          remote_iov,
@@ -413,7 +439,7 @@ public:
     template <typename ConstBufferSequence>
     auto send(const ConstBufferSequence& buffers) -> std::pair<std::error_code, std::size_t> {
         auto span = buffers_to_const_span(buffers);
-        auto result = endpoint_.send(span);
+        auto result = get().send(span);
         if (!result) {
             return {result.error(), 0};
         }
@@ -428,7 +454,7 @@ public:
     template <typename MutableBufferSequence>
     auto receive(const MutableBufferSequence& buffers) -> std::pair<std::error_code, std::size_t> {
         auto span = buffers_to_span(buffers);
-        auto result = endpoint_.recv(span);
+        auto result = get().recv(span);
         if (!result) {
             return {result.error(), 0};
         }
@@ -437,7 +463,17 @@ public:
 
 private:
     executor_type executor_;
-    loom::endpoint endpoint_;
+    std::shared_ptr<detail::endpoint_state> state_;
+    // Keep get() usable without allocating after move or close. New operations
+    // adopt any endpoint assigned through this reference into shared state.
+    loom::endpoint empty_endpoint_;
+
+    [[nodiscard]] auto operation_state() -> std::shared_ptr<detail::endpoint_state> {
+        if (!state_) {
+            state_ = std::make_shared<detail::endpoint_state>(std::move(empty_endpoint_));
+        }
+        return state_;
+    }
 };
 
 /**
