@@ -48,6 +48,17 @@ TEST_CASE("fabric_service start and stop", "[asio][fabric_service]") {
     REQUIRE_FALSE(service.is_running());
 }
 
+TEST_CASE("fabric_service accepts its first queue after starting", "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    loom::completion_queue cq;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    service.start();
+    service.register_cq(cq);
+    REQUIRE(service.is_running());
+    service.deregister_cq(cq);
+    service.stop();
+}
+
 TEST_CASE("fabric_service register and deregister cq", "[asio][fabric_service][.provider]") {
     loom::fabric_hints hints{};
     hints.ep_type = loom::endpoint_types::rdm;

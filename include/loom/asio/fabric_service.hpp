@@ -188,10 +188,14 @@ inline void fabric_service::notify_fork(::asio::execution_context::fork_event ev
 }
 
 inline void fabric_service::register_cq(completion_queue& cq, const options& opts) {
-    std::lock_guard lock(mutex_);
-    completion_queues_.push_back({&cq, opts});
+    bool first_queue;
+    {
+        std::lock_guard lock(mutex_);
+        completion_queues_.push_back({&cq, opts});
+        first_queue = completion_queues_.size() == 1;
+    }
 
-    if (running_.load(std::memory_order_acquire) && completion_queues_.size() == 1) {
+    if (running_.load(std::memory_order_acquire) && first_queue) {
         schedule_poll();
     }
 }
