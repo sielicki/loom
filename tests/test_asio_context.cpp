@@ -12,10 +12,24 @@
 
 #include <asio/bind_allocator.hpp>
 #include <asio/bind_cancellation_slot.hpp>
+#include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 using namespace std::literals;
+
+TEST_CASE("completion honors the handler executor association", "[asio][context]") {
+    ::asio::io_context fallback, associated;
+    bool completed{};
+    auto handler = ::asio::bind_executor(associated.get_executor(),
+                                         [&](std::error_code, std::size_t) { completed = true; });
+    auto* ctx = loom::asio::make_asio_context(std::move(handler), fallback.get_executor());
+    ctx->complete(loom::completion_event{});
+    fallback.poll();
+    REQUIRE_FALSE(completed);
+    associated.run();
+    REQUIRE(completed);
+}
 
 namespace {
 template <typename T>

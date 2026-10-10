@@ -371,19 +371,20 @@ template <typename Handler>
 }
 
 /**
- * @brief Creates an asio_context with an explicit executor.
+ * @brief Creates an asio_context with a fallback executor.
  * @tparam Handler The handler type.
  * @tparam Executor The executor type.
  * @param handler The handler to wrap.
- * @param executor The executor to use.
+ * @param executor Executor used when the handler has no associated executor.
  * @param ep Optional endpoint for cancellation support.
  * @return Pointer to the created context.
  */
 template <typename Handler, typename Executor>
 [[nodiscard]] auto make_asio_context(Handler&& handler, Executor&& executor, endpoint* ep = nullptr)
     -> asio_context_erased* {
-    return asio_context<std::decay_t<Handler>, std::decay_t<Executor>>::create(
-        std::forward<Handler>(handler), std::forward<Executor>(executor), ep);
+    auto associated = ::asio::get_associated_executor(handler, executor);
+    return asio_context<std::decay_t<Handler>, decltype(associated)>::create(
+        std::forward<Handler>(handler), std::move(associated), ep);
 }
 
 /**
