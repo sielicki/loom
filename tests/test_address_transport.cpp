@@ -102,6 +102,16 @@ TEST_CASE("address vector creation translates flags", "[address]") {
     REQUIRE(native.open_flags == (FI_READ | FI_SYMMETRIC));
 }
 
+TEST_CASE("address vectors retain the provider-selected organization", "[address]") {
+    provider native;
+    auto dom = native.domain();
+    loom::address_vector_attr attr;
+    attr.type = loom::av_type::unspecified;
+    auto av = loom::address_vector::create(dom, attr);
+    REQUIRE(av);
+    REQUIRE(av->get_type() == loom::av_type::table);
+}
+
 TEST_CASE("synchronous address vectors reject asynchronous creation", "[address]") {
     provider native;
     auto dom = native.domain();

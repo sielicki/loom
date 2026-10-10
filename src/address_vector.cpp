@@ -111,13 +111,13 @@ auto address_vector::create(const domain& dom,
 
     if (resource) {
         auto impl =
-            detail::make_pmr_unique<detail::address_vector_impl>(resource, av, attr.type, format);
+            detail::make_pmr_unique<detail::address_vector_impl>(resource, av, static_cast<av_type>(av_attr.type), format);
         return address_vector{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::address_vector_impl>(
-        default_resource, av, attr.type, format);
+        default_resource, av, static_cast<av_type>(av_attr.type), format);
     return address_vector{std::move(impl)};
 }
 
