@@ -65,6 +65,13 @@
                 '';
               });
             };
+            idxd-config = inputs'.libfabric.packages.accel-config.overrideAttrs (old: {
+              # Regeneration must work from a source archive without .git.
+              postPatch = (old.postPatch or "") + ''
+                substituteInPlace git-version-gen \
+                  --replace-fail 'VN=$(./git-version)' 'VN=${old.version}'
+              '';
+            });
           };
 
           # Use our custom stdexec derivation (header-only)
