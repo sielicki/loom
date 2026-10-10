@@ -260,6 +260,9 @@ auto execute(endpoint& ep,
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!fid_ep->atomic || !fid_ep->atomic->write) {
+        return make_error_result<void>(errc::not_supported);
+    }
     void* desc = mr ? mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_atomic(fid_ep,
@@ -327,6 +330,9 @@ auto fetch(endpoint& ep,
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!fid_ep->atomic || !fid_ep->atomic->readwrite) {
+        return make_error_result<void>(errc::not_supported);
+    }
     void* desc_buf = mr_buf ? mr_buf->descriptor().raw() : nullptr;
     void* desc_result = mr_result ? mr_result->descriptor().raw() : nullptr;
 
@@ -379,6 +385,9 @@ auto compare_swap(endpoint& ep,
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!fid_ep->atomic || !fid_ep->atomic->compwrite) {
+        return make_error_result<void>(errc::not_supported);
     }
     void* desc_compare = mr_compare ? mr_compare->descriptor().raw() : nullptr;
     void* desc_result = mr_result ? mr_result->descriptor().raw() : nullptr;

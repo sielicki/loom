@@ -20,6 +20,9 @@ auto inject(endpoint& ep,
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!fid_ep->atomic || !fid_ep->atomic->inject) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     auto ret = fi_inject_atomic(fid_ep,
                                 buf,
@@ -39,7 +42,7 @@ auto inject(endpoint& ep,
 
 auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    if (!fid_ep) {
+    if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->writevalid) {
         return false;
     }
     std::size_t ignored_count{};
@@ -54,7 +57,7 @@ auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -
 
 auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    if (!fid_ep) {
+    if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->readwritevalid) {
         return false;
     }
     std::size_t ignored_count{};
@@ -70,7 +73,7 @@ auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_
 
 auto is_compare_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    if (!fid_ep) {
+    if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->compwritevalid) {
         return false;
     }
     std::size_t ignored_count{};

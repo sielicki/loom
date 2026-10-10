@@ -188,6 +188,38 @@ TEST_CASE("atomic operations reject empty endpoints", "[atomic]") {
     REQUIRE_FALSE(atomic::is_compare_valid(ep, atomic::operation::compare_swap, type));
 }
 
+TEST_CASE("atomic operations reject unavailable provider entry points", "[atomic]") {
+    const auto missing_table = GENERATE(false, true);
+    atomic_provider native;
+    fi_ops_atomic unsupported{.size = sizeof(fi_ops_atomic)};
+    native.handle.atomic = missing_table ? nullptr : &unsupported;
+    auto ep = native.endpoint();
+    memory_region mr;
+    const std::uint64_t value{1};
+    const std::uint64_t replacement{2};
+    std::uint64_t previous{};
+    const remote_memory remote{0x1000, 0x1234, sizeof(value)};
+    const auto op = atomic::operation::sum;
+    const auto type = atomic::datatype::uint64;
+    const std::array results{
+        atomic::execute(ep, op, type, &value, 1, nullptr, remote),
+        atomic::inject(ep, op, type, &value, 1, remote),
+        atomic::fetch(ep, op, type, &value, &previous, 1, nullptr, nullptr, remote),
+        atomic::compare_swap(
+            ep, type, &value, &replacement, &previous, 1, nullptr, nullptr, remote),
+        atomic::add(ep, value, remote),
+        atomic::fetch_add(ep, value, &previous, mr, remote),
+        atomic::cas(ep, value, replacement, &previous, mr, remote),
+    };
+    for (const auto& result : results) {
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() == errc::not_supported);
+    }
+    REQUIRE_FALSE(atomic::is_valid(ep, op, type));
+    REQUIRE_FALSE(atomic::is_fetch_valid(ep, op, type));
+    REQUIRE_FALSE(atomic::is_compare_valid(ep, atomic::operation::compare_swap, type));
+}
+
 TEST_CASE("get_datatype consteval", "[atomic]") {
     static_assert(atomic::get_datatype<int8_t>() == atomic::datatype::int8);
     static_assert(atomic::get_datatype<uint8_t>() == atomic::datatype::uint8);
