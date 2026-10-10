@@ -17,6 +17,9 @@ namespace loom::rma {
 inline auto inject_write(endpoint& ep, std::span<const std::byte> data, remote_memory remote)
     -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
 
     auto ret =
         fi_inject_write(fid_ep, data.data(), data.size(), FI_ADDR_UNSPEC, remote.addr, remote.key);
@@ -33,6 +36,9 @@ inline auto inject_write_data(endpoint& ep,
                               remote_memory remote,
                               std::uint64_t immediate_data) -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
 
     auto ret = fi_inject_writedata(
         fid_ep, data.data(), data.size(), immediate_data, FI_ADDR_UNSPEC, remote.addr, remote.key);

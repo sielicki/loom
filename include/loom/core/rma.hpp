@@ -76,6 +76,9 @@ auto read(endpoint& ep,
           remote_memory remote,
           Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
     auto* desc = local_mr.descriptor().raw();
 
     auto ret = ::fi_read(fid_ep,
@@ -110,11 +113,14 @@ auto readv(endpoint& ep,
            std::span<const mr_descriptor> desc,
            std::span<const rma_iov> remote_iov,
            Ctx context = {}) -> result<void> {
-    if (!ep || remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
+    if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
 
     std::vector<void*> raw_desc;
     raw_desc.reserve(desc.size());
@@ -161,6 +167,9 @@ auto write(endpoint& ep,
            remote_memory remote,
            Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
     auto* desc = local_mr.descriptor().raw();
 
     auto ret = ::fi_write(fid_ep,
@@ -195,11 +204,14 @@ auto writev(endpoint& ep,
             std::span<const mr_descriptor> desc,
             std::span<const rma_iov> remote_iov,
             Ctx context = {}) -> result<void> {
-    if (!ep || remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
+    if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
 
     std::vector<void*> raw_desc;
     raw_desc.reserve(desc.size());
@@ -258,6 +270,9 @@ auto write_data(endpoint& ep,
                 std::uint64_t data,
                 Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
     auto* desc = local_mr.descriptor().raw();
 
     auto ret = ::fi_writedata(fid_ep,
@@ -309,6 +324,9 @@ auto read_to(endpoint& ep,
              remote_memory remote,
              Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
     auto* desc = local_mr.descriptor().raw();
 
     auto ret = ::fi_read(fid_ep,
@@ -346,6 +364,9 @@ auto write_to(endpoint& ep,
               remote_memory remote,
               Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (fid_ep == nullptr) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
     auto* desc = local_mr.descriptor().raw();
 
     auto ret = ::fi_write(fid_ep,

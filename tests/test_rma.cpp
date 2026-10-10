@@ -11,6 +11,26 @@
 
 using namespace loom;
 
+TEST_CASE("RMA operations reject an empty endpoint", "[rma]") {
+    endpoint ep;
+    memory_region mr;
+    std::array<std::byte, 1> storage{};
+    remote_memory remote{0, 1, storage.size()};
+    const std::array iov{iovec{storage.data(), storage.size()}};
+    const std::array remote_iov{rma::rma_iov{remote}};
+    REQUIRE(rma::read(ep, storage, mr, remote).error() == errc::invalid_argument);
+    REQUIRE(rma::write(ep, storage, mr, remote).error() == errc::invalid_argument);
+    REQUIRE(rma::write_data(ep, storage, mr, remote, 42).error() == errc::invalid_argument);
+    REQUIRE(rma::readv(ep, iov, {}, remote_iov).error() == errc::invalid_argument);
+    REQUIRE(rma::writev(ep, iov, {}, remote_iov).error() == errc::invalid_argument);
+    REQUIRE(rma::read_to(ep, storage, mr, fabric_addrs::unspecified, remote).error() ==
+            errc::invalid_argument);
+    REQUIRE(rma::write_to(ep, storage, mr, fabric_addrs::unspecified, remote).error() ==
+            errc::invalid_argument);
+    REQUIRE(rma::inject_write(ep, storage, remote).error() == errc::invalid_argument);
+    REQUIRE(rma::inject_write_data(ep, storage, remote, 42).error() == errc::invalid_argument);
+}
+
 namespace {
 struct rma_provider {
     std::size_t calls{};
