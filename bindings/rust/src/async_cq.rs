@@ -73,7 +73,7 @@ impl AsyncCompletionQueue {
         loop {
             // Try non-blocking poll first
             if let Some(event) = self.poll() {
-                return Ok(event);
+                return event.into_result();
             }
 
             // Wait for the fd to become readable
@@ -81,7 +81,7 @@ impl AsyncCompletionQueue {
 
             // Try to poll again
             if let Some(event) = self.poll() {
-                return Ok(event);
+                return event.into_result();
             }
 
             // Clear ready state and try again

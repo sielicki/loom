@@ -8,6 +8,14 @@ use thiserror::Error;
 /// Error type for loom operations.
 #[derive(Error, Debug)]
 pub enum Error {
+    /// An operation failed after submission.
+    #[error("Fabric completion {context} failed with code {code}")]
+    Completion {
+        /// The context submitted with the operation.
+        context: usize,
+        /// The negative fabric error code.
+        code: i32,
+    },
     /// A fabric operation failed.
     #[error("Fabric error: {0}")]
     Fabric(String),

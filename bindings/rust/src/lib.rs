@@ -252,6 +252,29 @@ pub struct CompletionEvent {
     pub tag: u64,
     /// Immediate data.
     pub data: u64,
+    /// Fabric error code, if this is an error completion.
+    pub error: Option<i32>,
+}
+
+impl CompletionEvent {
+    fn from_raw(data: ffi::CompletionEventData) -> Self {
+        Self {
+            context: data.context,
+            bytes_transferred: data.bytes_transferred,
+            flags: data.flags,
+            tag: data.tag,
+            data: data.data,
+            error: data.has_error.then_some(data.error_code),
+        }
+    }
+
+    /// Return the completion or an error retaining its operation context.
+    pub fn into_result(self) -> Result<Self> {
+        match self.error {
+            Some(code) => Err(Error::Completion { context: self.context, code }),
+            None => Ok(self),
+        }
+    }
 }
 
 /// A completion queue for operation completion notifications.
@@ -290,22 +313,11 @@ impl CompletionQueue {
         let data = ffi::ffi::cq_poll(&self.inner);
 
         // EAGAIN means no completion available
-        if data.error_code == -11 {
+        if data.error_code == -11 && !data.has_error {
             return None;
         }
 
-        if data.has_error {
-            // Return None for errors (could also expose error info)
-            return None;
-        }
-
-        Some(CompletionEvent {
-            context: data.context,
-            bytes_transferred: data.bytes_transferred,
-            flags: data.flags,
-            tag: data.tag,
-            data: data.data,
-        })
+        Some(CompletionEvent::from_raw(data))
     }
 
     /// Wait for a completion with timeout.
@@ -317,17 +329,7 @@ impl CompletionQueue {
         let timeout = timeout_ms.unwrap_or(-1);
         let data = ffi::ffi::cq_wait(&self.inner, timeout);
 
-        if data.has_error {
-            return Err(error::from_completion_error(data.error_code));
-        }
-
-        Ok(CompletionEvent {
-            context: data.context,
-            bytes_transferred: data.bytes_transferred,
-            flags: data.flags,
-            tag: data.tag,
-            data: data.data,
-        })
+        CompletionEvent::from_raw(data).into_result()
     }
 
     /// Get the wait file descriptor for async integration.
@@ -592,6 +594,22 @@ pub use async_cq::{AsyncCompletionQueue, AsyncEndpoint};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_completions_retain_their_context() {
+        let event = CompletionEvent::from_raw(ffi::CompletionEventData {
+            context: 73,
+            bytes_transferred: 4,
+            flags: 0,
+            tag: 9,
+            data: 0,
+            has_error: true,
+            error_code: -125,
+        });
+        assert_eq!(event.error, Some(-125));
+        assert_eq!(event.tag, 9);
+        assert!(matches!(event.into_result(), Err(Error::Completion { context: 73, code: -125 })));
+    }
 
     #[test]
     fn test_capabilities_flags() {
