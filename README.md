@@ -239,6 +239,7 @@ auto main() -> int {
 
     // Wait for the send to complete (counter reaches threshold)
     send_counter.wait().value();
+    deferred_send.mark_completed();
 
     std::println("Pipeline complete: received data and sent response");
 
@@ -325,19 +326,28 @@ auto main() -> int {
         &arena
     ).value();
 
-    // Deferred/triggered work also supports custom allocators
-    auto deferred = trigger::deferred_work::create_send(
-        dom, ep,
+    // Deferred work also supports custom allocators.
+    auto completed = counter::create(dom, {}, &arena).value();
+    auto deferred = trigger::deferred_work::create_counter_add(
+        dom,
         trigger::threshold_condition{&cntr, 1},
-        nullptr,
-        msg::send_message<void*>{},
-        msg::send_flag::none,
+        completed, 1,
         &arena  // Custom allocator for internal structures
     ).value();
 
+    cntr.add(1).value();
+    completed.wait().value();
+    deferred.mark_completed();
     return 0;
 }
 ```
+
+Deferred work and its referenced resources must outlive native execution.
+After observing completion or a successful domain flush, call
+`mark_completed()`. To abandon pending work, call `cancel()` and handle
+failure while retaining the work. Destruction attempts cancellation if
+needed and terminates if it fails; freeing a descriptor still referenced
+by the provider would otherwise cause a use-after-free.
 
 ### Compile-Time Provider Traits
 

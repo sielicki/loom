@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <vector>
 
@@ -46,7 +47,10 @@ struct deferred_work_impl {
     /// @brief Destructor that cancels queued work if necessary.
     ~deferred_work_impl() {
         if (queued && domain != nullptr) {
-            ::fi_control(&domain->fid, FI_CANCEL_WORK, &work);
+            if (::fi_control(&domain->fid, FI_CANCEL_WORK, &work) != 0) {
+                // The provider can still reference work and its operation storage.
+                std::terminate();
+            }
         }
     }
 
@@ -89,6 +93,12 @@ auto deferred_work::impl_internal_ptr() const noexcept -> void* {
 
 auto deferred_work::is_pending() const noexcept -> bool {
     return impl_ && impl_->queued;
+}
+
+void deferred_work::mark_completed() noexcept {
+    if (impl_) {
+        impl_->queued = false;
+    }
 }
 
 auto deferred_work::cancel() -> void_result {

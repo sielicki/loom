@@ -16,6 +16,7 @@
 
 #include "loom/core/allocator.hpp"
 #include "loom/core/error.hpp"
+#include "loom/detail/impl/trigger_impl.hpp"
 
 namespace loom::trigger {
 
@@ -25,46 +26,6 @@ auto threshold_condition::to_fi_threshold() const noexcept -> ::fi_trigger_thres
     result.threshold = threshold;
     return result;
 }
-
-namespace detail {
-
-/// @brief Internal implementation of deferred work for triggered operations.
-struct deferred_work_impl {
-    ::fid_domain* domain{nullptr};  ///< Domain for queuing deferred work.
-    ::fi_deferred_work work{};      ///< Libfabric deferred work descriptor.
-
-    ::fi_op_msg op_msg{};        ///< Message operation parameters.
-    ::fi_op_tagged op_tagged{};  ///< Tagged message operation parameters.
-    ::fi_op_rma op_rma{};        ///< RMA operation parameters.
-    ::fi_op_cntr op_cntr{};      ///< Counter operation parameters.
-
-    std::vector<::iovec> iov_storage;           ///< Storage for I/O vectors.
-    std::vector<void*> desc_storage;            ///< Storage for memory descriptors.
-    std::vector<::fi_rma_iov> rma_iov_storage;  ///< Storage for RMA I/O vectors.
-
-    bool queued{false};  ///< Whether the work has been queued.
-
-    /// @brief Default constructor.
-    deferred_work_impl() = default;
-
-    /// @brief Constructs deferred_work_impl with a domain.
-    /// @param dom The libfabric domain pointer.
-    explicit deferred_work_impl(::fid_domain* dom) : domain(dom) {}
-
-    /// @brief Destructor that cancels queued work if necessary.
-    ~deferred_work_impl() {
-        if (queued && domain != nullptr) {
-            ::fi_control(&domain->fid, FI_CANCEL_WORK, &work);
-        }
-    }
-
-    deferred_work_impl(const deferred_work_impl&) = delete;
-    auto operator=(const deferred_work_impl&) -> deferred_work_impl& = delete;
-    deferred_work_impl(deferred_work_impl&&) = delete;
-    auto operator=(deferred_work_impl&&) -> deferred_work_impl& = delete;
-};
-
-}  // namespace detail
 
 deferred_work::deferred_work() = default;
 
@@ -86,6 +47,12 @@ auto deferred_work::impl_internal_ptr() const noexcept -> void* {
 
 auto deferred_work::is_pending() const noexcept -> bool {
     return impl_ && impl_->queued;
+}
+
+void deferred_work::mark_completed() noexcept {
+    if (impl_) {
+        impl_->queued = false;
+    }
 }
 
 auto deferred_work::cancel() -> void_result {

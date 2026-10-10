@@ -87,6 +87,10 @@ struct deferred_work_impl;
  *
  * Deferred work allows operations to be queued and executed when
  * a trigger condition (such as a counter threshold) is met.
+ * Keep the domain, endpoint, counters, registrations and data buffers alive
+ * until completion or successful cancellation. This object owns the native
+ * work descriptor and operation metadata, which the provider also borrows.
+ * After observing completion, call mark_completed() before destruction.
  */
 class deferred_work : public fabric_object_base<deferred_work> {
 public:
@@ -105,7 +109,10 @@ public:
     explicit deferred_work(impl_ptr impl) noexcept;
 
     /**
-     * @brief Destructor.
+     * @brief Cancels pending work before releasing its storage.
+     * Terminates if cancellation fails while work remains pending. Call
+     * cancel() explicitly to handle errors, or mark_completed() after observing
+     * completion or successful cancellation through another libfabric API.
      */
     ~deferred_work();
 
@@ -201,8 +208,21 @@ public:
                                                  memory_resource* resource = nullptr)
         -> result<deferred_work>;
 
-    auto cancel() -> void_result;
+    /** @brief Cancels queued work. A failure leaves its storage and state intact. */
+    [[nodiscard]] auto cancel() -> void_result;
 
+    /**
+     * @brief Records that the provider has finished accessing this work.
+     * @pre Completion or successful cancellation has been observed by the caller.
+     * This does not poll, wait for, or cancel the native operation.
+     */
+    void mark_completed() noexcept;
+
+    /**
+     * @brief True until cancel() succeeds or mark_completed() is called.
+     * This query does not poll the provider or infer individual completion
+     * from counters that may also track other operations.
+     */
     [[nodiscard]] auto is_pending() const noexcept -> bool;
 
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;

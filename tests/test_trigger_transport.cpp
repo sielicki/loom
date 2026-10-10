@@ -5,6 +5,11 @@
 #include <loom/detail/impl/endpoint_impl.hpp>
 
 #include <array>
+#include <cstdlib>
+#include <exception>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -12,6 +17,8 @@
 namespace {
 struct trigger_provider {
     int submissions{};
+    int cancellations{};
+    int cancel_result{};
     fi_deferred_work* pending{};
     fi_ops ops{
         .size = sizeof(fi_ops),
@@ -20,6 +27,10 @@ struct trigger_provider {
             [](fid* domain, int command, void* argument) {
                 auto& self = *static_cast<trigger_provider*>(domain->context);
                 if (command == FI_CANCEL_WORK) {
+                    ++self.cancellations;
+                    if (self.cancel_result != 0) {
+                        return self.cancel_result;
+                    }
                     self.pending = nullptr;
                     return 0;
                 }
@@ -93,6 +104,74 @@ struct trigger_provider {
 
 struct trigger_context : loom::triggered_context<trigger_context> {};
 }  // namespace
+
+TEST_CASE("pending work cannot be freed after cancellation fails", "[trigger]") {
+    const auto child = ::fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        std::set_terminate([] { std::_Exit(71); });
+        {
+            trigger_provider native;
+            native.cancel_result = -FI_ENOSYS;
+            auto work = native.queue(6, &native.counter, nullptr);
+            if (!work) {
+                std::_Exit(72);
+            }
+        }
+        std::_Exit(0);
+    }
+    int status{};
+    REQUIRE(::waitpid(child, &status, 0) == child);
+    REQUIRE(WIFEXITED(status));
+    REQUIRE(WEXITSTATUS(status) == 71);
+}
+
+TEST_CASE("failed cancellation preserves deferred work until completion", "[trigger]") {
+    trigger_provider native;
+    {
+        auto work = native.queue(6, &native.counter, nullptr);
+        REQUIRE(work);
+        auto* pending = native.pending;
+        native.cancel_result = -FI_ENOSYS;
+        REQUIRE_FALSE(work->cancel());
+        REQUIRE(work->is_pending());
+        REQUIRE(native.pending == pending);
+        REQUIRE(pending->op.cntr->cntr == &native.counter_handle);
+        REQUIRE(pending->op.cntr->value == 1);
+
+        // Simulate the provider completing the operation and releasing the descriptor.
+        native.pending = nullptr;
+        work->mark_completed();
+        REQUIRE_FALSE(work->is_pending());
+    }
+    REQUIRE(native.cancellations == 1);
+}
+
+TEST_CASE("successful cancellation retires deferred work", "[trigger]") {
+    trigger_provider native;
+    {
+        auto work = native.queue(7, &native.counter, nullptr);
+        REQUIRE(work);
+        REQUIRE(work->cancel());
+        REQUIRE_FALSE(work->is_pending());
+        REQUIRE(native.pending == nullptr);
+    }
+    REQUIRE(native.cancellations == 1);
+}
+
+TEST_CASE("acknowledged completion survives deferred work moves", "[trigger]") {
+    trigger_provider native;
+    {
+        auto work = native.queue(6, &native.counter, nullptr);
+        REQUIRE(work);
+        native.pending = nullptr;
+        work->mark_completed();
+        auto moved = std::move(*work);
+        REQUIRE_FALSE(moved.is_pending());
+        REQUIRE_FALSE(work->is_pending());
+    }
+    REQUIRE(native.cancellations == 0);
+}
 
 TEST_CASE("deferred work rejects invalid trigger counters", "[trigger]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7);
