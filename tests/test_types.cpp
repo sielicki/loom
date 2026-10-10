@@ -11,6 +11,12 @@ TEST_CASE("extended context mode survives provider negotiation", "[types]") {
     REQUIRE(loom::detail::from_fi_mode(provider_modes) == modes);
 }
 
+TEST_CASE("device memory and collective capabilities reach providers", "[types]") {
+    const auto capabilities = loom::capability::hmem | loom::capability::collective;
+    REQUIRE(loom::detail::to_fi_caps(capabilities) == (FI_HMEM | FI_COLLECTIVE));
+    REQUIRE(loom::detail::from_fi_caps(FI_HMEM | FI_COLLECTIVE) == capabilities);
+}
+
 TEST_CASE("fabric_version equality", "[types]") {
     loom::fabric_version ver1{0x12345678U};
     loom::fabric_version ver2{0x12345678U};
