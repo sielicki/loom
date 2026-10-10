@@ -80,10 +80,7 @@ fn main() {
     // Re-run if source files change
     println!("cargo:rerun-if-changed=src/ffi.rs");
     println!("cargo:rerun-if-changed=src/bridge.cpp");
-    println!(
-        "cargo:rerun-if-changed={}",
-        loom_include.join("loom/cxx_bridge.hpp").display()
-    );
+    println!("cargo:rerun-if-changed={}", loom_include.display());
     for src in &loom_sources {
         println!("cargo:rerun-if-changed={}", loom_src.join(src).display());
     }
