@@ -272,12 +272,11 @@ endif()
 # -----------------------------------------------------------------------------
 
 set(LOOM_HAS_ASIO OFF)
-set(LOOM_ASIO_FETCHCONTENT OFF)
 
 if(LOOM_USE_ASIO)
     find_package(asio QUIET)
 
-    if(asio_FOUND)
+    if(TARGET asio::asio)
         message(STATUS "Found Asio via find_package")
         set(LOOM_HAS_ASIO ON)
         set(LOOM_ASIO_TARGET asio::asio)
@@ -304,7 +303,7 @@ if(LOOM_USE_ASIO)
         FetchContent_MakeAvailable(asio)
 
         # Create interface library for header-only asio
-        # Note: This target is not exportable as it uses build-tree paths
+        # Used only in the build tree; installed consumers find their own Asio.
         add_library(loom_asio_headers INTERFACE)
         # Mark as SYSTEM to suppress warnings from asio headers
         target_include_directories(loom_asio_headers SYSTEM INTERFACE
@@ -316,7 +315,6 @@ if(LOOM_USE_ASIO)
         )
         set(LOOM_ASIO_TARGET loom_asio_headers)
         set(LOOM_HAS_ASIO ON)
-        set(LOOM_ASIO_FETCHCONTENT ON)
     endif()
 
     if(NOT LOOM_HAS_ASIO)
@@ -565,11 +563,13 @@ endif()
 if(LOOM_HAS_ASIO)
     add_library(loom_asio INTERFACE)
     add_library(loom::asio ALIAS loom_asio)
+    set_target_properties(loom_asio PROPERTIES EXPORT_NAME asio)
 
     target_link_libraries(loom_asio
         INTERFACE
             loom::loom
-            ${LOOM_ASIO_TARGET}
+            $<BUILD_INTERFACE:${LOOM_ASIO_TARGET}>
+            $<INSTALL_INTERFACE:asio::asio>
     )
 
     target_compile_definitions(loom_asio
@@ -605,9 +605,7 @@ if(TARGET loom_execution)
     )
 endif()
 
-# Only install loom_asio if it doesn't depend on FetchContent-provided asio
-# (FetchContent targets have build-tree paths that aren't exportable)
-if(TARGET loom_asio AND NOT LOOM_ASIO_FETCHCONTENT)
+if(TARGET loom_asio)
     install(TARGETS loom_asio
         EXPORT loomTargets
     )

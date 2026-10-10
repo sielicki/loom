@@ -656,6 +656,10 @@ Enable Asio integration via CMake:
 cmake -B build -DLOOM_USE_ASIO=ON
 ```
 
+Installed consumers link `loom::asio`. They must provide Asio through a
+CMake package defining `asio::asio` or through pkg-config, including when
+loom itself was built with `LOOM_FETCHCONTENT_ASIO=ON`.
+
 Or with Nix:
 
 ```bash

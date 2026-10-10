@@ -20,6 +20,23 @@ elseif(@LOOM_HAS_BEMAN_EXECUTION@)
     find_dependency(beman.execution CONFIG)
 endif()
 
+if(@LOOM_HAS_ASIO@ AND NOT TARGET asio::asio)
+    find_package(asio QUIET)
+    if(NOT TARGET asio::asio)
+        find_dependency(PkgConfig)
+        pkg_check_modules(LOOM_ASIO QUIET IMPORTED_TARGET asio)
+        if(NOT LOOM_ASIO_FOUND)
+            set(loom_FOUND FALSE)
+            set(loom_NOT_FOUND_MESSAGE "Asio is required by loom::asio")
+            return()
+        endif()
+        add_library(asio::asio INTERFACE IMPORTED)
+        set_target_properties(asio::asio PROPERTIES
+            INTERFACE_LINK_LIBRARIES PkgConfig::LOOM_ASIO
+        )
+    endif()
+endif()
+
 # Include the targets file
 include("${CMAKE_CURRENT_LIST_DIR}/loomTargets.cmake")
 
