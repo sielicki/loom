@@ -113,24 +113,7 @@ inline auto completion_queue::poll() const -> std::optional<completion_event> {
     }
 
     if (ret < 0) {
-        ::fi_cq_err_entry err_entry{};
-        ssize_t err_ret = ::fi_cq_readerr(impl_->cq, &err_entry, 0);
-
-        completion_event event{};
-        if (err_ret < 0) {
-            // Could not read error entry - return generic error based on original return
-            event.error = make_error_code_from_fi_errno(static_cast<int>(-ret));
-            return event;
-        }
-
-        event.context = context_ptr<void>{err_entry.op_context};
-        event.error = make_error_code_from_fi_errno(static_cast<int>(err_entry.err));
-        event.flags = err_entry.flags;
-        event.len = err_entry.len;
-        event.error_info.prov_errno = err_entry.prov_errno;
-        event.error_info.err_data = err_entry.err_data;
-        event.error_info.err_data_size = err_entry.err_data_size;
-        return event;
+        return read_error(static_cast<int>(-ret));
     }
 
     if (ret == 0) {
@@ -168,24 +151,7 @@ inline auto completion_queue::wait(std::optional<std::chrono::milliseconds> time
     }
 
     if (ret < 0) {
-        ::fi_cq_err_entry err_entry{};
-        ssize_t err_ret = ::fi_cq_readerr(impl_->cq, &err_entry, 0);
-
-        completion_event event{};
-        if (err_ret < 0) {
-            // Could not read error entry - return generic error based on original return
-            event.error = make_error_code_from_fi_errno(static_cast<int>(-ret));
-            return event;
-        }
-
-        event.context = context_ptr<void>{err_entry.op_context};
-        event.error = make_error_code_from_fi_errno(static_cast<int>(err_entry.err));
-        event.flags = err_entry.flags;
-        event.len = err_entry.len;
-        event.error_info.prov_errno = err_entry.prov_errno;
-        event.error_info.err_data = err_entry.err_data;
-        event.error_info.err_data_size = err_entry.err_data_size;
-        return event;
+        return read_error(static_cast<int>(-ret));
     }
 
     completion_event event{};
@@ -210,12 +176,17 @@ inline auto completion_queue::poll_batch(std::span<completion_event> events) con
     auto batch_size = std::min(events.size(), max_batch_size);
     ssize_t ret = ::fi_cq_read(impl_->cq, fi_entries.data(), batch_size);
 
-    if (ret == -FI_EAGAIN || ret <= 0) {
+    if (ret == -FI_EAGAIN || ret == 0) {
         return 0;
+    }
+    if (ret < 0) {
+        events.front() = read_error(static_cast<int>(-ret));
+        return 1;
     }
 
     auto count = static_cast<std::size_t>(ret);
     for (auto i : std::views::iota(0uz, count)) {
+        events[i] = {};
         events[i].context = context_ptr<void>{fi_entries[i].op_context};
         events[i].error = std::error_code{};
         events[i].bytes_transferred = fi_entries[i].len;
@@ -225,6 +196,31 @@ inline auto completion_queue::poll_batch(std::span<completion_event> events) con
     }
 
     return count;
+}
+
+inline auto completion_queue::read_error(int status) const -> completion_event {
+    completion_event event{};
+    if (status != FI_EAVAIL) {
+        event.error = make_error_code_from_fi_errno(status);
+        return event;
+    }
+
+    ::fi_cq_err_entry entry{};
+    const auto ret = ::fi_cq_readerr(impl_->cq, &entry, 0);
+    if (ret <= 0) {
+        event.error = make_error_code_from_fi_errno(ret < 0 ? static_cast<int>(-ret) : status);
+        return event;
+    }
+
+    event.context = context_ptr<void>{entry.op_context};
+    event.error = make_error_code_from_fi_errno(entry.err);
+    event.flags = entry.flags;
+    event.bytes_transferred = entry.len;
+    event.len = entry.len;
+    event.tag = entry.tag;
+    event.data = entry.data;
+    event.error_info = {entry.prov_errno, entry.err_data, entry.err_data_size};
+    return event;
 }
 
 inline auto completion_queue::read() const -> result<completion_event> {

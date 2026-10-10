@@ -192,6 +192,7 @@ public:
     [[nodiscard]] auto impl_valid() const noexcept -> bool;
 
 private:
+    [[nodiscard]] auto read_error(int status) const -> completion_event;
     impl_ptr impl_;
     friend class endpoint;
 };
