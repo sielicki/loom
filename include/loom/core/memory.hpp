@@ -164,20 +164,20 @@ public:
     auto operator=(memory_region&&) noexcept -> memory_region&;
 
     [[nodiscard("memory registration result must be checked for errors")]]
-    static auto register_memory(domain& dom,
+    static auto register_memory(const domain& dom,
                                 std::span<std::byte> buffer,
                                 mr_access access,
                                 memory_resource* resource = nullptr) -> result<memory_region>;
 
     [[nodiscard("memory registration result must be checked for errors")]]
-    static auto register_memory(domain& dom,
+    static auto register_memory(const domain& dom,
                                 void* addr,
                                 std::size_t length,
                                 mr_access access,
                                 memory_resource* resource = nullptr) -> result<memory_region>;
 
     [[nodiscard("hmem registration result must be checked for errors")]]
-    static auto register_hmem(domain& dom,
+    static auto register_hmem(const domain& dom,
                               void* addr,
                               std::size_t length,
                               mr_access access,
@@ -185,7 +185,7 @@ public:
                               memory_resource* resource = nullptr) -> result<memory_region>;
 
     [[nodiscard("dmabuf registration result must be checked for errors")]]
-    static auto register_dmabuf(domain& dom,
+    static auto register_dmabuf(const domain& dom,
                                 void* addr,
                                 std::size_t length,
                                 mr_access access,

@@ -89,14 +89,14 @@ auto memory_region::impl_valid() const noexcept -> bool {
     return impl_ && impl_->mr;
 }
 
-auto memory_region::register_memory(domain& dom,
+auto memory_region::register_memory(const domain& dom,
                                     std::span<std::byte> buffer,
                                     mr_access access,
                                     memory_resource* resource) -> result<memory_region> {
     return register_memory(dom, buffer.data(), buffer.size(), access, resource);
 }
 
-auto memory_region::register_memory(domain& dom,
+auto memory_region::register_memory(const domain& dom,
                                     void* addr,
                                     std::size_t length,
                                     mr_access access,
@@ -122,7 +122,7 @@ auto memory_region::register_memory(domain& dom,
     return memory_region{std::move(impl)};
 }
 
-auto memory_region::register_hmem(domain& dom,
+auto memory_region::register_hmem(const domain& dom,
                                   void* addr,
                                   std::size_t length,
                                   mr_access access,
@@ -195,7 +195,7 @@ auto memory_region::register_hmem(domain& dom,
     return memory_region{std::move(impl)};
 }
 
-auto memory_region::register_dmabuf(domain& dom,
+auto memory_region::register_dmabuf(const domain& dom,
                                     void* addr,
                                     std::size_t length,
                                     mr_access access,

@@ -187,11 +187,11 @@ public:
     [[nodiscard]] auto get_local_address() const -> result<address>;
     [[nodiscard]] auto get_peer_address() const -> result<address>;
 
-    [[nodiscard]] auto bind_cq(completion_queue& cq, cq_bind_flags flags) -> void_result;
+    [[nodiscard]] auto bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result;
     [[nodiscard]] auto bind_tx_cq(completion_queue& cq) -> void_result;
     [[nodiscard]] auto bind_rx_cq(completion_queue& cq) -> void_result;
     [[nodiscard]] auto bind_eq(event_queue& eq, std::uint64_t flags = 0) -> void_result;
-    [[nodiscard]] auto bind_av(address_vector& av, std::uint64_t flags = 0) -> void_result;
+    [[nodiscard]] auto bind_av(const address_vector& av, std::uint64_t flags = 0) -> void_result;
     [[nodiscard]] auto bind_counter(counter& cntr, std::uint64_t flags = 0) -> void_result;
     [[nodiscard]] auto bind_stx(shared_tx_context& stx) -> void_result;
     [[nodiscard]] auto bind_srx(shared_rx_context& srx) -> void_result;

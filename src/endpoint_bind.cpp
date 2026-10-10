@@ -29,7 +29,7 @@ struct endpoint_impl {
 };
 }  // namespace detail
 
-auto endpoint::bind_cq(completion_queue& cq, cq_bind_flags flags) -> void_result {
+auto endpoint::bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -76,7 +76,7 @@ auto endpoint::bind_eq(event_queue& eq, std::uint64_t flags) -> void_result {
     return make_success();
 }
 
-auto endpoint::bind_av(address_vector& av, std::uint64_t flags) -> void_result {
+auto endpoint::bind_av(const address_vector& av, std::uint64_t flags) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
