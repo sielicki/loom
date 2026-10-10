@@ -34,6 +34,8 @@ using native_address = std::variant<sockaddr_in, sockaddr_in6>;
         sockaddr_in6 native{};
         native.sin6_family = AF_INET6;
         native.sin6_port = htons(ip->port());
+        native.sin6_scope_id = ip->scope_id();
+        native.sin6_flowinfo = htonl(ip->flow_info());
         for (std::size_t i = 0; i < ip->segments().size(); ++i) {
             const auto segment = htons(ip->segments()[i]);
             std::memcpy(native.sin6_addr.s6_addr + i * sizeof(segment), &segment, sizeof(segment));

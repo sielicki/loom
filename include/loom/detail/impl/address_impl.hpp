@@ -47,7 +47,10 @@ inline auto address_from_raw(const void* data, std::size_t len, address_format f
                 segments[i] = static_cast<std::uint16_t>((hi << 8) | lo);
             }
             auto port = ntohs(sa6.sin6_port);
-            return ipv6_address{std::span<const std::uint16_t, 8>{segments}, port};
+            return ipv6_address{std::span<const std::uint16_t, 8>{segments},
+                                port,
+                                sa6.sin6_scope_id,
+                                ntohl(sa6.sin6_flowinfo)};
         }
 
         case address_format::ib: {

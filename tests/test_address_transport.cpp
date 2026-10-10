@@ -88,7 +88,7 @@ TEST_CASE("address insertion encodes IPv6 and rejects format mismatches", "[addr
     provider native;
     native.address_size = sizeof(sockaddr_in6);
     const std::array<std::uint16_t, 8> segments{0x2001, 0xdb8, 0, 0, 0, 0, 0, 42};
-    const loom::address addr = loom::ipv6_address{segments, 9876};
+    const loom::address addr = loom::ipv6_address{segments, 9876, 7, 0x12345};
     auto av = native.vector(loom::address_format::inet6);
     REQUIRE(av.insert(addr));
     sockaddr_in6 received{};
@@ -98,6 +98,10 @@ TEST_CASE("address insertion encodes IPv6 and rejects format mismatches", "[addr
     REQUIRE(received.sin6_addr.s6_addr[0] == 0x20);
     REQUIRE(received.sin6_addr.s6_addr[1] == 0x01);
     REQUIRE(received.sin6_addr.s6_addr[15] == 42);
+    REQUIRE(received.sin6_scope_id == 7);
+    REQUIRE(ntohl(received.sin6_flowinfo) == 0x12345);
+    REQUIRE(loom::address_from_raw(&received, sizeof(received), loom::address_format::inet6) ==
+            addr);
     auto mismatched = av.insert(loom::ipv4_address{0x7F000001U, 9876});
     REQUIRE_FALSE(mismatched);
     REQUIRE(mismatched.error() == loom::errc::invalid_argument);

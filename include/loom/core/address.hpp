@@ -209,8 +209,12 @@ public:
      */
     template <typename R>
         requires std::ranges::contiguous_range<R> &&
-                 std::same_as<std::ranges::range_value_t<R>, segment_type>
-    constexpr explicit ipv6_address(R&& segments, std::uint16_t port = 0) noexcept : port_(port) {
+                     std::same_as<std::ranges::range_value_t<R>, segment_type>
+    constexpr explicit ipv6_address(R&& segments,
+                                    std::uint16_t port = 0,
+                                    std::uint32_t scope_id = 0,
+                                    std::uint32_t flow_info = 0) noexcept
+        : port_(port), scope_id_(scope_id), flow_info_(flow_info) {
         std::ranges::copy_n(std::ranges::begin(segments), segment_count, segments_.begin());
     }
 
@@ -220,8 +224,10 @@ public:
      * @param port Optional port number.
      */
     constexpr explicit ipv6_address(std::span<const segment_type, segment_count> segments,
-                                    std::uint16_t port = 0) noexcept
-        : port_(port) {
+                                    std::uint16_t port = 0,
+                                    std::uint32_t scope_id = 0,
+                                    std::uint32_t flow_info = 0) noexcept
+        : port_(port), scope_id_(scope_id), flow_info_(flow_info) {
         std::ranges::copy(segments, segments_.begin());
     }
 
@@ -239,6 +245,9 @@ public:
      * @return The port number.
      */
     [[nodiscard]] constexpr auto port() const noexcept -> std::uint16_t { return port_; }
+
+    [[nodiscard]] constexpr auto scope_id() const noexcept -> std::uint32_t { return scope_id_; }
+    [[nodiscard]] constexpr auto flow_info() const noexcept -> std::uint32_t { return flow_info_; }
 
     /**
      * @brief Checks if this is the IPv6 loopback address (::1).
@@ -270,6 +279,8 @@ public:
 private:
     std::array<segment_type, segment_count> segments_{};
     std::uint16_t port_{};
+    std::uint32_t scope_id_{};
+    std::uint32_t flow_info_{};
 };
 
 static_assert(trivially_serializable<ipv6_address>);
