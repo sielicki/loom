@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
+#include <rdma/fi_errno.h>
+
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -16,25 +18,25 @@ namespace loom {
  * @brief Error codes for loom operations mapped from libfabric errors.
  */
 enum class errc {
-    success = 0,                  ///< Operation completed successfully
-    no_data = -61,                ///< No data available
-    message_too_long = -90,       ///< Message too long for buffer
-    no_space = -28,               ///< No space left on device
-    again = -11,                  ///< Resource temporarily unavailable
-    invalid_argument = -22,       ///< Invalid argument
-    io_error = -5,                ///< I/O error
-    not_supported = -95,          ///< Operation not supported
-    busy = -16,                   ///< Device or resource busy
-    canceled = -125,              ///< Operation canceled
-    no_memory = -12,              ///< Out of memory
-    already = -114,               ///< Connection already in progress
-    bad_flags = -1001,            ///< Invalid flags specified
-    no_entry = -2,                ///< No such entry
-    not_connected = -107,         ///< Transport endpoint not connected
-    address_in_use = -98,         ///< Address already in use
-    connection_refused = -111,    ///< Connection refused
-    address_not_available = -99,  ///< Address not available
-    timeout = -110,               ///< Connection timed out
+    success = 0,                                ///< Operation completed successfully
+    no_data = -FI_ENODATA,                      ///< No data available
+    message_too_long = -FI_EMSGSIZE,            ///< Message too long for buffer
+    no_space = -FI_ENOSPC,                      ///< No space left on device
+    again = -FI_EAGAIN,                         ///< Resource temporarily unavailable
+    invalid_argument = -FI_EINVAL,              ///< Invalid argument
+    io_error = -FI_EIO,                         ///< I/O error
+    not_supported = -FI_EOPNOTSUPP,             ///< Operation not supported
+    busy = -FI_EBUSY,                           ///< Device or resource busy
+    canceled = -FI_ECANCELED,                   ///< Operation canceled
+    no_memory = -FI_ENOMEM,                     ///< Out of memory
+    already = -FI_EALREADY,                     ///< Connection already in progress
+    bad_flags = -FI_EBADFLAGS,                  ///< Invalid flags specified
+    no_entry = -FI_ENOENT,                      ///< No such entry
+    not_connected = -FI_ENOTCONN,               ///< Transport endpoint not connected
+    address_in_use = -FI_EADDRINUSE,            ///< Address already in use
+    connection_refused = -FI_ECONNREFUSED,      ///< Connection refused
+    address_not_available = -FI_EADDRNOTAVAIL,  ///< Address not available
+    timeout = -FI_ETIMEDOUT,                    ///< Connection timed out
 };
 
 /**

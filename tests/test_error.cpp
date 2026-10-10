@@ -67,6 +67,10 @@ TEST_CASE("make_error_code_from_fi_errno", "[error]") {
     const auto provider_error = loom::make_error_code_from_fi_errno(FI_ENOMEM);
     REQUIRE(provider_error == loom::errc::no_memory);
     REQUIRE(provider_error.message() == fi_strerror(FI_ENOMEM));
+
+    const auto flags_error = loom::make_error_code_from_fi_errno(FI_EBADFLAGS);
+    REQUIRE(flags_error == loom::errc::bad_flags);
+    REQUIRE(loom::make_error_code(loom::errc::bad_flags).message() == fi_strerror(FI_EBADFLAGS));
 }
 
 TEST_CASE("result success", "[error]") {
