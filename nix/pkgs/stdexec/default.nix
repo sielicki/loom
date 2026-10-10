@@ -31,11 +31,11 @@ stdenv.mkDerivation rec {
 
         # Create minimal CMake config for find_package
         mkdir -p $out/lib/cmake/stdexec
-        cat > $out/lib/cmake/stdexec/stdexecConfig.cmake << 'EOF'
+        cat > $out/lib/cmake/stdexec/stdexecConfig.cmake << EOF
     if(NOT TARGET stdexec::stdexec)
       add_library(stdexec::stdexec INTERFACE IMPORTED)
       target_include_directories(stdexec::stdexec INTERFACE
-        $<INSTALL_INTERFACE:include>
+        "$out/include"
       )
       set_target_properties(stdexec::stdexec PROPERTIES
         INTERFACE_COMPILE_FEATURES "cxx_std_20"

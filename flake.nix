@@ -265,6 +265,10 @@
               # Clang build (for all platforms)
               loom-clang = pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric stdexec; };
 
+              loom-stdexec = loom.overrideAttrs (old: {
+                cmakeFlags = old.cmakeFlags ++ [ "-DLOOM_USE_STDEXEC=ON" ];
+              });
+
               # Build with Asio integration
               loom-asio =
                 if isDarwin
@@ -298,6 +302,7 @@
           # Development shells
           devShells =
             {
+              stdexec = self'.devShells.default;
               default =
                 let
                   stdenv =
@@ -592,6 +597,8 @@
 
               # Build check with Asio integration
               loom-build-asio = self'.packages.loom-asio;
+
+              loom-build-stdexec = self'.packages.loom-stdexec;
 
               # Formatting check (treefmt)
               formatting = config.treefmt.build.check self;
