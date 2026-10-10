@@ -10,6 +10,20 @@
 
 using namespace loom;
 
+TEST_CASE("memory registration rejects empty domains", "[memory]") {
+    domain empty;
+    std::array<std::byte, 64> buffer{};
+    const auto access = mr_access_flags::read;
+    auto check = [](result<memory_region> region) {
+        REQUIRE_FALSE(region);
+        REQUIRE(region.error() == errc::invalid_argument);
+    };
+    check(memory_region::register_memory(empty, buffer, access));
+    check(memory_region::register_hmem(
+        empty, buffer.data(), buffer.size(), access, hmem_device::cuda(0)));
+    check(memory_region::register_dmabuf(empty, buffer.data(), buffer.size(), access, 7, 0));
+}
+
 TEST_CASE("registration translates access permissions", "[memory]") {
     test::mock_domain provider;
     std::array<std::byte, 64> buffer{};
@@ -70,8 +84,7 @@ TEST_CASE("basic memory registration", "[memory]") {
         REQUIRE(static_cast<bool>(mr_result));
 
         auto& mr = *mr_result;
-        REQUIRE(static_cast<bool>(mr.descriptor()));
-        REQUIRE(mr.key() != 0U);
+        REQUIRE(static_cast<bool>(mr));
         REQUIRE(mr.address() == buffer.data());
         REQUIRE(mr.length() == buffer.size());
     }

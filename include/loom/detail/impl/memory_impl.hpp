@@ -98,6 +98,9 @@ inline auto memory_region::register_memory(const domain& dom,
                                            std::size_t length,
                                            mr_access access,
                                            memory_resource* resource) -> result<memory_region> {
+    if (!dom) {
+        return make_error_result<memory_region>(errc::invalid_argument);
+    }
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fid_mr* mr = nullptr;
@@ -125,6 +128,9 @@ inline auto memory_region::register_hmem(const domain& dom,
                                          mr_access access,
                                          hmem_device device,
                                          memory_resource* resource) -> result<memory_region> {
+    if (!dom) {
+        return make_error_result<memory_region>(errc::invalid_argument);
+    }
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fi_mr_attr mr_attr{};
@@ -199,6 +205,9 @@ inline auto memory_region::register_dmabuf(const domain& dom,
                                            int fd,
                                            std::uint64_t offset,
                                            memory_resource* resource) -> result<memory_region> {
+    if (!dom) {
+        return make_error_result<memory_region>(errc::invalid_argument);
+    }
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fi_mr_dmabuf dmabuf{};
