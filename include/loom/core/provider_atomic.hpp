@@ -98,7 +98,7 @@ struct fetch_add_op {
     endpoint* ep;              ///< Target endpoint
     T operand;                 ///< Value to add
     T* result;                 ///< Pointer to store fetched value
-    memory_region* mr_result;  ///< Memory region for result
+    memory_region* mr_result;  ///< Optional registration for result
     remote_memory remote;      ///< Remote memory location
     void* context;             ///< Operation context
 
@@ -107,7 +107,19 @@ struct fetch_add_op {
      * @return Success or error result.
      */
     [[nodiscard]] auto execute_native() const -> loom::result<void> {
-        return atomic::fetch_add(*ep, operand, result, *mr_result, remote, context);
+        if (!ep || !result) {
+            return make_error_result<void>(errc::invalid_argument);
+        }
+        return atomic::fetch(*ep,
+                             atomic::operation::sum,
+                             atomic::get_datatype<T>(),
+                             &operand,
+                             result,
+                             1,
+                             nullptr,
+                             mr_result,
+                             remote,
+                             context);
     }
 
     /**
@@ -141,6 +153,9 @@ struct atomic_add_op {
      * @return Success or error result.
      */
     [[nodiscard]] auto execute_native() const -> loom::result<void> {
+        if (!ep) {
+            return make_error_result<void>(errc::invalid_argument);
+        }
         return atomic::add(*ep, operand, remote, context);
     }
 
@@ -168,7 +183,7 @@ struct compare_swap_op {
     T compare_value;        ///< Expected value for comparison
     T swap_value;           ///< New value to write if comparison succeeds
     T* old_value;           ///< Pointer to store original value
-    memory_region* mr_old;  ///< Memory region for old value
+    memory_region* mr_old;  ///< Optional registration for old value
     remote_memory remote;   ///< Remote memory location
     void* context;          ///< Operation context
 
@@ -177,7 +192,19 @@ struct compare_swap_op {
      * @return Success or error result.
      */
     [[nodiscard]] auto execute_native() const -> loom::result<void> {
-        return atomic::cas(*ep, compare_value, swap_value, old_value, *mr_old, remote, context);
+        if (!ep || !old_value) {
+            return make_error_result<void>(errc::invalid_argument);
+        }
+        return atomic::compare_swap(*ep,
+                                    atomic::get_datatype<T>(),
+                                    &compare_value,
+                                    &swap_value,
+                                    old_value,
+                                    1,
+                                    nullptr,
+                                    mr_old,
+                                    remote,
+                                    context);
     }
 
     /**
@@ -204,7 +231,7 @@ struct generic_fetch_op {
     atomic::operation op;      ///< The atomic operation to perform
     T operand;                 ///< Operand for the operation
     T* result;                 ///< Pointer to store fetched value
-    memory_region* mr_result;  ///< Memory region for result
+    memory_region* mr_result;  ///< Optional registration for result
     remote_memory remote;      ///< Remote memory location
     void* context;             ///< Operation context
 
@@ -213,6 +240,9 @@ struct generic_fetch_op {
      * @return Success or error result.
      */
     [[nodiscard]] auto execute_native() const -> loom::result<void> {
+        if (!ep || !result) {
+            return make_error_result<void>(errc::invalid_argument);
+        }
         return atomic::fetch(*ep,
                              op,
                              atomic::get_datatype<T>(),

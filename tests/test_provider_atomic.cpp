@@ -247,6 +247,55 @@ TEST_CASE("provider atomic helpers borrow caller operand storage", "[provider_at
     REQUIRE(native.comparison == (kind == 2 ? &expected : nullptr));
 }
 
+TEST_CASE("provider atomic descriptors allow unregistered results", "[provider_atomic]") {
+    const auto kind = GENERATE(0, 1, 2);
+    atomic_transport native;
+    auto ep = native.endpoint();
+    std::uint64_t previous{};
+    const loom::remote_memory remote{0x1000, 1, sizeof(previous)};
+    auto invoke = [&](const auto& operation) {
+        REQUIRE(operation.execute_native());
+        native.complete();
+        REQUIRE(previous == 42);
+        REQUIRE(native.remote_value == (kind == 0 ? 44 : 84));
+    };
+    switch (kind) {
+        case 0:
+            invoke(loom::fetch_add_op<std::uint64_t>{&ep, 2, &previous, nullptr, remote, nullptr});
+            break;
+        case 1:
+            invoke(loom::compare_swap_op<std::uint64_t>{
+                &ep, 42, 84, &previous, nullptr, remote, nullptr});
+            break;
+        case 2:
+            invoke(loom::generic_fetch_op<std::uint64_t>{
+                &ep, loom::atomic::operation::prod, 2, &previous, nullptr, remote, nullptr});
+            break;
+    }
+}
+
+TEST_CASE("provider atomic descriptors reject missing required storage", "[provider_atomic]") {
+    const auto legacy_staging = GENERATE(false, true);
+    atomic_transport native;
+    auto ep = native.endpoint();
+    loom::memory_region mr;
+    auto reject = [&](const auto& operation) {
+        auto result =
+            legacy_staging ? operation.execute_staged(mr, {}) : operation.execute_native();
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() == loom::errc::invalid_argument);
+    };
+    reject(loom::atomic_add_op<std::uint64_t>{});
+    reject(loom::fetch_add_op<std::uint64_t>{});
+    reject(loom::compare_swap_op<std::uint64_t>{});
+    reject(loom::generic_fetch_op<std::uint64_t>{});
+    reject(loom::fetch_add_op<std::uint64_t>{&ep, 2, nullptr, nullptr, {}, nullptr});
+    reject(loom::compare_swap_op<std::uint64_t>{&ep, 42, 84, nullptr, nullptr, {}, nullptr});
+    reject(loom::generic_fetch_op<std::uint64_t>{
+        &ep, loom::atomic::operation::sum, 2, nullptr, nullptr, {}, nullptr});
+    REQUIRE(native.atomic_calls == 0);
+}
+
 TEST_CASE("atomic_add_op has execute_native and execute_staged", "[provider_atomic]") {
     using op_type = loom::atomic_add_op<std::uint64_t>;
 
