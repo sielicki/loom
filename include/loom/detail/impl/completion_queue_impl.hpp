@@ -271,10 +271,12 @@ inline auto completion_queue::get_progress_policy() const noexcept -> runtime_pr
 }
 
 inline auto completion_queue::supports_blocking_wait() const noexcept -> bool {
-    if (!impl_) {
+    if (!impl_ || !impl_->cq) {
         return false;
     }
-    return impl_->progress.supports_blocking_wait();
+    fi_wait_obj object = FI_WAIT_NONE;
+    return ::fi_control(&impl_->cq->fid, FI_GETWAITOBJ, &object) == 0 &&
+           object != FI_WAIT_NONE && object != FI_WAIT_UNSPEC;
 }
 
 inline auto completion_queue::requires_manual_progress() const noexcept -> bool {
@@ -289,8 +291,17 @@ inline auto completion_queue::get_wait_fd() const -> result<int> {
         return make_error_result<int>(errc::invalid_argument);
     }
 
+    fi_wait_obj object = FI_WAIT_NONE;
+    int ret = ::fi_control(&impl_->cq->fid, FI_GETWAITOBJ, &object);
+    if (ret != 0) {
+        return make_error_result_from_fi_errno<int>(-ret);
+    }
+    if (object != FI_WAIT_FD) {
+        return make_error_result<int>(errc::not_supported);
+    }
+
     int fd = -1;
-    int ret = ::fi_control(&impl_->cq->fid, FI_GETWAIT, &fd);
+    ret = ::fi_control(&impl_->cq->fid, FI_GETWAIT, &fd);
     if (ret != 0) {
         return make_error_result_from_fi_errno<int>(-ret);
     }

@@ -9,9 +9,24 @@ struct mock_cq {
     int read_status{-FI_EAVAIL};
     int error_reads{};
     int context{};
+    fi_wait_obj wait_object{FI_WAIT_FD};
+    bool wait_requested{};
     fi_ops ops{
         .size = sizeof(fi_ops),
         .close = [](fid*) { return 0; },
+        .control = [](fid* handle, int command, void* output) {
+            auto& self = *static_cast<mock_cq*>(handle->context);
+            if (command == FI_GETWAITOBJ) {
+                *static_cast<fi_wait_obj*>(output) = self.wait_object;
+                return 0;
+            }
+            if (command == FI_GETWAIT) {
+                self.wait_requested = true;
+                *static_cast<int*>(output) = 23;
+                return 0;
+            }
+            return -FI_ENOSYS;
+        },
     };
     fi_ops_cq cq_ops{
         .size = sizeof(fi_ops_cq),
@@ -60,4 +75,18 @@ TEST_CASE("queue read failures do not consume operation errors", "[completion_qu
     REQUIRE(event);
     REQUIRE(event->error == loom::make_error_code_from_fi_errno(FI_EINVAL));
     REQUIRE(provider.error_reads == 0);
+}
+
+TEST_CASE("wait descriptors require a file descriptor wait object", "[completion_queue]") {
+    mock_cq provider;
+    provider.wait_object = FI_WAIT_POLLFD;
+    REQUIRE_FALSE(provider.queue.get_wait_fd());
+    REQUIRE_FALSE(provider.wait_requested);
+    REQUIRE(provider.queue.supports_blocking_wait());
+
+    provider.wait_object = FI_WAIT_NONE;
+    REQUIRE_FALSE(provider.queue.supports_blocking_wait());
+    provider.wait_object = FI_WAIT_FD;
+    REQUIRE(provider.queue.get_wait_fd().value() == 23);
+    REQUIRE(provider.wait_requested);
 }
