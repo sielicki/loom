@@ -75,7 +75,7 @@ auto completion_queue::create(const domain& dom,
 
     cq_attr.size = attr.size.get();
     cq_attr.flags = attr.flags;
-    cq_attr.format = FI_CQ_FORMAT_DATA;
+    cq_attr.format = FI_CQ_FORMAT_TAGGED;
     cq_attr.wait_obj = attr.wait_obj ? FI_WAIT_UNSPEC : FI_WAIT_NONE;
 
     ::fid_cq* cq = nullptr;
@@ -104,7 +104,7 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
         return std::nullopt;
     }
 
-    ::fi_cq_data_entry entry{};
+    ::fi_cq_tagged_entry entry{};
     ssize_t ret = ::fi_cq_read(impl_->cq, &entry, 1);
 
     if (ret == -FI_EAGAIN) {
@@ -126,6 +126,7 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
     event.flags = entry.flags;
     event.len = entry.len;
     event.data = entry.data;
+    event.tag = entry.tag;
 
     return event;
 }
@@ -136,7 +137,7 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
         return make_error_result<completion_event>(errc::invalid_argument);
     }
 
-    ::fi_cq_data_entry entry{};
+    ::fi_cq_tagged_entry entry{};
 
     int timeout_ms = -1;
     if (timeout.has_value()) {
@@ -160,6 +161,7 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
     event.flags = entry.flags;
     event.len = entry.len;
     event.data = entry.data;
+    event.tag = entry.tag;
 
     return event;
 }
@@ -170,7 +172,7 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
     }
 
     constexpr std::size_t max_batch_size = 64;
-    std::array<::fi_cq_data_entry, max_batch_size> fi_entries{};
+    std::array<::fi_cq_tagged_entry, max_batch_size> fi_entries{};
 
     auto batch_size = std::min(events.size(), max_batch_size);
     ssize_t ret = ::fi_cq_read(impl_->cq, fi_entries.data(), batch_size);
@@ -192,6 +194,7 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
         events[i].flags = fi_entries[i].flags;
         events[i].len = fi_entries[i].len;
         events[i].data = fi_entries[i].data;
+        events[i].tag = fi_entries[i].tag;
     }
 
     return count;

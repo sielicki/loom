@@ -20,7 +20,7 @@ struct mock_cq {
             if (self.read_status != 1) {
                 return self.read_status;
             }
-            *static_cast<fi_cq_data_entry*>(buffer) = {.op_context = &self.context, .len = 7};
+            *static_cast<fi_cq_tagged_entry*>(buffer) = {.op_context = &self.context, .len = 7, .tag = 99};
             self.read_status = -FI_EAGAIN;
             return 1;
         },
@@ -49,7 +49,7 @@ TEST_CASE("batch polling drains errors and resumes completions", "[completion_qu
     REQUIRE(provider.queue.poll_batch(events) == 1);
     REQUIRE_FALSE(events.front().has_error());
     REQUIRE(events.front().bytes_transferred == 7);
-    REQUIRE(events.front().tag == 0);
+    REQUIRE(events.front().tag == 99);
     REQUIRE(provider.queue.poll_batch(events) == 0);
 }
 
