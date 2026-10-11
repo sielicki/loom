@@ -916,6 +916,24 @@ auto main() -> int {
 }
 ```
 
+Messaging senders also carry explicit peers and registration descriptors:
+
+```cpp
+auto messages = loom::async(ep);
+auto send = messages.send_to(buffer, local_mr.descriptor(), peer, &cq);
+auto recv = messages.recv_from(buffer, local_mr.descriptor(), source, &cq);
+auto tagged_send = messages.tagged_send_to(buffer, local_mr.descriptor(), peer, 42, &cq);
+auto tagged_recv = messages.tagged_recv_from(buffer, local_mr.descriptor(), source, 42, 0, &cq);
+```
+
+Each sender copies the descriptor and address; the endpoint, CQ, buffer, and
+registration remain borrowed through completion. Use `fabric_addrs::unspecified`
+for a connected destination or an unrestricted receive. A specific receive
+source requires negotiated directed-receive support for that message type.
+An empty descriptor is valid only when the selected memory-registration mode
+allows it. Allocation failures during message preparation report
+`errc::no_memory` through the receiver.
+
 #### RMA Operations with Senders
 
 Use `read_from` and `write_to` for registered buffers and explicit RDM

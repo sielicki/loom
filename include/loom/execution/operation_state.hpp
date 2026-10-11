@@ -13,6 +13,7 @@
 #include <rdma/fabric.h>
 
 #include <cstddef>
+#include <new>
 #include <optional>
 #include <span>
 #include <system_error>
@@ -116,6 +117,16 @@ protected:
         return true;
     }
 
+    template <typename Submission>
+    void submit(Submission&& submission) noexcept {
+        try {
+            if (auto result = std::forward<Submission>(submission)(); !result)
+                complete_error(result.error());
+        } catch (const std::bad_alloc&) {
+            complete_error(make_error_code(errc::no_memory));
+        }
+    }
+
     /**
      * @brief Handles successful completion.
      * @param bytes_transferred Number of bytes transferred.
@@ -188,8 +199,11 @@ public:
     send_operation_state(endpoint* ep,
                          std::span<const std::byte> buffer,
                          completion_queue* cq,
-                         Receiver receiver) noexcept
-        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), cq_(cq) {}
+                         Receiver receiver,
+                         mr_descriptor descriptor = {},
+                         fabric_addr peer = fabric_addrs::unspecified) noexcept
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), cq_(cq), descriptor_(descriptor),
+          peer_(peer) {}
 
     /**
      * @brief Starts the send operation.
@@ -207,12 +221,14 @@ public:
             return;
         }
         const iovec buffer{const_cast<std::byte*>(buffer_.data()), buffer_.size()};
-        const msg::send_message<> message{.iov = {&buffer, 1}, .context = this->as_fi_context()};
-        auto result = msg::sendmsg<operation_defaults::inherit_without_more>(
-            *ep_, message, msg::send_flag::completion);
-        if (!result) {
-            this->complete_error(result.error());
-        }
+        const msg::send_message<> message{.iov = {&buffer, 1},
+                                          .desc = {&descriptor_, descriptor_ ? 1UZ : 0UZ},
+                                          .dest_addr = peer_,
+                                          .context = this->as_fi_context()};
+        this->submit([&] {
+            return msg::sendmsg<operation_defaults::inherit_without_more>(
+                *ep_, message, msg::send_flag::completion);
+        });
         // On success, completion will come via the completion queue
     }
 
@@ -220,6 +236,8 @@ private:
     endpoint* ep_;
     std::span<const std::byte> buffer_;
     completion_queue* cq_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
 };
 
 /**
@@ -239,8 +257,11 @@ public:
     recv_operation_state(endpoint* ep,
                          std::span<std::byte> buffer,
                          completion_queue* cq,
-                         Receiver receiver) noexcept
-        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), cq_(cq) {}
+                         Receiver receiver,
+                         mr_descriptor descriptor = {},
+                         fabric_addr peer = fabric_addrs::unspecified) noexcept
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), cq_(cq), descriptor_(descriptor),
+          peer_(peer) {}
 
     /**
      * @brief Starts the receive operation.
@@ -263,18 +284,22 @@ public:
             return;
         }
         const iovec buffer{buffer_.data(), buffer_.size()};
-        const msg::recv_message<> message{.iov = {&buffer, 1}, .context = this->as_fi_context()};
-        auto result = msg::recvmsg<operation_defaults::inherit_without_more>(
-            *ep_, message, msg::recv_flag::completion);
-        if (!result) {
-            this->complete_error(result.error());
-        }
+        const msg::recv_message<> message{.iov = {&buffer, 1},
+                                          .desc = {&descriptor_, descriptor_ ? 1UZ : 0UZ},
+                                          .src_addr = peer_,
+                                          .context = this->as_fi_context()};
+        this->submit([&] {
+            return msg::recvmsg<operation_defaults::inherit_without_more>(
+                *ep_, message, msg::recv_flag::completion);
+        });
     }
 
 private:
     endpoint* ep_;
     std::span<std::byte> buffer_;
     completion_queue* cq_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
 };
 
 /**
@@ -292,8 +317,11 @@ public:
                                 std::span<const std::byte> buffer,
                                 std::uint64_t tag,
                                 completion_queue* cq,
-                                Receiver receiver) noexcept
-        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), tag_(tag), cq_(cq) {}
+                                Receiver receiver,
+                                mr_descriptor descriptor = {},
+                                fabric_addr peer = fabric_addrs::unspecified) noexcept
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), tag_(tag), cq_(cq),
+          descriptor_(descriptor), peer_(peer) {}
 
     void start() & noexcept {
         if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
@@ -305,13 +333,15 @@ public:
             return;
         }
         const iovec buffer{const_cast<std::byte*>(buffer_.data()), buffer_.size()};
-        const msg::tagged_send_message<> message{
-            .iov = {&buffer, 1}, .tag = tag_, .context = this->as_fi_context()};
-        auto result = msg::tagged_sendmsg<operation_defaults::inherit_without_more>(
-            *ep_, message, msg::send_flag::completion);
-        if (!result) {
-            this->complete_error(result.error());
-        }
+        const msg::tagged_send_message<> message{.iov = {&buffer, 1},
+                                                 .desc = {&descriptor_, descriptor_ ? 1UZ : 0UZ},
+                                                 .dest_addr = peer_,
+                                                 .tag = tag_,
+                                                 .context = this->as_fi_context()};
+        this->submit([&] {
+            return msg::tagged_sendmsg<operation_defaults::inherit_without_more>(
+                *ep_, message, msg::send_flag::completion);
+        });
     }
 
 private:
@@ -319,6 +349,8 @@ private:
     std::span<const std::byte> buffer_;
     std::uint64_t tag_;
     completion_queue* cq_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
 };
 
 /**
@@ -340,9 +372,11 @@ public:
                                 std::uint64_t tag,
                                 std::uint64_t ignore,
                                 completion_queue* cq,
-                                Receiver receiver) noexcept
+                                Receiver receiver,
+                                mr_descriptor descriptor = {},
+                                fabric_addr peer = fabric_addrs::unspecified) noexcept
         : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), tag_(tag), ignore_(ignore),
-          cq_(cq) {}
+          cq_(cq), descriptor_(descriptor), peer_(peer) {}
 
     void start() & noexcept {
         if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
@@ -360,13 +394,16 @@ public:
             return;
         }
         const iovec buffer{buffer_.data(), buffer_.size()};
-        const msg::tagged_recv_message<> message{
-            .iov = {&buffer, 1}, .tag = tag_, .ignore = ignore_, .context = this->as_fi_context()};
-        auto result = msg::tagged_recvmsg<operation_defaults::inherit_without_more>(
-            *ep_, message, msg::recv_flag::completion);
-        if (!result) {
-            this->complete_error(result.error());
-        }
+        const msg::tagged_recv_message<> message{.iov = {&buffer, 1},
+                                                 .desc = {&descriptor_, descriptor_ ? 1UZ : 0UZ},
+                                                 .src_addr = peer_,
+                                                 .tag = tag_,
+                                                 .ignore = ignore_,
+                                                 .context = this->as_fi_context()};
+        this->submit([&] {
+            return msg::tagged_recvmsg<operation_defaults::inherit_without_more>(
+                *ep_, message, msg::recv_flag::completion);
+        });
     }
 
 private:
@@ -375,6 +412,8 @@ private:
     std::uint64_t tag_;
     std::uint64_t ignore_;
     completion_queue* cq_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
 };
 
 /**

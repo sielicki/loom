@@ -53,7 +53,10 @@ struct provider {
     std::vector<void*> pending;
     std::vector<void*> deferred;
     bool fail{};
+    bool allocation_failure{};
     bool selective_completion{};
+    fi_addr_t expected_message_peer{FI_ADDR_UNSPEC};
+    void* expected_message_descriptor{};
     std::uint64_t submitted_flags{};
     std::size_t completion_length{7};
     void* expected_result{};
@@ -261,10 +264,18 @@ struct provider {
     }
     auto post_message(const auto& message, std::uint64_t flags) -> ssize_t {
         submitted_flags = flags;
+        submitted_context = message.context;
         REQUIRE(message.iov_count == 1);
-        REQUIRE(message.addr == FI_ADDR_UNSPEC);
+        REQUIRE(message.addr == expected_message_peer);
         REQUIRE(message.msg_iov[0].iov_len == 16);
-        REQUIRE(message.desc == nullptr);
+        if (expected_message_descriptor) {
+            REQUIRE(message.desc);
+            REQUIRE(message.desc[0] == expected_message_descriptor);
+        } else {
+            REQUIRE(message.desc == nullptr);
+        }
+        if (allocation_failure)
+            throw std::bad_alloc{};
         return post(message.context, flags);
     }
     auto post_rma(std::size_t length,
@@ -387,6 +398,56 @@ TEST_CASE("message senders request selective completions", "[execution][progress
     }
 }
 
+TEST_CASE("message senders preserve peers and registrations", "[execution][progress][message]") {
+    const auto tagged = GENERATE(false, true);
+    const auto receive = GENERATE(false, true);
+    const auto registered = GENERATE(false, true);
+    const auto explicit_peer = GENERATE(false, true);
+    const auto failure = GENERATE(0, FI_EAGAIN, FI_EIO, FI_ENOMEM);
+    provider native;
+    native.selective_completion = true;
+    native.allocation_failure = failure == FI_ENOMEM;
+    native.submission_status = native.allocation_failure ? 0 : -failure;
+    native.expected_message_peer = explicit_peer ? 19 : FI_ADDR_UNSPEC;
+    std::array<std::byte, 16> storage{};
+    fid_mr native_mr{.fid = {.ops = &native.ops}, .mem_desc = &native_mr};
+    loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(), &native_mr, storage.data(), storage.size())};
+    const auto descriptor = registered ? mr.descriptor() : loom::mr_descriptor{};
+    native.expected_message_descriptor = descriptor.raw();
+    const loom::fabric_addr peer{native.expected_message_peer};
+    completion_state state;
+    auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        REQUIRE(native.submitted_flags == (FI_COMPLETION | (receive ? 0 : FI_FENCE)));
+        if (failure) {
+            REQUIRE(state.calls == 1);
+            REQUIRE(state.error == loom::make_error_code_from_fi_errno(failure));
+            REQUIRE_FALSE(native.cq.dispatch(loom::completion_event{
+                .context = loom::context_ptr<void>{native.submitted_context}}));
+        } else {
+            REQUIRE(state.calls == 0);
+            REQUIRE(loom::execution::poll_completions(native.cq).value().completed == 1);
+            REQUIRE(state.calls == 1);
+            REQUIRE_FALSE(state.error);
+            REQUIRE(state.bytes == (receive ? native.completion_length : 0));
+        }
+        REQUIRE(native.pending.empty());
+    };
+    const auto operations = loom::async(native.ep);
+    if (tagged) {
+        if (receive)
+            run(operations.tagged_recv_from(storage, descriptor, peer, 42, 0x80, &native.cq));
+        else
+            run(operations.tagged_send_to(storage, descriptor, peer, 42, &native.cq));
+    } else if (receive) {
+        run(operations.recv_from(storage, descriptor, peer, &native.cq));
+    } else {
+        run(operations.send_to(storage, descriptor, peer, &native.cq));
+    }
+}
+
 TEST_CASE("receive senders require completion lengths", "[execution][progress][message]") {
     const auto tagged = GENERATE(false, true);
     const auto format =
@@ -430,6 +491,96 @@ TEST_CASE("receive senders require completion lengths", "[execution][progress][m
     REQUIRE(native.cq.dispatch(sent));
     REQUIRE(state.calls == 1);
     REQUIRE_FALSE(state.error);
+}
+
+TEST_CASE("message senders transfer to a registered RDM peer",
+          "[execution][progress][message][loopback]") {
+    using namespace loom;
+    const auto tagged = GENERATE(false, true);
+    const auto source_filter = GENERATE(false, true);
+    fabric_hints hints{};
+    hints.provider_name = "sockets";
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg | capability::tagged | capability::directed_recv;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Sockets provider unavailable");
+    auto fab = fabric::create(*info);
+    REQUIRE(fab);
+    auto dom = domain::create(*fab, *info);
+    REQUIRE(dom);
+    auto cq = completion_queue::create(*dom);
+    REQUIRE(cq);
+    auto av = address_vector::create(*dom);
+    REQUIRE(av);
+    std::array<endpoint, 2> endpoints;
+    std::array<fabric_addr, 2> peers;
+    for (std::size_t i = 0; i < endpoints.size(); ++i) {
+        auto ep = endpoint::create(*dom, *info);
+        REQUIRE(ep);
+        REQUIRE(
+            ep->bind_cq(*cq, cq_bind::transmit | cq_bind::recv | cq_bind::selective_completion));
+        REQUIRE(ep->bind_av(*av));
+        REQUIRE(ep->enable());
+        auto address = ep->get_local_address();
+        REQUIRE(address);
+        auto peer = av->insert(*address);
+        REQUIRE(peer);
+        peers[i] = fabric_addr{peer->value};
+        endpoints[i] = std::move(*ep);
+    }
+    std::array<std::byte, 16> outgoing;
+    std::array<std::byte, 32> incoming{};
+    outgoing.fill(std::byte{0x5a});
+    auto send_mr = memory_region::register_memory(*dom, outgoing, mr_access_flags::send);
+    REQUIRE(send_mr);
+    auto recv_mr = memory_region::register_memory(*dom, incoming, mr_access_flags::recv);
+    REQUIRE(recv_mr);
+    completion_state received;
+    const auto source = source_filter ? peers[0] : fabric_addrs::unspecified;
+    auto run = [&](auto receive_sender) {
+        auto receive = execution::connect(std::move(receive_sender), receiver{&received});
+        execution::start(receive);
+        REQUIRE(received.calls == 0);
+        auto send_and_wait = [&](auto send_sender) {
+            completion_state sent;
+            auto send = execution::connect(std::move(send_sender), receiver{&sent});
+            execution::start(send);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while ((sent.calls == 0 || received.calls == 0) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                const auto progress = execution::poll_completions(*cq);
+                if (!progress || progress->unhandled)
+                    break;
+                std::this_thread::yield();
+            }
+            if (sent.calls == 0 || received.calls == 0) {
+                // Retire native requests before destroying their borrowed storage.
+                for (auto& ep : endpoints)
+                    REQUIRE(ep.close());
+                FAIL("RDM message did not complete");
+            }
+            REQUIRE(sent.calls == 1);
+            REQUIRE_FALSE(sent.error);
+            REQUIRE(received.calls == 1);
+            REQUIRE_FALSE(received.error);
+        };
+        const auto operations = async(endpoints[0]);
+        if (tagged)
+            send_and_wait(
+                operations.tagged_send_to(outgoing, send_mr->descriptor(), peers[1], 42, &*cq));
+        else
+            send_and_wait(operations.send_to(outgoing, send_mr->descriptor(), peers[1], &*cq));
+    };
+    const auto operations = async(endpoints[1]);
+    if (tagged)
+        run(operations.tagged_recv_from(incoming, recv_mr->descriptor(), source, 42, 0, &*cq));
+    else
+        run(operations.recv_from(incoming, recv_mr->descriptor(), source, &*cq));
+    REQUIRE(received.bytes == outgoing.size());
+    REQUIRE(std::ranges::equal(outgoing, std::span{incoming}.first(outgoing.size())));
+    REQUIRE(std::ranges::all_of(std::span{incoming}.subspan(outgoing.size()),
+                                [](std::byte value) { return value == std::byte{}; }));
 }
 
 TEST_CASE("senders complete without a later batch submission", "[execution][progress][batch]") {

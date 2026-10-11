@@ -83,8 +83,12 @@ public:
      * @param buffer The data to send.
      * @param cq Pointer to the completion queue.
      */
-    send_sender(endpoint* ep, std::span<const std::byte> buffer, completion_queue* cq) noexcept
-        : ep_(ep), buffer_(buffer), cq_(cq) {}
+    send_sender(endpoint* ep,
+                std::span<const std::byte> buffer,
+                completion_queue* cq,
+                mr_descriptor descriptor = {},
+                fabric_addr peer = fabric_addrs::unspecified) noexcept
+        : ep_(ep), buffer_(buffer), cq_(cq), descriptor_(descriptor), peer_(peer) {}
 
     /**
      * @brief Connects this sender to a receiver.
@@ -95,7 +99,8 @@ public:
     template <typename Receiver>
     [[nodiscard]] auto connect(Receiver receiver) && noexcept
         -> send_operation_state<std::decay_t<Receiver>> {
-        return send_operation_state<std::decay_t<Receiver>>(ep_, buffer_, cq_, std::move(receiver));
+        return send_operation_state<std::decay_t<Receiver>>(
+            ep_, buffer_, cq_, std::move(receiver), descriptor_, peer_);
     }
 
     /**
@@ -107,6 +112,8 @@ private:
     endpoint* ep_;
     std::span<const std::byte> buffer_;
     completion_queue* cq_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
 };
 
 /**
@@ -139,13 +146,18 @@ public:
      * @param buffer The buffer to receive into.
      * @param cq Pointer to the completion queue.
      */
-    recv_sender(endpoint* ep, std::span<std::byte> buffer, completion_queue* cq) noexcept
-        : ep_(ep), buffer_(buffer), cq_(cq) {}
+    recv_sender(endpoint* ep,
+                std::span<std::byte> buffer,
+                completion_queue* cq,
+                mr_descriptor descriptor = {},
+                fabric_addr peer = fabric_addrs::unspecified) noexcept
+        : ep_(ep), buffer_(buffer), cq_(cq), descriptor_(descriptor), peer_(peer) {}
 
     template <typename Receiver>
     [[nodiscard]] auto connect(Receiver receiver) && noexcept
         -> recv_operation_state<std::decay_t<Receiver>> {
-        return recv_operation_state<std::decay_t<Receiver>>(ep_, buffer_, cq_, std::move(receiver));
+        return recv_operation_state<std::decay_t<Receiver>>(
+            ep_, buffer_, cq_, std::move(receiver), descriptor_, peer_);
     }
 
     [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_}; }
@@ -154,6 +166,8 @@ private:
     endpoint* ep_;
     std::span<std::byte> buffer_;
     completion_queue* cq_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
 };
 
 /**
@@ -181,14 +195,16 @@ public:
     tagged_send_sender(endpoint* ep,
                        std::span<const std::byte> buffer,
                        std::uint64_t tag,
-                       completion_queue* cq) noexcept
-        : ep_(ep), buffer_(buffer), tag_(tag), cq_(cq) {}
+                       completion_queue* cq,
+                       mr_descriptor descriptor = {},
+                       fabric_addr peer = fabric_addrs::unspecified) noexcept
+        : ep_(ep), buffer_(buffer), tag_(tag), cq_(cq), descriptor_(descriptor), peer_(peer) {}
 
     template <typename Receiver>
     [[nodiscard]] auto connect(Receiver receiver) && noexcept
         -> tagged_send_operation_state<std::decay_t<Receiver>> {
         return tagged_send_operation_state<std::decay_t<Receiver>>(
-            ep_, buffer_, tag_, cq_, std::move(receiver));
+            ep_, buffer_, tag_, cq_, std::move(receiver), descriptor_, peer_);
     }
 
     [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_}; }
@@ -198,6 +214,8 @@ private:
     std::span<const std::byte> buffer_;
     std::uint64_t tag_;
     completion_queue* cq_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
 };
 
 /**
@@ -227,14 +245,17 @@ public:
                        std::span<std::byte> buffer,
                        std::uint64_t tag,
                        std::uint64_t ignore,
-                       completion_queue* cq) noexcept
-        : ep_(ep), buffer_(buffer), tag_(tag), ignore_(ignore), cq_(cq) {}
+                       completion_queue* cq,
+                       mr_descriptor descriptor = {},
+                       fabric_addr peer = fabric_addrs::unspecified) noexcept
+        : ep_(ep), buffer_(buffer), tag_(tag), ignore_(ignore), cq_(cq), descriptor_(descriptor),
+          peer_(peer) {}
 
     template <typename Receiver>
     [[nodiscard]] auto connect(Receiver receiver) && noexcept
         -> tagged_recv_operation_state<std::decay_t<Receiver>> {
         return tagged_recv_operation_state<std::decay_t<Receiver>>(
-            ep_, buffer_, tag_, ignore_, cq_, std::move(receiver));
+            ep_, buffer_, tag_, ignore_, cq_, std::move(receiver), descriptor_, peer_);
     }
 
     [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_}; }
@@ -245,6 +266,8 @@ private:
     std::uint64_t tag_;
     std::uint64_t ignore_;
     completion_queue* cq_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
 };
 
 /**
@@ -272,6 +295,47 @@ public:
      * @param ep Reference to the endpoint.
      */
     explicit endpoint_sender_factory(endpoint& ep) noexcept : ep_(&ep) {}
+
+    /// Send to an explicit peer using a borrowed registration descriptor.
+    /// Buffer and registration must remain valid through completion. An empty
+    /// descriptor is permitted only when the negotiated MR mode allows it.
+    [[nodiscard]] auto send_to(std::span<const std::byte> buffer,
+                               mr_descriptor descriptor,
+                               fabric_addr peer,
+                               completion_queue* cq) const noexcept -> send_sender {
+        return send_sender(ep_, buffer, cq, descriptor, peer);
+    }
+
+    /// Receive with a borrowed registration and optional source filter.
+    /// A concrete peer requires negotiated directed-receive support; use
+    /// fabric_addrs::unspecified to accept any source. The buffer and
+    /// registration must remain valid through completion.
+    [[nodiscard]] auto recv_from(std::span<std::byte> buffer,
+                                 mr_descriptor descriptor,
+                                 fabric_addr peer,
+                                 completion_queue* cq) const noexcept -> recv_sender {
+        return recv_sender(ep_, buffer, cq, descriptor, peer);
+    }
+
+    /// Tagged send with the same peer and registration contract as send_to.
+    [[nodiscard]] auto tagged_send_to(std::span<const std::byte> buffer,
+                                      mr_descriptor descriptor,
+                                      fabric_addr peer,
+                                      std::uint64_t tag,
+                                      completion_queue* cq) const noexcept -> tagged_send_sender {
+        return tagged_send_sender(ep_, buffer, tag, cq, descriptor, peer);
+    }
+
+    /// Tagged receive with the same registration lifetime as recv_from.
+    /// A concrete source requires directed-receive support for tagged messages.
+    [[nodiscard]] auto tagged_recv_from(std::span<std::byte> buffer,
+                                        mr_descriptor descriptor,
+                                        fabric_addr peer,
+                                        std::uint64_t tag,
+                                        std::uint64_t ignore,
+                                        completion_queue* cq) const noexcept -> tagged_recv_sender {
+        return tagged_recv_sender(ep_, buffer, tag, ignore, cq, descriptor, peer);
+    }
 
     /**
      * @brief Creates a send sender.
