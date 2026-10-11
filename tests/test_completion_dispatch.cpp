@@ -367,3 +367,32 @@ TEST_CASE("endpoint close detaches bindings without disturbing other endpoints",
     REQUIRE(queue.queue.dispatch(completion(&context)));
     REQUIRE(receiver.calls == 1);
 }
+
+TEST_CASE("completion callback exceptions propagate after detachment", "[cq][dispatch]") {
+    struct callback_error {};
+    queue_fixture fixture;
+    endpoint_fixture endpoint;
+    REQUIRE(endpoint.endpoint.bind_tx_cq(fixture.queue));
+    fi_context2 context{}, other_context{};
+    auto throwing = std::make_unique<loom::completion_registration>();
+    loom::completion_registration other;
+    observer receiver;
+    REQUIRE(other.bind(
+        fixture.queue, loom::context_ptr<void>{&other_context}, &receiver, observer::complete));
+    REQUIRE(throwing->bind(
+        endpoint.endpoint,
+        loom::completion_direction::transmit,
+        loom::context_ptr<void>{&context},
+        &throwing,
+        [](void* pointer, const loom::completion_event&) {
+            // The callback may destroy itself before throwing to its progress loop.
+            static_cast<std::unique_ptr<loom::completion_registration>*>(pointer)->reset();
+            throw callback_error{};
+        }));
+    REQUIRE_THROWS_AS(fixture.queue.dispatch(completion(&context)), callback_error);
+    REQUIRE_FALSE(throwing);
+    REQUIRE_FALSE(fixture.queue.dispatch(completion(&context)));
+    // No lock or detached entry is left behind, and other work still completes.
+    REQUIRE(fixture.queue.dispatch(completion(&other_context)));
+    REQUIRE(receiver.calls == 1);
+}

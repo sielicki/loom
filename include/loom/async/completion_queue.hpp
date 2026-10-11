@@ -154,7 +154,7 @@ enum class completion_direction { transmit, receive };
 /// the provider's threading contract. Registration and dispatch do not allocate.
 class completion_registration {
 public:
-    using callback = void (*)(void*, const completion_event&) noexcept;
+    using callback = void (*)(void*, const completion_event&);
 
     completion_registration() noexcept = default;
     ~completion_registration();
@@ -250,7 +250,8 @@ public:
     /// so it may destroy its registration or submit and dispatch other work.
     /// Native reads never invoke callbacks implicitly. Route each event once;
     /// do not replay an old event after its context storage has been reused.
-    [[nodiscard]] auto dispatch(const completion_event& event) const noexcept -> bool;
+    /// Callback exceptions propagate after the registration has been detached.
+    [[nodiscard]] auto dispatch(const completion_event& event) const -> bool;
 
     [[nodiscard]] auto poll() const -> std::optional<completion_event>;
 

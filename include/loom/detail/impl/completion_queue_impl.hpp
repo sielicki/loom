@@ -244,7 +244,7 @@ void completion_registration::reset() noexcept {
     }
 }
 
-auto completion_queue::dispatch(const completion_event& event) const noexcept -> bool {
+auto completion_queue::dispatch(const completion_event& event) const -> bool {
     if (!impl_ || !event.context) {
         return false;
     }
