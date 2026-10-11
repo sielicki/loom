@@ -25,11 +25,13 @@ use tokio::sync::Notify;
 /// This wraps a [`CompletionQueue`] and provides async methods for waiting
 /// on completions without blocking the tokio runtime. Managed operations have
 /// individual result slots; raw polling and async waiting share the same router.
+/// Queues without a retrievable wait descriptor use a one-millisecond Tokio
+/// timer between empty polls. The runtime must enable time for this fallback.
 /// A context-free error fails waiting operations with [`Error::Queue`] and
 /// prevents new managed submissions. It does not retire native storage: callers
 /// must continue progress or successfully close the endpoint before buffer reuse.
 pub struct AsyncCompletionQueue {
-    async_fd: AsyncFd<RawFd>,
+    async_fd: Option<AsyncFd<RawFd>>,
     inner: CompletionQueue,
 }
 
@@ -44,13 +46,31 @@ impl AsyncCompletionQueue {
         // Create CQ with wait object enabled
         let inner = CompletionQueue::with_options(domain, size, true)?;
 
-        // Get the wait fd
-        let fd = inner.wait_fd()?;
-
-        // Wrap in AsyncFd for tokio integration
-        let async_fd = AsyncFd::new(fd).map_err(Error::Io)?;
+        // An unspecified provider wait object need not expose a descriptor.
+        // CQ polling remains valid when the native handle query is unsupported.
+        let async_fd = inner
+            .wait_fd()
+            .ok()
+            .map(|fd| AsyncFd::new(fd).map_err(Error::Io))
+            .transpose()?;
 
         Ok(Self { inner, async_fd })
+    }
+
+    /// Create a queue without requesting a native wait object.
+    /// Progress uses the Tokio timer, for providers that reject wait objects.
+    /// The runtime must enable time; each empty poll yields for one millisecond.
+    pub fn with_polling(domain: &Domain, size: usize) -> Result<Self> {
+        Ok(Self {
+            inner: CompletionQueue::with_options(domain, size, false)?,
+            async_fd: None,
+        })
+    }
+
+    /// Borrow the native wait descriptor, if this queue has one.
+    /// Descriptor ownership remains with the completion queue.
+    pub fn wait_fd(&self) -> Option<RawFd> {
+        self.async_fd.as_ref().map(AsRawFd::as_raw_fd)
     }
 
     /// Poll for a completion (non-blocking).
@@ -94,21 +114,32 @@ impl AsyncCompletionQueue {
                 return result;
             }
             self.inner.router.check_fault()?;
-            if count == PROGRESS_BUDGET || !self.inner.try_wait()? {
+            if count == PROGRESS_BUDGET {
                 tokio::task::yield_now().await;
                 continue;
             }
-            let readiness = self.async_fd.readable();
-            let notification = std::pin::pin!(notification);
-            let readiness = std::pin::pin!(readiness);
-            if let futures::future::Either::Right((ready, _)) =
-                futures::future::select(notification, readiness).await
-            {
-                let mut guard = ready.map_err(Error::Io)?;
-                // Clear readiness only after observing an empty native CQ.
-                if self.inner.progress(PROGRESS_BUDGET) < PROGRESS_BUDGET {
-                    guard.clear_ready();
+            if let Some(async_fd) = &self.async_fd {
+                if !self.inner.try_wait()? {
+                    tokio::task::yield_now().await;
+                    continue;
                 }
+                let readiness = async_fd.readable();
+                let notification = std::pin::pin!(notification);
+                let readiness = std::pin::pin!(readiness);
+                if let futures::future::Either::Right((ready, _)) =
+                    futures::future::select(notification, readiness).await
+                {
+                    let mut guard = ready.map_err(Error::Io)?;
+                    // Clear readiness only after observing an empty native CQ.
+                    if self.inner.progress(PROGRESS_BUDGET) < PROGRESS_BUDGET {
+                        guard.clear_ready();
+                    }
+                }
+            } else {
+                let delay = tokio::time::sleep(std::time::Duration::from_millis(1));
+                let notification = std::pin::pin!(notification);
+                let delay = std::pin::pin!(delay);
+                futures::future::select(notification, delay).await;
             }
         }
     }
@@ -116,13 +147,6 @@ impl AsyncCompletionQueue {
     /// Get a reference to the underlying completion queue.
     pub fn inner(&self) -> &CompletionQueue {
         &self.inner
-    }
-}
-
-// Expose the native descriptor without transferring ownership.
-impl AsRawFd for AsyncCompletionQueue {
-    fn as_raw_fd(&self) -> RawFd {
-        self.inner.wait_fd().unwrap_or(-1)
     }
 }
 
@@ -415,6 +439,22 @@ impl AsyncEndpoint {
     pub fn new(domain: &Domain, info: &FabricInfo, cq_size: usize) -> Result<Self> {
         let tx_cq = Rc::new(AsyncCompletionQueue::new(domain, cq_size)?);
         let rx_cq = Rc::new(AsyncCompletionQueue::new(domain, cq_size)?);
+        Self::from_queues(domain, info, tx_cq, rx_cq)
+    }
+
+    /// Create an endpoint whose CQs use timer-driven progress without wait objects.
+    pub fn with_polling(domain: &Domain, info: &FabricInfo, cq_size: usize) -> Result<Self> {
+        let tx_cq = Rc::new(AsyncCompletionQueue::with_polling(domain, cq_size)?);
+        let rx_cq = Rc::new(AsyncCompletionQueue::with_polling(domain, cq_size)?);
+        Self::from_queues(domain, info, tx_cq, rx_cq)
+    }
+
+    fn from_queues(
+        domain: &Domain,
+        info: &FabricInfo,
+        tx_cq: Rc<AsyncCompletionQueue>,
+        rx_cq: Rc<AsyncCompletionQueue>,
+    ) -> Result<Self> {
         let mut inner = Endpoint::new(domain, info)?;
 
         // Bind CQs
@@ -613,6 +653,41 @@ impl Drop for AsyncEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires the libfabric sockets provider"]
+    async fn queues_without_wait_descriptors_remain_async() {
+        let info = crate::query_fabric_with_hints(
+            "sockets",
+            crate::Capabilities::MSG,
+            crate::EndpointType::Rdm,
+        )
+        .unwrap();
+        let fabric = crate::Fabric::new(&info).unwrap();
+        let domain = Domain::new(&fabric, &info).unwrap();
+        let automatic = AsyncCompletionQueue::new(&domain, 16).unwrap();
+        let polling = AsyncCompletionQueue::with_polling(&domain, 16).unwrap();
+        for queue in [&automatic, &polling] {
+            assert!(queue.wait_fd().is_none());
+            // Waiting on an empty queue must yield to the executor's timer.
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(5), queue.wait_async())
+                    .await
+                    .is_err()
+            );
+            let expected = event(91, None);
+            let delivery = async {
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                queue.inner.router.route(expected);
+            };
+            let wait = tokio::time::timeout(std::time::Duration::from_secs(1), queue.wait_async());
+            let (received, ()) = futures::future::join(wait, delivery).await;
+            assert_eq!(received.unwrap().unwrap().context, expected.context);
+        }
+        let endpoint = AsyncEndpoint::with_polling(&domain, &info, 16).unwrap();
+        assert!(endpoint.tx_cq().wait_fd().is_none());
+        assert!(endpoint.rx_cq().wait_fd().is_none());
+    }
 
     #[test]
     fn native_contexts_survive_registry_growth() {

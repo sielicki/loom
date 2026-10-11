@@ -104,6 +104,15 @@ async fn main() -> loom_fabric::Result<()> {
 
 ### Submission errors and backpressure
 
+Async CQs use native wait descriptors when available. If a provider cannot
+expose its wait object, waits poll with a one-millisecond Tokio timer between
+empty reads. Enable time in the Tokio runtime. `AsyncCompletionQueue::with_polling`
+and `AsyncEndpoint::with_polling` also support providers that reject native
+wait objects during CQ creation. `AsyncCompletionQueue::wait_fd()` returns
+an optional borrowed descriptor; it replaces the unconditional `AsRawFd` API.
+An exported region on a manual-progress provider still needs an active
+progress task for its entire advertised lifetime, including while idle.
+
 `send`, `recv`, tagged submissions, and `inject` return
 `Error::Submission { code }` when libfabric rejects an operation. `code`
 retains the negative native status. `error.is_would_block()` identifies
