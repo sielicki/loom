@@ -16,6 +16,7 @@ struct queue_provider {
     int status{1};
     int error_status{1};
     int error_reads{};
+    std::uint32_t native_event{FI_CONNECTED};
     fi_wait_obj requested_wait{};
     fi_ops lifetime_ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_cq cq_ops{
@@ -44,9 +45,9 @@ struct queue_provider {
             -> ssize_t {
             auto& self = *static_cast<queue_provider*>(eq->fid.context);
             ++self.calls;
+            *type = self.native_event;
             if (self.status != 1)
                 return self.status;
-            *type = FI_CONNECTED;
             *static_cast<fi_eq_cm_entry*>(buffer) = {.fid = &eq->fid};
             return sizeof(fi_eq_cm_entry);
         },
@@ -67,9 +68,9 @@ struct queue_provider {
             auto& self = *static_cast<queue_provider*>(eq->fid.context);
             ++self.calls;
             self.timeout = timeout;
+            *type = self.native_event;
             if (self.status != 1)
                 return self.status;
-            *type = FI_CONNECTED;
             *static_cast<fi_eq_cm_entry*>(buffer) = {.fid = &eq->fid};
             return sizeof(fi_eq_cm_entry);
         },
@@ -249,4 +250,28 @@ TEST_CASE("event polling preserves error entry metadata and read failures", "[qu
                 loom::make_error_code_from_fi_errno(error_status == 0 ? FI_EAGAIN : -error_status));
     }
     REQUIRE(provider.error_reads == 1);
+}
+
+TEST_CASE("event errors do not report a successful connection", "[queue][event_type]") {
+    const auto waiting = GENERATE(false, true);
+    queue_provider provider;
+    provider.status = -FI_EAVAIL;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
+    REQUIRE(queue);
+    const auto event = waiting ? std::optional{queue->wait().value()} : queue->poll();
+    REQUIRE(event);
+    REQUIRE(event->type == loom::event_type::unknown);
+    REQUIRE(event->error == loom::errc::canceled);
+}
+
+TEST_CASE("unrecognized events do not report a successful connection", "[queue][event_type]") {
+    const auto waiting = GENERATE(false, true);
+    queue_provider provider;
+    provider.native_event = std::numeric_limits<std::uint32_t>::max();
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
+    REQUIRE(queue);
+    const auto event = waiting ? std::optional{queue->wait().value()} : queue->poll();
+    REQUIRE(event);
+    REQUIRE(event->type == loom::event_type::unknown);
+    REQUIRE_FALSE(event->error);
 }

@@ -67,7 +67,7 @@ static inline auto fi_event_to_loom(std::uint32_t fi_event) -> event_type {
         case FI_AV_COMPLETE:
             return event_type::av_complete;
         default:
-            return event_type::connected;
+            return event_type::unknown;
     }
 }
 
@@ -153,7 +153,6 @@ auto event_queue::poll() -> std::optional<fabric_event> {
         }
 
         fabric_event event{};
-        event.type = fi_event_to_loom(event_type);
         event.fid = err_entry.fid;
         event.context = err_entry.context;
         event.error = make_error_code_from_fi_errno(static_cast<int>(err_entry.err));
@@ -206,7 +205,6 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
         }
 
         fabric_event event{};
-        event.type = fi_event_to_loom(event_type);
         event.fid = err_entry.fid;
         event.context = err_entry.context;
         event.error = make_error_code_from_fi_errno(static_cast<int>(err_entry.err));

@@ -39,12 +39,13 @@ struct event_queue_impl;
  * @brief Types of fabric events.
  */
 enum class event_type : std::uint32_t {
-    connected = 0,      ///< Connection established
-    connreq = 1,        ///< Connection request received
-    shutdown = 2,       ///< Shutdown notification
-    join_complete = 3,  ///< Multicast join complete
-    mr_complete = 4,    ///< Memory registration complete
-    av_complete = 5,    ///< Address vector operation complete
+    connected = 0,          ///< Connection established
+    connreq = 1,            ///< Connection request received
+    shutdown = 2,           ///< Shutdown notification
+    join_complete = 3,      ///< Multicast join complete
+    mr_complete = 4,        ///< Memory registration complete
+    av_complete = 5,        ///< Address vector operation complete
+    unknown = 0xFFFF'FFFF,  ///< Unrecognized event or error without an event type
 };
 
 /**
@@ -54,7 +55,7 @@ enum class event_type : std::uint32_t {
  * Contains event type, context, and associated data.
  */
 struct fabric_event : event_base<fabric_event> {
-    event_type type{};          ///< The event type
+    event_type type{event_type::unknown};  ///< The event type
     void* fid{nullptr};         ///< Associated fabric identifier
     void* context{nullptr};     ///< User context pointer
     std::error_code error;      ///< Error code if event indicates failure
