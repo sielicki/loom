@@ -326,18 +326,19 @@ auto registered_range(const MemoryRegionHandle& mr,
 }
 }  // namespace
 
-auto endpoint_read(EndpointHandle& ep,
-                   rust::Slice<std::uint8_t> buffer,
-                   const MemoryRegionHandle& mr,
-                   const RmaTarget& target,
-                   const RmaOptions& options,
-                   std::uintptr_t context) -> std::int32_t {
+auto endpoint_read_raw(EndpointHandle& ep,
+                       std::uint8_t* buffer,
+                       std::size_t length,
+                       const MemoryRegionHandle& mr,
+                       const RmaTarget& target,
+                       const RmaOptions& options,
+                       std::uintptr_t context) -> std::int32_t {
     const auto flags = rma_flags(options);
-    if (!flags || !registered_range(mr, buffer.data(), buffer.size(), target.memory))
+    if (!flags || !registered_range(mr, buffer, length, target.memory))
         return std::to_underlying(loom::errc::invalid_argument);
     return submission_status(loom::rma::read_to(
         ep.get(),
-        std::as_writable_bytes(std::span{buffer.data(), buffer.size()}),
+        std::as_writable_bytes(std::span{buffer, length}),
         mr.get().descriptor(),
         loom::fabric_addr{target.peer},
         loom::remote_memory{target.memory.addr, target.memory.key, target.memory.length},
@@ -345,18 +346,19 @@ auto endpoint_read(EndpointHandle& ep,
         reinterpret_cast<void*>(context)));
 }
 
-auto endpoint_write(EndpointHandle& ep,
-                    rust::Slice<const std::uint8_t> buffer,
-                    const MemoryRegionHandle& mr,
-                    const RmaTarget& target,
-                    const RmaOptions& options,
-                    std::uintptr_t context) -> std::int32_t {
+auto endpoint_write_raw(EndpointHandle& ep,
+                        const std::uint8_t* buffer,
+                        std::size_t length,
+                        const MemoryRegionHandle& mr,
+                        const RmaTarget& target,
+                        const RmaOptions& options,
+                        std::uintptr_t context) -> std::int32_t {
     const auto flags = rma_flags(options);
-    if (!flags || !registered_range(mr, buffer.data(), buffer.size(), target.memory))
+    if (!flags || !registered_range(mr, buffer, length, target.memory))
         return std::to_underlying(loom::errc::invalid_argument);
     return submission_status(loom::rma::write_to(
         ep.get(),
-        std::as_bytes(std::span{buffer.data(), buffer.size()}),
+        std::as_bytes(std::span{buffer, length}),
         mr.get().descriptor(),
         loom::fabric_addr{target.peer},
         loom::remote_memory{target.memory.addr, target.memory.key, target.memory.length},

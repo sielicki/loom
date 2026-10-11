@@ -143,8 +143,14 @@ The exported address follows the negotiated registration model, including
 MR-relative offsets, and the key remains 64 bits. `RemoteMemory::subregion`
 checks range and address arithmetic before narrowing the exported view.
 
+`Endpoint::read_raw` and `write_raw` take a pointer and byte count without
+constructing a Rust reference to the allocation. They preserve the same
+bounds, domain, completion, and lifetime rules as the slice methods. This
+allows callers to represent device addresses without treating them as host
+memory; registration and GPU visibility still require separate support.
+
 Each operation checks that the local registration belongs to the endpoint's
-domain and covers the submitted slice, and that the remote view is large
+domain and covers the submitted range, and that the remote view is large
 enough. `RmaOptions` selects local, transmit, or delivery completion and
 optional fencing; a CQ completion is always requested. Unsupported policies
 remain ordinary submission errors. Local completion permits local buffer

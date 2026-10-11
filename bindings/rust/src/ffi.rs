@@ -387,9 +387,10 @@ pub mod ffi {
         fn endpoint_inject(ep: Pin<&mut EndpointHandle>, data: &[u8]) -> Result<i32>;
 
         /// Submit a registered read with an explicit peer and completion policy.
-        fn endpoint_read(
+        unsafe fn endpoint_read_raw(
             ep: Pin<&mut EndpointHandle>,
-            buf: &mut [u8],
+            buf: *mut u8,
+            len: usize,
             mr: &MemoryRegionHandle,
             target: &RmaTarget,
             options: &RmaOptions,
@@ -397,9 +398,10 @@ pub mod ffi {
         ) -> Result<i32>;
 
         /// Submit a registered write with an explicit peer and completion policy.
-        fn endpoint_write(
+        unsafe fn endpoint_write_raw(
             ep: Pin<&mut EndpointHandle>,
-            data: &[u8],
+            data: *const u8,
+            len: usize,
             mr: &MemoryRegionHandle,
             target: &RmaTarget,
             options: &RmaOptions,

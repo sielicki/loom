@@ -764,15 +764,53 @@ impl Endpoint {
         options: RmaOptions,
         context: usize,
     ) -> Result<()> {
+        unsafe {
+            self.read_raw(
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                registration,
+                target,
+                options,
+                context,
+            )
+        }
+    }
+
+    /// Submit a registered RMA read without constructing a host reference.
+    /// Local and remote bounds and registration-domain identity are checked
+    /// before submission, including for pointers into device memory.
+    ///
+    /// # Safety
+    ///
+    /// A range that passes the bounds checks must name `len` writable bytes in
+    /// the registered allocation. The registration must describe its memory
+    /// interface and device correctly. Keep that allocation, registration and
+    /// native context valid until completion or successful close. Do not access
+    /// the local range while the operation may write it. The target must name a
+    /// live, readable remote registration and a peer in the bound address vector.
+    /// Success means acceptance; completion alone does not establish GPU
+    /// visibility. The caller must establish visibility before device access.
+    pub unsafe fn read_raw(
+        &mut self,
+        buffer: *mut u8,
+        len: usize,
+        registration: &MemoryRegion,
+        target: RmaTarget,
+        options: RmaOptions,
+        context: usize,
+    ) -> Result<()> {
         self.check_registration(registration)?;
-        error::from_submission_status(ffi::ffi::endpoint_read(
-            self.inner.pin_mut(),
-            buffer,
-            &registration.inner,
-            &target,
-            &options,
-            context,
-        )?)
+        error::from_submission_status(unsafe {
+            ffi::ffi::endpoint_read_raw(
+                self.inner.pin_mut(),
+                buffer,
+                len,
+                &registration.inner,
+                &target,
+                &options,
+                context,
+            )?
+        })
     }
 
     /// Submit a registered RMA write to an explicit peer, requesting a CQ completion.
@@ -793,15 +831,54 @@ impl Endpoint {
         options: RmaOptions,
         context: usize,
     ) -> Result<()> {
+        unsafe {
+            self.write_raw(
+                buffer.as_ptr(),
+                buffer.len(),
+                registration,
+                target,
+                options,
+                context,
+            )
+        }
+    }
+
+    /// Submit a registered RMA write without constructing a host reference.
+    /// Local and remote bounds and registration-domain identity are checked
+    /// before submission, including for pointers into device memory.
+    ///
+    /// # Safety
+    ///
+    /// A range that passes the bounds checks must name `len` readable bytes in
+    /// the registered allocation. The registration must describe its memory
+    /// interface and device correctly. Keep that allocation, registration and
+    /// native context valid until completion or successful close. Do not mutate
+    /// the local range while the operation may read it. The target must name a
+    /// live, writable remote registration and a peer in the bound address vector.
+    /// Success means acceptance. Local completion permits local reuse; it does
+    /// not establish remote delivery or GPU visibility. The caller must make
+    /// device writes visible to the provider before submission.
+    pub unsafe fn write_raw(
+        &mut self,
+        buffer: *const u8,
+        len: usize,
+        registration: &MemoryRegion,
+        target: RmaTarget,
+        options: RmaOptions,
+        context: usize,
+    ) -> Result<()> {
         self.check_registration(registration)?;
-        error::from_submission_status(ffi::ffi::endpoint_write(
-            self.inner.pin_mut(),
-            buffer,
-            &registration.inner,
-            &target,
-            &options,
-            context,
-        )?)
+        error::from_submission_status(unsafe {
+            ffi::ffi::endpoint_write_raw(
+                self.inner.pin_mut(),
+                buffer,
+                len,
+                &registration.inner,
+                &target,
+                &options,
+                context,
+            )?
+        })
     }
 
     fn check_registration(&self, registration: &MemoryRegion) -> Result<()> {

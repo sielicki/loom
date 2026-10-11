@@ -110,6 +110,7 @@ fn registered_transfers(provider: &str) {
     let write_first = OperationContext::new().unwrap();
     let write_second = OperationContext::new().unwrap();
     let read = OperationContext::new().unwrap();
+    let invalid = OperationContext::new().unwrap();
     let mut sender = Node::new(provider, &mut source);
     let receiver = Node::new(provider, &mut first);
     let other = Node::new(provider, &mut second);
@@ -133,8 +134,9 @@ fn registered_transfers(provider: &str) {
     );
     retry(
         || unsafe {
-            sender.endpoint.write(
-                &source[503..716],
+            sender.endpoint.write_raw(
+                source.as_ptr().add(503),
+                213,
                 &sender.region,
                 second_target,
                 delivered,
@@ -161,8 +163,9 @@ fn registered_transfers(provider: &str) {
     source.fill(0);
     retry(
         || unsafe {
-            sender.endpoint.read(
-                &mut source[43..160],
+            sender.endpoint.read_raw(
+                source.as_mut_ptr().add(43),
+                117,
                 &sender.region,
                 first_target,
                 RmaOptions::default(),
@@ -176,7 +179,6 @@ fn registered_transfers(provider: &str) {
         assert_eq!(byte, if (43..160).contains(&index) { 0x5a } else { 0 });
     }
 
-    let invalid = OperationContext::new().unwrap();
     let mut outside = [1; 8];
     assert!(matches!(
         unsafe {
@@ -209,6 +211,91 @@ fn registered_transfers(provider: &str) {
                 &other.region,
                 first_target,
                 delivered,
+                invalid.address(),
+            )
+        },
+        Err(Error::InvalidArgument(_))
+    ));
+    // These ranges must be rejected before the provider can dereference them.
+    // In particular, no Rust slice can represent the null or overflowing cases.
+    let base = source.as_mut_ptr();
+    for (pointer, length) in [
+        (std::ptr::null_mut(), 1),
+        (base.wrapping_sub(1), 1),
+        (base.wrapping_add(source.len()), 1),
+        (base.wrapping_add(source.len() - 4), 8),
+        (base, usize::MAX),
+        (usize::MAX as *mut u8, 2),
+        (base, first_target.memory.length + 1),
+    ] {
+        assert!(matches!(
+            unsafe {
+                sender.endpoint.read_raw(
+                    pointer,
+                    length,
+                    &sender.region,
+                    first_target,
+                    RmaOptions::default(),
+                    invalid.address(),
+                )
+            },
+            Err(Error::Submission { .. })
+        ));
+        assert!(matches!(
+            unsafe {
+                sender.endpoint.write_raw(
+                    pointer,
+                    length,
+                    &sender.region,
+                    first_target,
+                    delivered,
+                    invalid.address(),
+                )
+            },
+            Err(Error::Submission { .. })
+        ));
+    }
+    let overflowing = RmaTarget {
+        memory: RemoteMemory {
+            addr: u64::MAX - 3,
+            ..first_target.memory
+        },
+        ..first_target
+    };
+    assert!(matches!(
+        unsafe {
+            sender.endpoint.read_raw(
+                base,
+                8,
+                &sender.region,
+                overflowing,
+                RmaOptions::default(),
+                invalid.address(),
+            )
+        },
+        Err(Error::Submission { .. })
+    ));
+    assert!(matches!(
+        unsafe {
+            sender.endpoint.write_raw(
+                base,
+                8,
+                &sender.region,
+                overflowing,
+                delivered,
+                invalid.address(),
+            )
+        },
+        Err(Error::Submission { .. })
+    ));
+    assert!(matches!(
+        unsafe {
+            sender.endpoint.read_raw(
+                second.as_mut_ptr(),
+                8,
+                &other.region,
+                first_target,
+                RmaOptions::default(),
                 invalid.address(),
             )
         },
