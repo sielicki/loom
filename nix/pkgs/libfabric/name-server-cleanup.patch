@@ -1,0 +1,29 @@
+Free the name server's owned keys and values after joining its worker.
+The rbtree destructor frees only the nodes, so abandoned registrations
+otherwise leak when the last server reference is released.
+
+Based on ofiwg/libfabric v2.7.0.
+
+--- a/prov/util/src/util_ns.c
++++ b/prov/util/src/util_ns.c
+@@ -568,6 +568,8 @@
+ 
+ void ofi_ns_stop_server(struct util_ns *ns)
+ {
++	RbtIterator it;
++	void *service, *name;
+ 	SOCKET sock;
+ 
+ 	assert(ns->is_initialized);
+@@ -584,6 +586,11 @@
+ 		ofi_close_socket(sock);
+ 	util_ns_close_listen(ns);
+ 	(void) pthread_join(ns->thread, NULL);
++	for (it = rbtBegin(ns->map); it; it = rbtNext(ns->map, it)) {
++		rbtKeyValue(ns->map, it, &service, &name);
++		free(service);
++		free(name);
++	}
+ 	rbtDelete(ns->map);
+ }
+ 

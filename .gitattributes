@@ -1,0 +1,2 @@
+# Unified diffs contain context prefixes before upstream indentation.
+nix/pkgs/libfabric/*.patch -whitespace

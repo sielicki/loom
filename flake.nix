@@ -54,7 +54,7 @@
           ]);
 
           # Retain provider packaging while pinning the upstream stable source.
-          libfabric = inputs'.libfabric.packages.default.override {
+          libfabric = (inputs'.libfabric.packages.default.override {
             version = "2.7.0";
             src = inputs.libfabric-src;
             # OPX with GPU support requires vendor HFI1 kernel headers.
@@ -79,7 +79,24 @@
                   --replace-fail 'VN=$(./git-version)' 'VN=${old.version}'
               '';
             });
-          };
+          }).overrideAttrs (old: {
+            patches = (old.patches or [ ]) ++ [
+              ./nix/pkgs/libfabric/name-server-cleanup.patch
+            ];
+            doCheck = !isDarwin && pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
+            checkPhase = ''
+              runHook preCheck
+              "$CC" -g -O1 -D_GNU_SOURCE -I. -Iinclude \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                ${./nix/pkgs/libfabric/test-name-server.c} \
+                prov/util/src/util_ns.c src/rbtree.c \
+                -pthread -Lsrc/.libs -Wl,-rpath,"$PWD/src/.libs" -lfabric \
+                -o test-name-server
+              ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+                timeout 30 ./test-name-server
+              runHook postCheck
+            '';
+          });
 
           # Use our custom stdexec derivation (header-only)
           stdexec = pkgs.callPackage ./nix/pkgs/stdexec { };
