@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -22,12 +23,26 @@ namespace loom::detail {
 
 struct fabric_info_impl {
     ::fi_info* info{nullptr};
+    bool owns_info{true};
+    std::once_flag next_once;
+    std::optional<fabric_info> next;
 
     fabric_info_impl() = default;
-    explicit fabric_info_impl(::fi_info* fi) : info(fi) {}
+    explicit fabric_info_impl(::fi_info* fi, bool owns = true) : info(fi), owns_info(owns) {}
+
+    [[nodiscard]] auto next_entry(memory_resource* resource) -> const fabric_info* {
+        if (!info || !info->next) {
+            return nullptr;
+        }
+        std::call_once(next_once, [this, resource] {
+            next.emplace(make_pmr_unique<fabric_info_impl>(
+                resource ? resource : get_default_resource(), info->next, false));
+        });
+        return &*next;
+    }
 
     ~fabric_info_impl() {
-        if (info) {
+        if (owns_info && info) {
             ::fi_freeinfo(info);
         }
     }
@@ -167,11 +182,9 @@ auto fabric_info::end() const -> iterator {
 }
 
 auto fabric_info::iterator::operator++() -> iterator& {
-    if (current_ && current_->impl_ && current_->impl_->info) {
-        current_ = current_->impl_->info->next ? current_ : nullptr;
-    } else {
-        current_ = nullptr;
-    }
+    current_ = current_ && current_->impl_
+                   ? current_->impl_->next_entry(current_->impl_.get_deleter().resource)
+                   : nullptr;
     return *this;
 }
 

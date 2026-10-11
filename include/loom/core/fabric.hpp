@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
+#include <iterator>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -130,12 +131,17 @@ public:
     /**
      * @class iterator
      * @brief Iterator for traversing fabric_info results.
+     * Entries and references remain valid while the owning fabric_info remains
+     * alive. Advancing lazily allocates stable views using its memory resource.
      */
     class iterator {
     public:
-        using value_type = const fabric_info;
-        using reference = value_type&;
-        using pointer = value_type*;
+        using iterator_category = std::forward_iterator_tag;
+        using iterator_concept = std::forward_iterator_tag;
+        using value_type = fabric_info;
+        using difference_type = std::ptrdiff_t;
+        using reference = const value_type&;
+        using pointer = const value_type*;
 
         /**
          * @brief Default constructor creating an end iterator.

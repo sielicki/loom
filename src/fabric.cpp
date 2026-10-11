@@ -11,116 +11,13 @@
 
 #include "loom/core/allocator.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/impl/fabric_impl.hpp"
 
 /**
  * @namespace loom
  * @brief Core namespace for the loom libfabric bindings library.
  */
 namespace loom {
-
-/**
- * @namespace detail
- * @brief Internal implementation details.
- */
-namespace detail {
-
-/**
- * @struct fabric_info_impl
- * @brief Internal implementation for fabric_info.
- */
-struct fabric_info_impl {
-    ::fi_info* info{nullptr};  ///< Libfabric info structure
-
-    /**
-     * @brief Default constructor.
-     */
-    fabric_info_impl() = default;
-
-    /**
-     * @brief Constructs implementation from libfabric info.
-     * @param fi The libfabric info structure.
-     */
-    explicit fabric_info_impl(::fi_info* fi) : info(fi) {}
-
-    /**
-     * @brief Destructor that frees the libfabric info.
-     */
-    ~fabric_info_impl() {
-        if (info) {
-            ::fi_freeinfo(info);
-        }
-    }
-
-    /**
-     * @brief Deleted copy constructor.
-     */
-    fabric_info_impl(const fabric_info_impl&) = delete;
-    /**
-     * @brief Deleted copy assignment operator.
-     */
-    auto operator=(const fabric_info_impl&) -> fabric_info_impl& = delete;
-    /**
-     * @brief Deleted move constructor.
-     */
-    fabric_info_impl(fabric_info_impl&&) = delete;
-    /**
-     * @brief Deleted move assignment operator.
-     */
-    auto operator=(fabric_info_impl&&) -> fabric_info_impl& = delete;
-};
-
-/**
- * @struct fabric_impl
- * @brief Internal implementation for fabric.
- */
-struct fabric_impl {
-    ::fid_fabric* fabric{nullptr};      ///< Libfabric fabric handle
-    std::string name;                   ///< Fabric name
-    std::string provider_name;          ///< Provider name
-    std::uint32_t provider_version{0};  ///< Provider version
-
-    /**
-     * @brief Default constructor.
-     */
-    fabric_impl() = default;
-
-    /**
-     * @brief Constructs implementation from libfabric fabric and attributes.
-     * @param fab The libfabric fabric handle.
-     * @param attr The fabric attributes.
-     */
-    fabric_impl(::fid_fabric* fab, const ::fi_fabric_attr* attr)
-        : fabric(fab), name(attr && attr->name ? attr->name : ""),
-          provider_name(attr && attr->prov_name ? attr->prov_name : ""),
-          provider_version(attr ? attr->prov_version : 0) {}
-
-    /**
-     * @brief Destructor that closes the libfabric fabric handle.
-     */
-    ~fabric_impl() {
-        if (fabric) {
-            ::fi_close(&fabric->fid);
-        }
-    }
-
-    /**
-     * @brief Deleted copy constructor.
-     */
-    fabric_impl(const fabric_impl&) = delete;
-    /**
-     * @brief Deleted copy assignment operator.
-     */
-    auto operator=(const fabric_impl&) -> fabric_impl& = delete;
-    /**
-     * @brief Deleted move constructor.
-     */
-    fabric_impl(fabric_impl&&) = delete;
-    /**
-     * @brief Deleted move assignment operator.
-     */
-    auto operator=(fabric_impl&&) -> fabric_impl& = delete;
-};
-}  // namespace detail
 
 fabric_info::fabric_info() = default;
 
@@ -220,11 +117,9 @@ auto fabric_info::end() const -> iterator {
 }
 
 auto fabric_info::iterator::operator++() -> iterator& {
-    if (current_ && current_->impl_ && current_->impl_->info) {
-        current_ = current_->impl_->info->next ? current_ : nullptr;
-    } else {
-        current_ = nullptr;
-    }
+    current_ = current_ && current_->impl_
+                   ? current_->impl_->next_entry(current_->impl_.get_deleter().resource)
+                   : nullptr;
     return *this;
 }
 
