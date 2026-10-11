@@ -100,13 +100,25 @@ auto event_queue::poll() -> std::optional<fabric_event> {
 
     ssize_t ret = ::fi_eq_read(impl_->eq, &event_type, &entry, sizeof(entry), flags);
 
-    if (ret == -FI_EAGAIN) {
+    if (ret == 0 || ret == -FI_EAGAIN) {
         return std::nullopt;
     }
 
-    if (ret < 0) {
+    if (ret < 0 && ret != -FI_EAVAIL) {
+        fabric_event event{};
+        event.error = make_error_code_from_fi_errno(static_cast<int>(-ret));
+        return event;
+    }
+
+    if (ret == -FI_EAVAIL) {
         ::fi_eq_err_entry err_entry{};
-        ::fi_eq_readerr(impl_->eq, &err_entry, flags);
+        const auto count = ::fi_eq_readerr(impl_->eq, &err_entry, flags);
+        if (count <= 0) {
+            fabric_event event{};
+            event.error =
+                make_error_code_from_fi_errno(count == 0 ? FI_EAGAIN : static_cast<int>(-count));
+            return event;
+        }
 
         fabric_event event{};
         event.type = fi_event_to_loom(event_type);

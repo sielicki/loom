@@ -40,12 +40,22 @@ struct queue_provider {
     };
     fi_ops_eq eq_ops{
         .size = sizeof(fi_ops_eq),
+        .read = [](fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t, std::uint64_t)
+            -> ssize_t {
+            auto& self = *static_cast<queue_provider*>(eq->fid.context);
+            ++self.calls;
+            if (self.status != 1)
+                return self.status;
+            *type = FI_CONNECTED;
+            *static_cast<fi_eq_cm_entry*>(buffer) = {.fid = &eq->fid};
+            return sizeof(fi_eq_cm_entry);
+        },
         .readerr = [](fid_eq* eq, fi_eq_err_entry* error, std::uint64_t) -> ssize_t {
             auto& self = *static_cast<queue_provider*>(eq->fid.context);
             ++self.error_reads;
             if (self.error_status != 1)
                 return self.error_status;
-            *error = {.fid = &eq->fid, .err = FI_ECANCELED};
+            *error = {.fid = &eq->fid, .context = &self.calls, .data = 42, .err = FI_ECANCELED};
             return sizeof(fi_eq_err_entry);
         },
         .sread = [](fid_eq* eq,
@@ -193,5 +203,50 @@ TEST_CASE("queue waits propagate error queue read failures", "[queue][wait]") {
         REQUIRE(result.error() ==
                 loom::make_error_code_from_fi_errno(status == 0 ? FI_EAGAIN : -status));
     });
+    REQUIRE(provider.error_reads == 1);
+}
+
+TEST_CASE("event polling returns no event after an empty read", "[queue][poll]") {
+    const auto status = GENERATE(0, -FI_EAGAIN);
+    queue_provider provider;
+    provider.status = status;
+    auto queue = loom::event_queue::create(provider.fabric);
+    REQUIRE(queue);
+    REQUIRE_FALSE(queue->poll());
+    REQUIRE(provider.error_reads == 0);
+}
+
+TEST_CASE("event polling preserves read failures without consuming operation errors",
+          "[queue][poll]") {
+    const auto status = GENERATE(-FI_EINTR, -FI_EINVAL, -FI_EIO);
+    queue_provider provider;
+    provider.status = status;
+    auto queue = loom::event_queue::create(provider.fabric);
+    REQUIRE(queue);
+    const auto event = queue->poll();
+    REQUIRE(event);
+    REQUIRE(event->error == loom::make_error_code_from_fi_errno(-status));
+    REQUIRE(event->fid == nullptr);
+    REQUIRE(provider.error_reads == 0);
+}
+
+TEST_CASE("event polling preserves error entry metadata and read failures", "[queue][poll]") {
+    const auto error_status = GENERATE(1, 0, -FI_EAGAIN, -FI_EIO);
+    queue_provider provider;
+    provider.status = -FI_EAVAIL;
+    provider.error_status = error_status;
+    auto queue = loom::event_queue::create(provider.fabric);
+    REQUIRE(queue);
+    const auto event = queue->poll();
+    REQUIRE(event);
+    if (error_status == 1) {
+        REQUIRE(event->error == loom::errc::canceled);
+        REQUIRE(event->fid == &provider.native_eq.fid);
+        REQUIRE(event->context == &provider.calls);
+        REQUIRE(event->data == 42);
+    } else {
+        REQUIRE(event->error ==
+                loom::make_error_code_from_fi_errno(error_status == 0 ? FI_EAGAIN : -error_status));
+    }
     REQUIRE(provider.error_reads == 1);
 }
