@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+.version 6.0
+.target sm_70
+.address_size 64
+
+// Host-mapped control words: started, ready, result (mismatch count + 1).
+// No CUDA work submission or synchronization is needed between ready and result.
+.visible .entry verify_receive(
+    .param .u64 data,
+    .param .u32 count,
+    .param .u64 control)
+{
+    .reg .pred p;
+    .reg .b32 n, i, actual, expected, errors, ready;
+    .reg .b64 buffer, flags, address, offset;
+    ld.param.u64 buffer, [data];
+    ld.param.u32 n, [count];
+    ld.param.u64 flags, [control];
+    st.release.sys.global.u32 [flags], 1;
+wait_ready:
+    ld.acquire.sys.global.u32 ready, [flags+4];
+    setp.eq.u32 p, ready, 0;
+    @p bra wait_ready;
+    mov.u32 i, 0;
+    mov.u32 errors, 0;
+check_word:
+    setp.ge.u32 p, i, n;
+    @p bra finished;
+    mul.wide.u32 offset, i, 4;
+    add.u64 address, buffer, offset;
+    ld.global.u32 actual, [address];
+    xor.b32 expected, i, 0x5a5a5a5a;
+    setp.ne.u32 p, actual, expected;
+    @p add.u32 errors, errors, 1;
+    add.u32 i, i, 1;
+    bra check_word;
+finished:
+    add.u32 errors, errors, 1;
+    st.release.sys.global.u32 [flags+8], errors;
+    ret;
+}

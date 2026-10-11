@@ -1,26 +1,33 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/async/completion_queue.hpp>
 #include <loom/core/endpoint_contract.hpp>
+#include <loom/core/endpoint_options.hpp>
 #include <loom/loom.hpp>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <bit>
+#include <charconv>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 
 #include <nccl_net.h>
 
+#include "cuda.hpp"
+
 namespace {
+namespace cuda = loom_nccl::cuda;
 template <typename T>
 auto checked(loom::result<T> value) -> T {
     if (!value)
@@ -39,6 +46,9 @@ auto boundary(F&& function) noexcept -> ncclResult_t {
     try {
         function();
         return ncclSuccess;
+    } catch (const cuda::error& error) {
+        std::fprintf(stderr, "Loom NCCL: %s\n", error.what());
+        return ncclUnhandledCudaError;
     } catch (const std::invalid_argument& error) {
         std::fprintf(stderr, "Loom NCCL: %s\n", error.what());
         return ncclInvalidArgument;
@@ -58,6 +68,21 @@ struct profile : loom::message_endpoint_profile<loom::rdm_endpoint_tag> {
         loom::mode_bits::context | loom::mode_bits::context2;
     static constexpr loom::threading_mode threading = loom::threading_mode::safe;
 };
+struct cuda_profile : profile {
+    static constexpr loom::caps required_caps = profile::required_caps | loom::capability::hmem;
+};
+
+auto cuda_enabled() -> bool {
+    const auto* value = std::getenv("NCCL_LOOM_CUDA");
+    if (!value)
+        return false;
+    const std::string_view text{value};
+    int enabled{};
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), enabled);
+    require(error == std::errc{} && end == text.data() + text.size() &&
+            (enabled == 0 || enabled == 1));
+    return enabled != 0;
+}
 constexpr auto supported_mr = loom::mr_mode_flags::local | loom::mr_mode_flags::virt_addr |
                               loom::mr_mode_flags::allocated | loom::mr_mode_flags::prov_key |
                               loom::mr_mode_flags::endpoint;
@@ -68,7 +93,8 @@ enum class wire_version : std::uint64_t { ipv4_v1 = 0x4c4f4f4d4e430001 };
 enum class direction { send, receive };
 enum class phase { free, pending, complete };
 
-auto info() -> loom::fabric_info {
+auto info(bool gpu) -> loom::fabric_info {
+    const auto mr = gpu ? supported_mr | loom::mr_mode_flags::hmem : supported_mr;
     loom::fabric_hints hints;
     if (const auto* provider = std::getenv("NCCL_LOOM_PROVIDER"))
         hints.provider_name = provider;
@@ -80,15 +106,16 @@ auto info() -> loom::fabric_info {
         hints.domain_name = "lo";
     hints.ep_type = profile::ep_type;
     hints.addr_format = loom::address_format::inet;
-    hints.capabilities = profile::required_caps;
+    hints.capabilities = gpu ? cuda_profile::required_caps : profile::required_caps;
     hints.mode_bits = profile::supported_modes;
     hints.threading = profile::threading;
-    hints.memory_region_mode = supported_mr;
+    hints.memory_region_mode = mr;
     auto result = checked(loom::query_fabric(hints));
     const auto* native = static_cast<const fi_info*>(result.internal_ptr());
     require(native->ep_attr && native->domain_attr && native->tx_attr && native->rx_attr);
+    require(result.get_caps().has(hints.capabilities));
     require(result.get_address_format() == loom::address_format::inet &&
-            (native->domain_attr->mr_mode & ~loom::detail::to_fi_mr_mode(supported_mr)) == 0 &&
+            (native->domain_attr->mr_mode & ~loom::detail::to_fi_mr_mode(mr)) == 0 &&
             native->tx_attr->op_flags == 0 && native->rx_attr->op_flags == 0 &&
             std::popcount(native->ep_attr->mem_tag_format) >= 32 &&
             native->ep_attr->max_msg_size >= wire_size);
@@ -108,15 +135,22 @@ auto get(const wire_address& wire, std::size_t word) -> std::uint64_t {
 
 struct comm;
 struct context {
-    loom::fabric_info selected{info()};
+    std::unique_ptr<cuda::driver> gpu{cuda_enabled() ? std::make_unique<cuda::driver>() : nullptr};
+    loom::fabric_info selected{info(bool(gpu))};
     std::mutex mutex;
     std::atomic<std::size_t> live{};
     std::unordered_map<void*, std::unique_ptr<comm>> connecting;
 };
 struct registration {
     loom::memory_region region;
+    std::optional<cuda::allocation> gpu;
     std::uintptr_t base{};
     std::size_t size{};
+
+    auto covers(const void* data, std::size_t length) const noexcept -> bool {
+        const auto pointer = reinterpret_cast<std::uintptr_t>(data);
+        return pointer >= base && pointer - base <= size && length <= size - (pointer - base);
+    }
 };
 struct operation {
     comm* owner{};
@@ -166,7 +200,15 @@ struct comm {
         domain = checked(loom::domain::create(fabric, selected));
         cq = checked(loom::completion_queue::create(domain, {.size = loom::queue_size{64}}));
         av = checked(loom::address_vector::create(domain));
-        endpoint = checked(loom::contract_endpoint<profile>::create(domain, selected)).release();
+        endpoint =
+            parent.gpu
+                ? checked(loom::contract_endpoint<cuda_profile>::create(domain, selected)).release()
+                : checked(loom::contract_endpoint<profile>::create(domain, selected)).release();
+        if (parent.gpu) {
+            // A provider staging copy may synchronize the device while a running
+            // NCCL kernel waits for this receive. Require a path without CUDA calls.
+            checked(loom::set_cuda_api_permitted(endpoint, false));
+        }
         checked(endpoint.bind_cq(cq,
                                  loom::cq_bind::transmit | loom::cq_bind::recv |
                                      loom::cq_bind::selective_completion));
@@ -190,10 +232,27 @@ struct comm {
     }
     ~comm() { --parent.live; }
 
-    auto register_buffer(void* data, std::size_t size) -> std::shared_ptr<registration> {
+    auto register_buffer(void* data, std::size_t size, int type = NCCL_PTR_HOST)
+        -> std::shared_ptr<registration> {
         auto memory = std::make_shared<registration>();
-        memory->region = checked(loom::memory_region::register_memory(
-            domain, data, size, loom::mr_access_flags::send | loom::mr_access_flags::recv));
+        const auto access = loom::mr_access_flags::send | loom::mr_access_flags::recv;
+        if (type == NCCL_PTR_CUDA) {
+            require(bool(parent.gpu));
+            memory->gpu = cuda::inspect(parent.gpu->functions, data);
+            memory->region = checked(loom::memory_region::register_memory(
+                domain,
+                data,
+                size,
+                loom::memory_registration{
+                    .access = access,
+                    .device = loom::hmem_device::cuda(memory->gpu->device),
+                    .allocation = loom::hmem_allocation_kind::device,
+                }));
+        } else {
+            require(type == NCCL_PTR_HOST);
+            memory->region =
+                checked(loom::memory_region::register_memory(domain, data, size, access));
+        }
         if (mr_mode.has(loom::mr_mode_flags::endpoint)) {
             checked(memory->region.bind(endpoint));
             checked(memory->region.enable());
@@ -390,18 +449,24 @@ auto devices(int* count) -> ncclResult_t {
     return boundary([&] {
         require(count);
         *count = 0;
-        (void)info();
+        context probe;
         *count = 1;
     });
 }
 auto properties(int dev, ncclNetProperties_v12_t* props) -> ncclResult_t {
     return boundary([&] {
         require(dev == 0 && props);
-        auto selected = info();
+        context selection;
+        if (selection.gpu) {
+            comm probe{selection, direction::receive};
+            probe.close();
+        }
+        const auto& selected = selection.selected;
         static char name[] = "Loom";
         *props = {};
         props->name = name;
-        props->ptrSupport = NCCL_PTR_HOST;
+        props->ptrSupport = NCCL_PTR_HOST | (selection.gpu ? NCCL_PTR_CUDA : 0);
+        props->forceFlush = selection.gpu ? 1 : 0;
         props->speed = 10000;  // Nominal software-adapter speed; no hardware topology is claimed.
         props->port = 1;
         props->maxComms = max_comms;
@@ -465,12 +530,13 @@ auto accept(void* handle, void** output, ncclNetDeviceHandle_v12_t** offload) ->
 }
 auto reg_mr(void* handle, void* data, std::size_t size, int type, void** output) -> ncclResult_t {
     return boundary([&] {
-        require(handle && data && size && type == NCCL_PTR_HOST && output);
+        require(handle && data && size && (type == NCCL_PTR_HOST || type == NCCL_PTR_CUDA) &&
+                output);
         *output = nullptr;
         auto& object = *static_cast<comm*>(handle);
         std::lock_guard lock{object.mutex};
         require(object.ready && !object.closing);
-        auto memory = object.register_buffer(data, size);
+        auto memory = object.register_buffer(data, size, type);
         const auto key = memory.get();
         object.registrations.emplace(key, std::move(memory));
         *output = key;
@@ -498,9 +564,7 @@ auto submit(
             auto found = object.registrations.find(memory);
             require(found != object.registrations.end());
             const auto& region = *found->second;
-            const auto base = reinterpret_cast<std::uintptr_t>(data);
-            require(base >= region.base && base - region.base <= region.size &&
-                    size <= region.size - (base - region.base));
+            require(region.covers(data, size));
             registered = found->second;
         }
         object.progress();
@@ -529,7 +593,7 @@ auto receive(void* comm,
     return submit(
         comm, direction::receive, data[0], sizes[0], tags[0], memory ? memory[0] : nullptr, output);
 }
-auto flush(void* handle, int count, void**, int* sizes, void** memory, void** output)
+auto flush(void* handle, int count, void** data, int* sizes, void** memory, void** output)
     -> ncclResult_t {
     return boundary([&] {
         require(handle && count == 1 && sizes && sizes[0] >= 0 && output);
@@ -537,8 +601,17 @@ auto flush(void* handle, int count, void**, int* sizes, void** memory, void** ou
         auto& object = *static_cast<comm*>(handle);
         std::lock_guard lock{object.mutex};
         require(object.kind == direction::receive && object.ready && !object.closing);
-        require(!sizes[0] || (memory && object.registrations.contains(memory[0])));
-        // Host memory needs no device visibility operation. CUDA is not advertised.
+        if (!sizes[0])
+            return;
+        require(data && memory);
+        const auto found = object.registrations.find(memory[0]);
+        require(found != object.registrations.end());
+        const auto& region = *found->second;
+        require(region.covers(data[0], static_cast<std::size_t>(sizes[0])));
+        if (region.gpu)
+            cuda::flush(object.parent.gpu->functions, *region.gpu);
+        // CUDA's host flush returns only after visibility is established. A null
+        // request therefore denotes an already completed flush, as for host data.
     });
 }
 auto test(void* handle, int* done, int* sizes) -> ncclResult_t {

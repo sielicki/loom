@@ -725,7 +725,7 @@
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
               nccl-plugin = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
-                packages = [ self'.packages.loom self'.packages.nccl-plugin-sdk pkgs.cmake pkgs.ninja pkgs.pkg-config ];
+                packages = [ self'.packages.loom self'.packages.nccl-plugin-sdk self'.packages.nccl-plugin-sdk.cudaCompiler pkgs.cmake pkgs.ninja pkgs.pkg-config ];
                 NCCL_SOURCE = inputs.nccl-src;
               };
               openmpi-consumer = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {

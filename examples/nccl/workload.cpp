@@ -53,7 +53,7 @@ void inspect(ncclNet_v12_t& net) {
     CHECK(count == 1);
     ncclNetProperties_v12_t props{};
     OK(net.getProperties(0, &props));
-    CHECK(props.ptrSupport == NCCL_PTR_HOST);
+    CHECK(props.ptrSupport == NCCL_PTR_HOST && props.forceFlush == 0);
     CHECK(props.maxRecvs == 1 && props.maxMultiRequestSize == 1);
     CHECK(props.maxP2pBytes >= 1024 * 1024 && props.regIsGlobal == 0);
     CHECK(net.regMrDmaBuf == nullptr && net.getDeviceMr == nullptr);
@@ -73,6 +73,13 @@ void finish(ncclNet_v12_t& net, void*& request, int expected, bool failure = fal
     }
 }
 void local(ncclNet_v12_t& net) {
+    for (const auto* value : {"2", "-1", "1extra", ""}) {
+        CHECK(setenv("NCCL_LOOM_CUDA", value, 1) == 0);
+        void* rejected{};
+        CHECK(net.init(&rejected, 0, nullptr, nullptr, nullptr) == ncclInvalidArgument);
+        CHECK(!rejected);
+    }
+    CHECK(setenv("NCCL_LOOM_CUDA", "0", 1) == 0);
     inspect(net);
     void* ctx{};
     OK(net.init(&ctx, 1, nullptr, nullptr, nullptr));
@@ -302,6 +309,7 @@ int main(int argc, char** argv) {
         CHECK(argc == 3 || argc == 4);
         CHECK(setenv("NCCL_LOOM_PROVIDER", argv[2], 1) == 0);
         CHECK(setenv("NCCL_LOOM_DOMAIN", "lo", 1) == 0);
+        CHECK(setenv("NCCL_LOOM_CUDA", "0", 1) == 0);
         if (argc == 3) {
             library plugin{argv[1]};
             local(plugin.net);

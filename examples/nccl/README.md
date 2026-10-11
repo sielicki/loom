@@ -25,9 +25,10 @@ nix build .#nccl-loom
 ./result/bin/nccl-loom-workload ./result/lib/libnccl-net-loom.so 'tcp;ofi_rxm' --processes
 ```
 
-The package runs four workloads: same-process and separate-process transfers
-on sockets and TCP/RxM. The executable loads the installed shared object and
-calls its exported `ncclNetPlugin_v12` table. It checks nonblocking connection
+The package runs four host workloads: same-process and separate-process
+transfers on sockets and TCP/RxM, plus a CUDA policy test with an injected
+driver API. The host executable loads the installed shared object and calls
+its exported `ncclNetPlugin_v12` table. It checks nonblocking connection
 setup, all 32 request slots, backpressure, reversed tag order including the sign
 bit, zero-byte transfers without buffers or registrations, actual completion
 lengths, truncation, registration
@@ -55,8 +56,9 @@ Remote hosts require a reachable domain selected explicitly. Capabilities,
 context obligations, MR modes, tag-bit availability, and transfer limits are
 validated from numeric attributes, independently of provider names.
 
-The first implementation exposes one IPv4 RDM adapter, host pointers, one
-receive per request, and 32 outstanding requests per comm. Each comm owns its
+The implementation exposes one IPv4 RDM adapter, one receive per request, and
+32 outstanding requests per comm. Host memory is enabled by default; CUDA
+memory requires the explicit mode described below. Each comm owns its
 endpoint, CQ, address vector, and registrations. Sends and receives share the
 CQ's registered dispatch mechanism. Tags are mapped into the provider's usable
 bits; peer metadata verifies the wire version, protocol, and tag format.
@@ -71,10 +73,66 @@ its resource graph for a close retry; this is not a bounded recovery protocol
 for a failed provider. Registered allocations must remain alive until their
 requests finish, even after the public registration handle is deregistered.
 
-The host ABI workloads also pass with Loom and the plugin built with address
-and undefined-behavior sanitizers and leak detection. These workloads do not
-run NCCL kernels or establish CUDA collective correctness. Device offload,
-virtual NIC aggregation, multirail, and collective-network offload are absent.
+The host ABI workloads and CUDA policy test also pass with address and
+undefined-behavior sanitizers and leak detection. These checks do not run NCCL
+kernels or establish CUDA collective correctness. Device offload, virtual NIC
+aggregation, multirail, and collective-network offload are absent.
+
+## Experimental CUDA mode
+
+Set `NCCL_LOOM_CUDA=1` before NCCL initializes the plugin. The default is `0`;
+other values are rejected. CUDA mode requires a loadable NVIDIA driver,
+GPUDirect support on every visible GPU, and either native write ordering for
+all devices or CUDA's host flush capability. Restrict device visibility with
+`CUDA_VISIBLE_DEVICES` when needed. Setup requests `FI_HMEM` and `FI_MR_HMEM`
+and requires the endpoint to accept `FI_OPT_CUDA_API_PERMITTED=false`. A
+provider staging copy that synchronizes the device could otherwise wait for
+an NCCL kernel that is itself waiting for the receive.
+
+Registration queries the pointer's actual device ordinal, owning context,
+managed status and GPUDirect eligibility. It enables `SYNC_MEMOPS` and passes
+CUDA device-only metadata into Loom's typed registration API. Managed memory,
+contextless allocations, and allocations ineligible for GPUDirect are rejected.
+This includes CUDA virtual-memory allocations without an owning context, so
+compatibility with NCCL's default allocation choices is not yet established.
+The allocation and owning CUDA context must outlive all requests and the
+registration. Endpoint-bound registrations are bound and enabled as required.
+
+CUDA mode advertises `NCCL_PTR_CUDA` and sets `forceFlush`. After network receive
+completion, `iflush` uses the allocation's owning context and establishes
+visibility for all CUDA devices. It restores the caller's context even when
+flushing fails. Native ordering can satisfy this scope without a driver call;
+otherwise `cuFlushGPUDirectRDMAWrites` completes before the callback returns a
+null request. CUDA failures propagate as `ncclUnhandledCudaError`. The policy
+follows the [CUDA GPUDirect synchronization contract](https://docs.nvidia.com/cuda/gpudirect-rdma/index.html#synchronization-and-memory-ordering)
+and [driver flush API](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__DEVICE.html).
+DMA-BUF registration remains unadvertised and unimplemented in this adapter.
+
+A hardware workload is built and installed for an NVIDIA runner:
+
+```sh
+nix build .#nccl-loom
+# Replace the ordinal, provider and domain with the runner's configuration.
+timeout 120 ./result/bin/nccl-loom-cuda-workload \
+  ./result/lib/libnccl-net-loom.so \
+  ./result/share/nccl-loom/visibility.ptx 0 'verbs;ofi_rxm' mlx5_0
+```
+
+The driver must be reachable by the runtime loader. The workload registers
+CUDA allocations, transfers a 1 MiB subrange, and verifies every word on the
+GPU. Its verifier is already running before the receive is submitted. The
+host publishes a mapped-memory flag only after `iflush`, and waits for the
+GPU's result without another CUDA submission or synchronization API that
+could mask a missing flush. A timeout or unsupported configuration is a
+failure, not a passing skip. The verifier requires mapped host memory and
+compute capability 7.0 or later. The build assembles its PTX to check syntax;
+runtime loading uses portable PTX for the runner's architecture.
+
+This hardware workload has **not** run on the current AMD/WSL host. The
+injected-driver tests verify capability decisions, nonzero device identity,
+allocation rejection, error propagation and context restoration only. Actual
+GPU visibility, other device ordinals, separate processes, and NCCL collective
+workloads still need hardware acceptance before CUDA mode is production-ready.
 
 ## HMEM work across the examples
 
@@ -105,7 +163,7 @@ The remaining adapter work is explicit:
 | NIXL | Accept device segments, preserve allocation/device metadata, negotiate HMEM, and establish visibility before transfer/notification completion. |
 | Monarch | Carry GPU allocation identity through the Rust/C++ registration boundary and retain its keepalive through retirement and visibility completion. |
 | Open MPI | Enable accelerator dependencies, retain MTL device registrations and descriptors in the Loom bridge, and validate matching/packing with device buffers. |
-| NCCL | Implement CUDA pointer classification, HMEM/DMA-BUF registration and `iflush`; advertise CUDA only with a supported visibility path. |
+| NCCL | Validate the experimental CUDA path on hardware and with NCCL collectives; add DMA-BUF and other supported registration/visibility profiles. |
 | AWS OFI NCCL / NVSHMEM | Create the consumer integrations and apply the same registration, lifetime, progress, and visibility contracts. |
 
 For every adapter, native transfer completion and GPU visibility are distinct

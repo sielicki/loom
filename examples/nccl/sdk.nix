@@ -62,6 +62,8 @@ stdenv.mkDerivation {
     runHook postInstallCheck
   '';
 
+  passthru.cudaCompiler = cudaPackages.cuda_nvcc;
+
   meta = {
     description = "Pinned NCCL v12 network plugin ABI for Loom";
     homepage = "https://github.com/NVIDIA/nccl";

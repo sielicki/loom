@@ -11,9 +11,9 @@ stdenv.mkDerivation {
   version = "0.1.0";
   src = lib.fileset.toSource {
     root = ./.;
-    fileset = lib.fileset.unions [ ./CMakeLists.txt ./plugin.cpp ./workload.cpp ];
+    fileset = lib.fileset.unions [ ./CMakeLists.txt ./plugin.cpp ./workload.cpp ./cuda.hpp ./test-cuda.cpp ./gpu-workload.cpp ./visibility.ptx ];
   };
-  nativeBuildInputs = [ cmake ninja pkg-config ];
+  nativeBuildInputs = [ cmake ninja pkg-config nccl-plugin-sdk.cudaCompiler ];
   buildInputs = [ loom nccl-plugin-sdk ];
   doCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
   checkPhase = ''
