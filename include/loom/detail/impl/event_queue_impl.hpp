@@ -97,6 +97,30 @@ inline auto decode_eq_event(std::uint32_t type,
     return event;
 }
 
+inline auto decode_eq_error(const fi_eq_err_entry& entry,
+                            std::size_t capacity,
+                            memory_resource* resource) -> result<fabric_event> {
+    if (entry.err_data_size > capacity || (entry.err_data_size && !entry.err_data)) {
+        return make_error_result_from_fi_errno<fabric_event>(FI_EIO);
+    }
+    auto* allocator = resource ? resource : get_default_resource();
+    fabric_event event{{},
+                       event_type::unknown,
+                       entry.fid,
+                       entry.context,
+                       make_error_code_from_fi_errno(entry.err),
+                       entry.data,
+                       std::pmr::vector<std::byte>{allocator}};
+    event.prov_errno = entry.prov_errno;
+    if (entry.err_data_size) {
+        const auto bytes =
+            std::span{static_cast<const std::byte*>(entry.err_data), entry.err_data_size};
+        event.info.assign(bytes.begin(), bytes.end());
+    }
+    event.info_len = event.info.size();
+    return event;
+}
+
 /// @brief Internal implementation of the event queue.
 struct event_queue_impl {
     ::fid_eq* eq{nullptr};                ///< Underlying libfabric event queue handle.
@@ -215,6 +239,8 @@ auto event_queue::poll() -> std::optional<fabric_event> {
 
     if (ret == -FI_EAVAIL) {
         ::fi_eq_err_entry err_entry{};
+        err_entry.err_data = buffer.data();
+        err_entry.err_data_size = buffer.size();
         const auto count = ::fi_eq_readerr(impl_->eq, &err_entry, flags);
         if (count <= 0) {
             fabric_event event{};
@@ -223,12 +249,14 @@ auto event_queue::poll() -> std::optional<fabric_event> {
             return event;
         }
 
-        fabric_event event{};
-        event.fid = err_entry.fid;
-        event.context = err_entry.context;
-        event.error = make_error_code_from_fi_errno(static_cast<int>(err_entry.err));
-        event.data = err_entry.data;
-        return event;
+        auto decoded =
+            detail::decode_eq_error(err_entry, buffer.size(), impl_.get_deleter().resource);
+        if (!decoded) {
+            fabric_event event{};
+            event.error = decoded.error();
+            return event;
+        }
+        return std::move(*decoded);
     }
 
     auto decoded = detail::decode_eq_event(
@@ -277,18 +305,15 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
 
     if (ret == -FI_EAVAIL) {
         ::fi_eq_err_entry err_entry{};
+        err_entry.err_data = buffer.data();
+        err_entry.err_data_size = buffer.size();
         const auto count = ::fi_eq_readerr(impl_->eq, &err_entry, flags);
         if (count <= 0) {
             return make_error_result_from_fi_errno<fabric_event>(
                 count == 0 ? FI_EAGAIN : static_cast<int>(-count));
         }
 
-        fabric_event event{};
-        event.fid = err_entry.fid;
-        event.context = err_entry.context;
-        event.error = make_error_code_from_fi_errno(static_cast<int>(err_entry.err));
-        event.data = err_entry.data;
-        return event;
+        return detail::decode_eq_error(err_entry, buffer.size(), impl_.get_deleter().resource);
     }
 
     return detail::decode_eq_event(
@@ -312,12 +337,35 @@ auto event_queue::event_to_string(const fabric_event& event) const -> std::strin
         return "Invalid event queue";
     }
 
-    const char* str = ::fi_eq_strerror(impl_->eq,
-                                       static_cast<int>(event.type),
-                                       event.error.value() != 0 ? nullptr : nullptr,
-                                       nullptr,
-                                       0);
-    return str ? std::string(str) : "Unknown event";
+    if (event.error) {
+        if (event.prov_errno != 0) {
+            const auto* text = ::fi_eq_strerror(impl_->eq,
+                                                event.prov_errno,
+                                                event.info.empty() ? nullptr : event.info.data(),
+                                                nullptr,
+                                                0);
+            if (text)
+                return text;
+        }
+        return event.error.message();
+    }
+    switch (event.type) {
+        case event_type::connected:
+            return "Connected";
+        case event_type::connreq:
+            return "Connection request";
+        case event_type::shutdown:
+            return "Shutdown";
+        case event_type::join_complete:
+            return "Join complete";
+        case event_type::mr_complete:
+            return "Memory registration complete";
+        case event_type::av_complete:
+            return "Address resolution complete";
+        case event_type::unknown:
+            return "Unknown event";
+    }
+    return "Unknown event";
 }
 
 auto event_queue::capacity() const noexcept -> std::size_t {

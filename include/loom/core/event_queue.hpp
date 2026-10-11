@@ -63,12 +63,13 @@ struct fabric_event : event_base<fabric_event> {
     void* context{nullptr};     ///< User context pointer
     std::error_code error;      ///< Error code if event indicates failure
     std::uint64_t data{0};      ///< Event-specific data
-    std::pmr::vector<std::byte> info;  ///< Owned connection data, including any protocol padding
+    std::pmr::vector<std::byte> info;  ///< Owned connection data or provider error detail
     std::size_t info_len{0};    ///< Length of info data
 
     /// Incoming connection metadata, usable with endpoint::create. Event copies
     /// share ownership; the queue's memory resource must outlive every copy.
     std::shared_ptr<const fabric_info> connection_info{};
+    int prov_errno{0};  ///< Provider-specific error code, when present
 
     /**
      * @brief Returns the error code for this event.

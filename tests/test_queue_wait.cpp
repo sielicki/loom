@@ -27,6 +27,11 @@ struct queue_provider {
     fi_info* accepted_info{};
     int freed_infos{};
     std::vector<std::byte> private_data;
+    int provider_error{};
+    int strerror_calls{};
+    std::vector<std::byte> error_data;
+    bool oversized_error{};
+    bool missing_error_data{};
 
     auto read_event(fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t length) -> ssize_t {
         ++calls;
@@ -94,7 +99,26 @@ struct queue_provider {
             ++self.error_reads;
             if (self.error_status != 1)
                 return self.error_status;
-            *error = {.fid = &eq->fid, .context = &self.calls, .data = 42, .err = FI_ECANCELED};
+            auto* output = error->err_data;
+            const auto capacity = error->err_data_size;
+            *error = {.fid = &eq->fid,
+                      .context = &self.calls,
+                      .data = 42,
+                      .err = FI_ECANCELED,
+                      .prov_errno = self.provider_error};
+            if (output && capacity) {
+                error->err_data_size = std::min(capacity, self.error_data.size());
+                if (error->err_data_size)
+                    std::memcpy(output, self.error_data.data(), error->err_data_size);
+                error->err_data = output;
+            } else {
+                error->err_data = self.error_data.data();
+                error->err_data_size = self.error_data.size();
+            }
+            if (self.oversized_error)
+                error->err_data_size = capacity + 1;
+            if (self.missing_error_data)
+                error->err_data = nullptr;
             return sizeof(fi_eq_err_entry);
         },
         .sread = [](fid_eq* eq,
@@ -106,6 +130,15 @@ struct queue_provider {
             auto& self = *static_cast<queue_provider*>(eq->fid.context);
             self.timeout = timeout;
             return self.read_event(eq, type, buffer, length);
+        },
+        .strerror = [](fid_eq* eq, int error, const void* data, char*, std::size_t) -> const char* {
+            auto& self = *static_cast<queue_provider*>(eq->fid.context);
+            ++self.strerror_calls;
+            constexpr std::array expected{
+                std::byte{0x52}, std::byte{0}, std::byte{0x79}, std::byte{0}};
+            return error == 37 && data && std::memcmp(data, expected.data(), expected.size()) == 0
+                       ? "provider diagnostic"
+                       : "wrong provider diagnostic";
         },
     };
     fid_cq native_cq{.fid = {.context = this, .ops = &lifetime_ops}, .ops = &cq_ops};
@@ -351,6 +384,7 @@ TEST_CASE("event errors do not report a successful connection", "[queue][event_t
     REQUIRE(event);
     REQUIRE(event->type == loom::event_type::unknown);
     REQUIRE(event->error == loom::errc::canceled);
+    REQUIRE(event->prov_errno == 0);
 }
 
 TEST_CASE("unrecognized events do not report a successful connection", "[queue][event_type]") {
@@ -550,4 +584,73 @@ TEST_CASE("event buffers must accommodate native headers", "[queue][payload]") {
     const auto queue = loom::event_queue::create(provider.fabric, {.event_buffer_size = size});
     REQUIRE_FALSE(queue);
     REQUIRE(queue.error() == loom::errc::invalid_argument);
+}
+
+TEST_CASE("event errors preserve provider diagnostics across later reads", "[queue][diagnostic]") {
+    const auto waiting = GENERATE(false, true);
+    queue_provider provider;
+    provider.status = -FI_EAVAIL;
+    provider.provider_error = 37;
+    provider.error_data = {std::byte{0x52}, std::byte{0}, std::byte{0x79}, std::byte{0}};
+    const auto expected = provider.error_data;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
+    REQUIRE(queue);
+    auto event = waiting ? std::optional{queue->wait().value()} : queue->poll();
+    REQUIRE(event);
+    REQUIRE(event->error == loom::errc::canceled);
+    CHECK(std::ranges::equal(event->info, expected));
+    REQUIRE(event->prov_errno == 37);
+    CHECK(event->info_len == expected.size());
+    auto copy = *event;
+    event.reset();
+    provider.error_data.assign(expected.size(), std::byte{0xff});
+    REQUIRE(queue->poll());
+    CHECK(queue->event_to_string(copy) == "provider diagnostic");
+    REQUIRE(provider.strerror_calls == 1);
+    *queue = {};
+    CHECK(std::ranges::equal(copy.info, expected));
+}
+
+TEST_CASE("generic event errors use their fabric error text", "[queue][diagnostic]") {
+    queue_provider provider;
+    provider.status = -FI_EAVAIL;
+    auto queue = loom::event_queue::create(provider.fabric);
+    REQUIRE(queue);
+    const auto event = queue->poll();
+    REQUIRE(event);
+    CHECK(queue->event_to_string(*event) == event->error.message());
+    CHECK(provider.strerror_calls == 0);
+}
+
+TEST_CASE("successful events do not request provider error text", "[queue][diagnostic]") {
+    queue_provider provider;
+    auto queue = loom::event_queue::create(provider.fabric);
+    REQUIRE(queue);
+    const auto event = queue->poll();
+    REQUIRE(event);
+    REQUIRE_FALSE(event->error);
+    REQUIRE_FALSE(queue->event_to_string(*event).empty());
+    CHECK(provider.strerror_calls == 0);
+}
+
+TEST_CASE("invalid provider error payloads fail without reading outside the buffer",
+          "[queue][diagnostic]") {
+    const auto waiting = GENERATE(false, true);
+    const auto missing = GENERATE(false, true);
+    queue_provider provider;
+    provider.status = -FI_EAVAIL;
+    provider.error_data.assign(4, std::byte{0x52});
+    provider.oversized_error = !missing;
+    provider.missing_error_data = missing;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
+    REQUIRE(queue);
+    if (waiting) {
+        const auto event = queue->wait();
+        REQUIRE_FALSE(event);
+        REQUIRE(event.error() == loom::errc::io_error);
+    } else {
+        const auto event = queue->poll();
+        REQUIRE(event);
+        REQUIRE(event->error == loom::errc::io_error);
+    }
 }
