@@ -687,6 +687,10 @@
                 inputsFrom = [ self'.packages.openmpi-consumer ];
                 OPENMPI_SOURCE = self'.packages.openmpi-consumer.src;
                 packages = [
+                  (pkgs.writeShellScriptBin "openmpi-patch" ''
+                    set -e
+                    ${lib.concatMapStringsSep "\n" (patch: "patch --batch --forward -p1 < ${lib.escapeShellArg (toString patch)}") self'.packages.openmpi-consumer.patches}
+                  '')
                   (pkgs.writeShellScriptBin "openmpi-configure" ''
                     exec ./configure ${lib.escapeShellArgs self'.packages.openmpi-consumer.configureFlags} "$@"
                   '')
@@ -695,8 +699,11 @@
               openmpi-loom = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
                 inputsFrom = [ self'.packages.openmpi-loom ];
                 OPENMPI_SOURCE = self'.packages.openmpi-loom.src;
-                OPENMPI_LOOM_PATCH = ./examples/openmpi/loom-backend.patch;
                 packages = [
+                  (pkgs.writeShellScriptBin "openmpi-patch" ''
+                    set -e
+                    ${lib.concatMapStringsSep "\n" (patch: "patch --batch --forward -p1 < ${lib.escapeShellArg (toString patch)}") self'.packages.openmpi-loom.patches}
+                  '')
                   (pkgs.writeShellScriptBin "openmpi-configure" ''
                     exec ./configure ${lib.escapeShellArgs self'.packages.openmpi-loom.configureFlags} "$@"
                   '')

@@ -1,0 +1,41 @@
+--- a/opal/mca/btl/ofi/btl_ofi_component.c
++++ b/opal/mca/btl/ofi/btl_ofi_component.c
+@@ -162,6 +162,7 @@
+                                            MCA_BASE_VAR_TYPE_INT, NULL, 0, 0, OPAL_INFO_LVL_5,
+                                            MCA_BASE_VAR_SCOPE_READONLY,
+                                            &mca_btl_ofi_component.mode);
++    free(msg);
+
+     mca_btl_ofi_component.num_cqe_read = MCA_BTL_OFI_NUM_CQE_READ;
+     (void) mca_base_component_var_register(
+--- a/opal/mca/common/ofi/common_ofi.c
++++ b/opal/mca/common/ofi/common_ofi.c
+@@ -48,7 +48,7 @@
+                                             .domain = NULL,
+                                             .fabric_ref_count = 0,
+                                             .domain_ref_count = 0};
+-static const char default_prov_exclude_list[] = "shm,sockets,tcp,udp,rstream,usnic,net";
++static char default_prov_exclude_list[] = "shm,sockets,tcp,udp,rstream,usnic,net";
+ static opal_mutex_t opal_common_ofi_mutex = OPAL_MUTEX_STATIC_INIT;
+ static int opal_common_ofi_verbose_level = 0;
+ static int opal_common_ofi_init_ref_cnt = 0;
+@@ -376,7 +376,8 @@
+             opal_common_ofi.prov_exclude = (char **) malloc(sizeof(char *));
+             assert(NULL != opal_common_ofi.prov_exclude);
+         }
+-        *opal_common_ofi.prov_exclude = strdup(default_prov_exclude_list);
++        /* MCA copies the default value during registration. */
++        *opal_common_ofi.prov_exclude = default_prov_exclude_list;
+         exclude_index = mca_base_var_register(
+             "opal", "opal_common", "ofi", "provider_exclude",
+             "Comma-delimited list of OFI providers that are not considered for use (default: "
+--- a/ompi/mca/mtl/ofi/mtl_ofi_component.c
++++ b/ompi/mca/mtl/ofi/mtl_ofi_component.c
+@@ -307,5 +307,7 @@
+ static int
+ ompi_mtl_ofi_component_close(void)
+ {
++    free(ompi_mtl_ofi.provider_name);
++    ompi_mtl_ofi.provider_name = NULL;
+     return opal_common_ofi_close();
+ }

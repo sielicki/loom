@@ -35,7 +35,7 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = [ autoconf automake libtool perl flex python3 pkg-config ];
   buildInputs = [ hwloc libevent pmix prrte zlib libfabric ] ++ lib.optional (loomBridge != null) loomBridge;
-  patches = lib.optional (loomBridge != null) ./loom-backend.patch;
+  patches = [ ./ofi-string-ownership.patch ] ++ lib.optional (loomBridge != null) ./loom-backend.patch;
 
   postPatch = ''
     patchShebangs .

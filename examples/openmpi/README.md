@@ -85,6 +85,8 @@ scalable-endpoint, or NIC support.
 
 The `openmpi-consumer` package uses Open MPI's existing OFI backend and serves
 as the comparison baseline. Select `openmpi-loom` to exercise Loom.
+Both packages apply the OFI string-ownership fixes: release copied parameter
+descriptions and provider labels, and let MCA copy the static default filter.
 
 Open MPI is pinned to `873cd3a294c7194a5f88937de36d5bc0b1c18d88`.
 Its Open MPI Autoconf macros and MPI binding-generator metadata use the
@@ -100,6 +102,7 @@ openmpi_work=$(mktemp -d)
 cp -R "$OPENMPI_SOURCE/." "$openmpi_work"
 chmod -R u+w "$openmpi_work"
 cd "$openmpi_work"
+openmpi-patch
 ./autogen.pl --no-3rdparty=libevent,hwloc,pmix,prrte
 openmpi-configure --prefix="$PWD/install"
 make -j4
@@ -107,12 +110,9 @@ make check
 make install
 ```
 
-For the adapter, use `nix develop .#openmpi-loom` instead and apply its patch
-after copying the source, before running `autogen.pl`:
-
-```sh
-patch -p1 < "$OPENMPI_LOOM_PATCH"
-```
+For the adapter, use `nix develop .#openmpi-loom` instead. The same
+`openmpi-patch` command applies both the shared fixes and the Loom adapter
+in the required order.
 
 The bridge is also available separately as `.#openmpi-bridge`. It builds
 against the installed Loom package using only public headers and exports a
