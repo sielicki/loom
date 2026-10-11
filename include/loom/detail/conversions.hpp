@@ -351,7 +351,7 @@ namespace loom::detail {
 [[nodiscard]] constexpr auto from_fi_order(std::uint64_t fi_order) noexcept -> msg_order {
     msg_order result{0ULL};
 
-    if (fi_order & FI_ORDER_STRICT)
+    if ((fi_order & FI_ORDER_STRICT) == FI_ORDER_STRICT)
         result |= ordering::strict;
     if (fi_order & FI_ORDER_DATA)
         result |= ordering::data;
