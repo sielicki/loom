@@ -20,6 +20,8 @@ struct mock_domain {
     bool provider_keys{};
     std::uint64_t access{};
     std::uint64_t flags{};
+    std::uint64_t registration_offset{};
+    std::uint64_t dmabuf_offset{};
     fi_hmem_iface iface{};
     int device_id{};
     std::size_t registrations{};
@@ -63,6 +65,9 @@ struct mock_domain {
             [](fid* handle, const fi_mr_attr* attr, std::uint64_t flags, fid_mr** region) {
                 auto& self = *static_cast<mock_domain*>(handle->context);
                 self.iface = attr->iface;
+                self.registration_offset = attr->offset;
+                if (flags & FI_MR_DMABUF)
+                    self.dmabuf_offset = attr->dmabuf[0].offset;
                 switch (attr->iface) {
                     case FI_HMEM_CUDA:
                         self.device_id = attr->device.cuda;

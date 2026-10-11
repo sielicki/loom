@@ -296,3 +296,14 @@ TEST_CASE("failed native closes do not release live registration keys", "[memory
     provider.close_error = 0;
     REQUIRE(fi_close(&native->fid) == 0);
 }
+
+TEST_CASE("DMA-BUF registration preserves its offset without setting reserved fields",
+          "[memory][dmabuf]") {
+    test::mock_domain provider;
+    std::array<std::byte, 64> buffer{};
+    auto region = memory_region::register_dmabuf(
+        provider.dom, buffer.data(), buffer.size(), mr_access_flags::remote_write, 7, 4096);
+    REQUIRE(region);
+    REQUIRE(provider.registration_offset == 0);
+    REQUIRE(provider.dmabuf_offset == 4096);
+}

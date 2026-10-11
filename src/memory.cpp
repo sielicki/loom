@@ -180,7 +180,7 @@ auto memory_region::register_dmabuf(const domain& dom,
     mr_attr.dmabuf = &dmabuf;
     mr_attr.iov_count = 1;
     mr_attr.access = detail::to_fi_mr_access(access);
-    mr_attr.offset = offset;
+    mr_attr.offset = 0;
     mr_attr.requested_key = requested_key->get();
     mr_attr.context = nullptr;
 
