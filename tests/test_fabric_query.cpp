@@ -53,6 +53,33 @@ TEST_CASE("filtered provider queries propagate discovery errors", "[fabric_query
     REQUIRE_FALSE(called);
 }
 
+TEST_CASE("first provider queries return a live matching provider", "[fabric_query][integration]") {
+    using query = loom::fabric_query<loom::connection_oriented_messaging>;
+    const auto available = query::query();
+    if (!available)
+        SKIP("No message providers available");
+    REQUIRE_FALSE(available->empty());
+    auto first = query::query_first();
+    REQUIRE(first);
+    REQUIRE(first->has_value());
+    REQUIRE(**first);
+    REQUIRE((*first)->get_caps().has(loom::capability::msg));
+    REQUIRE((*first)->get_fabric_attr()->provider_name ==
+            available->begin()->get_fabric_attr()->provider_name);
+    auto moved = std::move(**first);
+    REQUIRE(moved);
+    REQUIRE(moved.get_endpoint_attr()->type == loom::endpoint_types::msg);
+}
+
+TEST_CASE("first provider queries propagate discovery errors", "[fabric_query]") {
+    using query = loom::fabric_query<unsupported_capabilities>;
+    const auto available = query::query();
+    REQUIRE_FALSE(available);
+    const auto first = query::query_first();
+    REQUIRE_FALSE(first);
+    REQUIRE(first.error() == available.error());
+}
+
 TEST_CASE("fabric queries honor name filters", "[fabric_query][integration]") {
     loom::fabric_hints hints;
     SECTION("provider") {

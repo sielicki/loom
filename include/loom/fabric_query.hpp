@@ -207,20 +207,20 @@ public:
 
     /**
      * @brief Queries for the first matching provider.
+     * The returned info owns the discovery chain and describes its first entry.
      * @return The first matching provider or nullopt if none found.
      */
     [[nodiscard]] static auto query_first() -> result<std::optional<fabric_info>> {
-        auto range_result = query();
-        if (!range_result) {
-            return std::unexpected(range_result.error());
+        auto info = query_fabric(build_hints());
+        if (!info) {
+            return std::unexpected(info.error());
         }
 
-        auto& range = *range_result;
-        if (range.empty()) {
+        if (!*info) {
             return std::nullopt;
         }
 
-        return std::nullopt;
+        return std::optional{std::move(*info)};
     }
 
     /**
