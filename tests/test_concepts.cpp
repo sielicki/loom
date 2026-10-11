@@ -147,8 +147,9 @@ TEST_CASE("slingshot provider traits", "[concepts][provider_traits]") {
 
     static_assert(traits::supports_native_atomics);
     static_assert(!traits::uses_staged_atomics);
-    static_assert(traits::supports_auto_progress);
-    static_assert(traits::default_data_progress == loom::progress_mode::auto_progress);
+    static_assert(!traits::supports_auto_progress);
+    static_assert(traits::default_control_progress == loom::progress_mode::manual);
+    static_assert(traits::default_data_progress == loom::progress_mode::manual);
 
     REQUIRE(std::string_view{traits::provider_name()} == "cxi"sv);
 }
@@ -167,13 +168,30 @@ TEST_CASE("provider concept refinements", "[concepts][provider_traits]") {
     static_assert(inject_capable_provider<provider::verbs_tag>);
     static_assert(inject_capable_provider<provider::efa_tag>);
 
-    static_assert(auto_progress_provider<provider::slingshot_tag>);
-    static_assert(auto_progress_provider<provider::shm_tag>);
-    static_assert(manual_progress_provider<provider::verbs_tag>);
+    static_assert(auto_progress_provider<provider::verbs_tag>);
+    static_assert(auto_progress_provider<provider::tcp_tag>);
+    static_assert(manual_progress_provider<provider::slingshot_tag>);
+    static_assert(manual_progress_provider<provider::shm_tag>);
+    static_assert(manual_progress_provider<provider::ucx_tag>);
     static_assert(manual_progress_provider<provider::efa_tag>);
 
     static_assert(local_key_required_provider<provider::verbs_tag>);
     static_assert(!local_key_required_provider<provider::efa_tag>);
+}
+
+TEST_CASE("provider defaults preserve required data polling", "[concepts][provider_traits]") {
+    const auto check_manual = []<loom::provider_tag Provider>(bool manual_control) {
+        using policy = loom::static_progress_policy<loom::get_default_control_progress<Provider>(),
+                                                    loom::get_default_data_progress<Provider>()>;
+        static_assert(loom::requires_manual_progress<Provider>());
+        static_assert(policy::requires_manual_data_progress());
+        static_assert(!policy::supports_blocking_wait());
+        REQUIRE(policy::requires_manual_control_progress() == manual_control);
+    };
+    check_manual.template operator()<loom::provider::slingshot_tag>(true);
+    check_manual.template operator()<loom::provider::efa_tag>(true);
+    check_manual.template operator()<loom::provider::shm_tag>(false);
+    check_manual.template operator()<loom::provider::ucx_tag>(false);
 }
 
 TEST_CASE("can_inject helper", "[concepts][provider_traits]") {

@@ -369,14 +369,14 @@ using namespace loom;
 // Provider traits give compile-time access to provider capabilities
 static_assert(provider_traits<provider::verbs_tag>::supports_native_atomics);
 static_assert(provider_traits<provider::efa_tag>::uses_staged_atomics);
-static_assert(provider_traits<provider::slingshot_tag>::supports_auto_progress);
+static_assert(provider_traits<provider::tcp_tag>::supports_auto_progress);
 
 // Concepts enable compile-time capability checking
 static_assert(native_atomic_provider<provider::verbs_tag>);
 static_assert(staged_atomic_provider<provider::efa_tag>);
 static_assert(inject_capable_provider<provider::shm_tag>);
-static_assert(auto_progress_provider<provider::slingshot_tag>);
-static_assert(manual_progress_provider<provider::tcp_tag>);
+static_assert(auto_progress_provider<provider::tcp_tag>);
+static_assert(manual_progress_provider<provider::slingshot_tag>);
 
 // Query provider-specific limits at compile time
 constexpr auto verbs_inject_size = provider_traits<provider::verbs_tag>::max_inject_size;  // 64
@@ -391,9 +391,18 @@ constexpr auto verbs_mr = get_mr_mode<provider::verbs_tag>();
 // verbs_mr == mr_mode_flags::basic | mr_mode_flags::local | mr_mode_flags::prov_key
 
 // Check progress requirements
-static_assert(requires_manual_progress<provider::verbs_tag>());
-static_assert(!requires_manual_progress<provider::slingshot_tag>());
+static_assert(requires_manual_progress<provider::slingshot_tag>());
+static_assert(requires_manual_progress<provider::shm_tag>());
+static_assert(!requires_manual_progress<provider::tcp_tag>());
 ```
+
+Progress traits describe the libfabric 2.7 base-provider defaults; EFA uses
+its ordinary RDM profile. CXI requires manual control and data progress,
+while SHM and UCX require manual data progress. Verbs and TCP advertise
+automatic progress. The selected domain's returned attributes govern
+actual polling: provider layering, hints, and configuration can change
+the applicable requirements. A provider tag alone does not establish a
+negotiated endpoint contract.
 
 ### Protocol Abstraction Layer
 

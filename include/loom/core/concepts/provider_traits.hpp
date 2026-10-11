@@ -54,6 +54,13 @@ struct ucx_tag {};
  * @struct provider_traits
  * @brief Primary template for provider-specific traits and capabilities.
  * @tparam Tag The provider tag type.
+ *
+ * Progress defaults describe libfabric 2.7's base providers (ordinary RDM
+ * for EFA), not a negotiated domain. Layered providers, hints, and runtime
+ * configuration may differ. Use the selected domain's progress attributes
+ * before deciding whether polling may be omitted. supports_auto_progress
+ * describes automatic data progress support; automatic control alone does
+ * not satisfy it.
  */
 template <typename Tag>
 struct provider_traits;
@@ -62,7 +69,7 @@ struct provider_traits;
  * @struct provider_traits<provider::verbs_tag>
  * @brief Traits specialization for the RDMA Verbs provider.
  *
- * Verbs supports native atomics, manual progress, and requires local memory keys.
+ * Verbs supports native atomics, automatic progress, and requires local memory keys.
  */
 template <>
 struct provider_traits<provider::verbs_tag> {
@@ -78,9 +85,10 @@ struct provider_traits<provider::verbs_tag> {
         mr_mode_flags::basic | mr_mode_flags::local | mr_mode_flags::prov_key;
     static constexpr std::size_t max_inject_size = 64;
 
-    static constexpr progress_mode default_control_progress = progress_mode::manual;
-    static constexpr progress_mode default_data_progress = progress_mode::manual;
-    static constexpr bool supports_auto_progress = false;
+    // libfabric v2.7.0: prov/verbs/src/verbs_info.c
+    static constexpr progress_mode default_control_progress = progress_mode::auto_progress;
+    static constexpr progress_mode default_data_progress = progress_mode::auto_progress;
+    static constexpr bool supports_auto_progress = true;
 
     /**
      * @brief Computes the remote address for RMA operations.
@@ -126,6 +134,7 @@ struct provider_traits<provider::efa_tag> {
     static constexpr mr_mode default_mr_mode = mr_mode_flags::basic | mr_mode_flags::prov_key;
     static constexpr std::size_t max_inject_size = 32;
 
+    // libfabric v2.7.0: prov/efa/src/efa_prov_info.c (ordinary RDM)
     static constexpr progress_mode default_control_progress = progress_mode::manual;
     static constexpr progress_mode default_data_progress = progress_mode::manual;
     static constexpr bool supports_auto_progress = false;
@@ -159,7 +168,7 @@ struct provider_traits<provider::efa_tag> {
  * @struct provider_traits<provider::slingshot_tag>
  * @brief Traits specialization for the HPE Slingshot (CXI) provider.
  *
- * Slingshot supports native atomics, automatic progress, and scalable memory registration.
+ * Slingshot supports native atomics and requires manual control and data progress.
  */
 template <>
 struct provider_traits<provider::slingshot_tag> {
@@ -174,9 +183,10 @@ struct provider_traits<provider::slingshot_tag> {
     static constexpr mr_mode default_mr_mode = mr_mode_flags::scalable | mr_mode_flags::virt_addr;
     static constexpr std::size_t max_inject_size = 64;
 
-    static constexpr progress_mode default_control_progress = progress_mode::auto_progress;
-    static constexpr progress_mode default_data_progress = progress_mode::auto_progress;
-    static constexpr bool supports_auto_progress = true;
+    // libfabric v2.7.0: prov/cxi/src/cxip_info.c
+    static constexpr progress_mode default_control_progress = progress_mode::manual;
+    static constexpr progress_mode default_data_progress = progress_mode::manual;
+    static constexpr bool supports_auto_progress = false;
 
     /**
      * @brief Computes the remote address for RMA operations.
@@ -207,7 +217,7 @@ struct provider_traits<provider::slingshot_tag> {
  * @struct provider_traits<provider::shm_tag>
  * @brief Traits specialization for the shared memory provider.
  *
- * SHM supports native atomics and automatic progress with virtual address mode.
+ * SHM supports native atomics and requires manual data progress.
  */
 template <>
 struct provider_traits<provider::shm_tag> {
@@ -222,9 +232,10 @@ struct provider_traits<provider::shm_tag> {
     static constexpr mr_mode default_mr_mode = mr_mode_flags::virt_addr;
     static constexpr std::size_t max_inject_size = 4096;
 
+    // libfabric v2.7.0: prov/shm/src/smr_attr.c
     static constexpr progress_mode default_control_progress = progress_mode::auto_progress;
-    static constexpr progress_mode default_data_progress = progress_mode::auto_progress;
-    static constexpr bool supports_auto_progress = true;
+    static constexpr progress_mode default_data_progress = progress_mode::manual;
+    static constexpr bool supports_auto_progress = false;
 
     /**
      * @brief Computes the remote address for RMA operations.
@@ -270,9 +281,10 @@ struct provider_traits<provider::tcp_tag> {
     static constexpr mr_mode default_mr_mode = mr_mode_flags::basic;
     static constexpr std::size_t max_inject_size = 64;
 
-    static constexpr progress_mode default_control_progress = progress_mode::manual;
-    static constexpr progress_mode default_data_progress = progress_mode::manual;
-    static constexpr bool supports_auto_progress = false;
+    // libfabric v2.7.0: prov/tcp/src/xnet_attr.c
+    static constexpr progress_mode default_control_progress = progress_mode::auto_progress;
+    static constexpr progress_mode default_data_progress = progress_mode::auto_progress;
+    static constexpr bool supports_auto_progress = true;
 
     /**
      * @brief Computes the remote address for RMA operations.
@@ -303,7 +315,7 @@ struct provider_traits<provider::tcp_tag> {
  * @struct provider_traits<provider::ucx_tag>
  * @brief Traits specialization for the UCX provider.
  *
- * UCX supports native atomics with optional automatic progress.
+ * The UCX adapter requires manual data progress and provides automatic control progress.
  */
 template <>
 struct provider_traits<provider::ucx_tag> {
@@ -318,9 +330,10 @@ struct provider_traits<provider::ucx_tag> {
     static constexpr mr_mode default_mr_mode = mr_mode_flags::basic;
     static constexpr std::size_t max_inject_size = 128;
 
-    static constexpr progress_mode default_control_progress = progress_mode::manual;
+    // libfabric v2.7.0: prov/ucx/src/ucx_init.c
+    static constexpr progress_mode default_control_progress = progress_mode::auto_progress;
     static constexpr progress_mode default_data_progress = progress_mode::manual;
-    static constexpr bool supports_auto_progress = true;
+    static constexpr bool supports_auto_progress = false;
 
     /**
      * @brief Computes the remote address for RMA operations.
@@ -430,7 +443,7 @@ concept local_key_required_provider = provider_tag<P> && provider_traits<P>::req
 
 /**
  * @concept auto_progress_provider
- * @brief Concept for providers that support automatic progress.
+ * @brief Concept for base providers that support automatic data progress.
  * @tparam P The provider tag type.
  */
 template <typename P>
@@ -561,10 +574,11 @@ static_assert(inject_capable_provider<provider::efa_tag>);
 static_assert(local_key_required_provider<provider::verbs_tag>);
 static_assert(!local_key_required_provider<provider::efa_tag>);
 
-static_assert(auto_progress_provider<provider::slingshot_tag>);
-static_assert(auto_progress_provider<provider::shm_tag>);
-static_assert(manual_progress_provider<provider::verbs_tag>);
+static_assert(auto_progress_provider<provider::verbs_tag>);
+static_assert(auto_progress_provider<provider::tcp_tag>);
+static_assert(manual_progress_provider<provider::slingshot_tag>);
+static_assert(manual_progress_provider<provider::shm_tag>);
+static_assert(manual_progress_provider<provider::ucx_tag>);
 static_assert(manual_progress_provider<provider::efa_tag>);
-static_assert(manual_progress_provider<provider::tcp_tag>);
 
 }  // namespace loom
