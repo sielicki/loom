@@ -5,6 +5,8 @@
 #include <rdma/fi_domain.h>
 #include <rdma/fi_endpoint.h>
 
+#include <cstdint>
+#include <limits>
 #include <utility>
 
 #include "loom/core/allocator.hpp"
@@ -19,6 +21,18 @@
 
 namespace loom::detail {
 
+inline auto mr_remote_address(int mode, void* address, std::uint64_t offset = 0)
+    -> result<std::uint64_t> {
+    if (!(mode & FI_MR_VIRT_ADDR) && mode != FI_MR_BASIC) {
+        return 0;
+    }
+    const auto base = static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(address));
+    if (offset > std::numeric_limits<std::uint64_t>::max() - base) {
+        return make_error_result<std::uint64_t>(errc::invalid_argument);
+    }
+    return base + offset;
+}
+
 /**
  * @struct memory_region_impl
  * @brief Internal implementation for memory_region.
@@ -28,6 +42,7 @@ struct memory_region_impl {
     void* addr{nullptr};    ///< Registered memory address
     std::size_t length{0};  ///< Length of registered memory in bytes
     mr_key_lease requested_key;
+    std::uint64_t remote_addr{};
 
     /**
      * @brief Default constructor.
@@ -40,8 +55,13 @@ struct memory_region_impl {
      * @param addr_ The registered memory address.
      * @param len_ The length of the registered memory.
      */
-    memory_region_impl(fid_mr* mr_, void* addr_, std::size_t len_, mr_key_lease key = {}) noexcept
-        : mr(mr_), addr(addr_), length(len_), requested_key(std::move(key)) {}
+    memory_region_impl(fid_mr* mr_,
+                       void* addr_,
+                       std::size_t len_,
+                       mr_key_lease key = {},
+                       std::uint64_t remote_address = 0) noexcept
+        : mr(mr_), addr(addr_), length(len_), requested_key(std::move(key)),
+          remote_addr(remote_address) {}
 
     /**
      * @brief Destructor that closes the libfabric MR handle.
@@ -105,6 +125,10 @@ auto memory_region::register_memory(const domain& dom,
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
+    auto remote_address = detail::mr_remote_address(dom.impl_->mr_mode, addr);
+    if (!remote_address) {
+        return std::unexpected(remote_address.error());
+    }
     auto requested_key = detail::mr_key_lease::acquire(dom.impl_->mr_keys);
     if (!requested_key) {
         return std::unexpected(requested_key.error());
@@ -128,7 +152,12 @@ auto memory_region::register_memory(const domain& dom,
 
     detail::unique_fid<fid_mr> pending{mr};
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
-        resource ? resource : get_default_resource(), mr, addr, length, std::move(*requested_key));
+        resource ? resource : get_default_resource(),
+        mr,
+        addr,
+        length,
+        std::move(*requested_key),
+        *remote_address);
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -141,6 +170,10 @@ auto memory_region::register_hmem(const domain& dom,
                                   memory_resource* resource) -> result<memory_region> {
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
+    }
+    auto remote_address = detail::mr_remote_address(dom.impl_->mr_mode, addr);
+    if (!remote_address) {
+        return std::unexpected(remote_address.error());
     }
     auto requested_key = detail::mr_key_lease::acquire(dom.impl_->mr_keys);
     if (!requested_key) {
@@ -204,7 +237,12 @@ auto memory_region::register_hmem(const domain& dom,
 
     detail::unique_fid<fid_mr> pending{mr};
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
-        resource ? resource : get_default_resource(), mr, addr, length, std::move(*requested_key));
+        resource ? resource : get_default_resource(),
+        mr,
+        addr,
+        length,
+        std::move(*requested_key),
+        *remote_address);
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -218,6 +256,10 @@ auto memory_region::register_dmabuf(const domain& dom,
                                     memory_resource* resource) -> result<memory_region> {
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
+    }
+    auto remote_address = detail::mr_remote_address(dom.impl_->mr_mode, addr, offset);
+    if (!remote_address) {
+        return std::unexpected(remote_address.error());
     }
     auto requested_key = detail::mr_key_lease::acquire(dom.impl_->mr_keys);
     if (!requested_key) {
@@ -248,7 +290,12 @@ auto memory_region::register_dmabuf(const domain& dom,
 
     detail::unique_fid<fid_mr> pending{mr};
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
-        resource ? resource : get_default_resource(), mr, addr, length, std::move(*requested_key));
+        resource ? resource : get_default_resource(),
+        mr,
+        addr,
+        length,
+        std::move(*requested_key),
+        *remote_address);
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -269,6 +316,10 @@ auto memory_region::key() const noexcept -> std::uint64_t {
 
 auto memory_region::address() const noexcept -> void* {
     return impl_ ? impl_->addr : nullptr;
+}
+
+auto memory_region::remote_address() const noexcept -> std::uint64_t {
+    return impl_ ? impl_->remote_addr : 0;
 }
 
 auto memory_region::length() const noexcept -> std::size_t {

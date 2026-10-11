@@ -59,8 +59,7 @@ struct provider_remote_memory : provider_aware_remote_memory_base<provider_remot
      * @return A provider-specific remote memory descriptor.
      */
     static auto from_mr(const memory_region& mr) -> provider_remote_memory {
-        return provider_remote_memory{
-            std::bit_cast<std::uint64_t>(mr.address()), mr.key(), mr.length()};
+        return provider_remote_memory{remote_memory::from_mr(mr)};
     }
 
     /**

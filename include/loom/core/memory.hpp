@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -202,6 +201,10 @@ public:
 
     [[nodiscard]] auto address() const noexcept -> void*;
 
+    /// Address to exchange with peers: zero for offset-based registration,
+    /// otherwise the registered virtual address (including a DMA-BUF offset).
+    [[nodiscard]] auto remote_address() const noexcept -> std::uint64_t;
+
     [[nodiscard]] auto length() const noexcept -> std::size_t;
 
     /**
@@ -232,7 +235,7 @@ private:
  * access operations on a peer's registered memory region.
  */
 struct remote_memory : remote_memory_base<remote_memory> {
-    std::uint64_t addr{0};  ///< Remote virtual address
+    std::uint64_t addr{0};  ///< Remote virtual address or region offset
     std::uint64_t key{0};   ///< Remote memory key
     std::size_t length{0};  ///< Length of the remote region in bytes
 
@@ -243,7 +246,7 @@ struct remote_memory : remote_memory_base<remote_memory> {
 
     /**
      * @brief Constructs a remote_memory with explicit values.
-     * @param addr_ The remote virtual address.
+     * @param addr_ The remote virtual address or region offset.
      * @param key_ The remote memory key.
      * @param len_ The length of the region in bytes.
      */
@@ -256,7 +259,7 @@ struct remote_memory : remote_memory_base<remote_memory> {
      * @return A remote_memory descriptor for the given region.
      */
     static auto from_mr(const memory_region& mr) -> remote_memory {
-        return remote_memory{std::bit_cast<std::uint64_t>(mr.address()), mr.key(), mr.length()};
+        return remote_memory{mr.remote_address(), mr.key(), mr.length()};
     }
 };
 

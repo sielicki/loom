@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/async/completion_queue.hpp>
 #include <loom/loom.hpp>
 
 #include <array>
@@ -306,4 +307,138 @@ TEST_CASE("DMA-BUF registration preserves its offset without setting reserved fi
     REQUIRE(region);
     REQUIRE(provider.registration_offset == 0);
     REQUIRE(provider.dmabuf_offset == 4096);
+}
+
+TEST_CASE("remote descriptors honor registration addressing modes", "[memory][remote_address]") {
+    const auto mode = GENERATE(0, int{FI_MR_VIRT_ADDR}, int{FI_MR_BASIC});
+    const auto interface = GENERATE(0, 1, 2);
+    test::mock_domain provider{mode};
+    std::array<std::byte, 64> buffer{};
+    auto region =
+        interface == 0
+            ? memory_region::register_memory(provider.dom, buffer, mr_access_flags::remote_write)
+        : interface == 1
+            ? memory_region::register_hmem(provider.dom,
+                                           buffer.data(),
+                                           buffer.size(),
+                                           mr_access_flags::remote_write,
+                                           hmem_device::cuda(0))
+            : memory_region::register_dmabuf(
+                  provider.dom, buffer.data(), buffer.size(), mr_access_flags::remote_write, 7, 16);
+    REQUIRE(region);
+    auto moved = std::move(*region);
+    const auto expected =
+        mode == 0 ? 0
+                  : static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(buffer.data())) +
+                        (interface == 2 ? 16 : 0);
+    REQUIRE(moved.remote_address() == expected);
+    REQUIRE(region->remote_address() == 0);
+    const auto generic = remote_memory::from_mr(moved);
+    REQUIRE(generic.addr == expected);
+    REQUIRE(generic.key == moved.key());
+    REQUIRE(generic.length == buffer.size());
+    const auto specialized = provider_remote_memory<provider::tcp_tag>::from_mr(moved);
+    REQUIRE(specialized.addr == expected);
+    REQUIRE(specialized.key == moved.key());
+    REQUIRE(specialized.length == buffer.size());
+    REQUIRE(remote_memory::from_mr(*region).addr == 0);
+}
+
+TEST_CASE("cached memory exports registration-relative remote addresses",
+          "[memory][remote_address]") {
+    const auto mode = GENERATE(0, int{FI_MR_VIRT_ADDR});
+    test::mock_domain provider{mode};
+    mr_cache<provider::tcp_tag> cache{provider.dom};
+    std::array<std::byte, 64> buffer{};
+    auto handle = cache.lookup(buffer, mr_access_flags::remote_write);
+    REQUIRE(handle);
+    const auto remote = handle->to_remote_memory();
+    const auto expected =
+        mode == 0
+            ? 0
+            : static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(handle->base_address()));
+    REQUIRE(remote.addr == expected);
+    REQUIRE(remote.key == handle->key());
+    REQUIRE(remote.length == handle->length());
+}
+
+TEST_CASE("exported remote addresses support sockets loopback writes", "[memory][remote_address]") {
+    fabric_hints hints{};
+    hints.ep_type = endpoint_types::rdm;
+    hints.provider_name = "sockets";
+    hints.capabilities = capability::msg | capability::rma;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Sockets provider unavailable");
+    auto* native_info = static_cast<fi_info*>(info->internal_ptr());
+    REQUIRE(native_info->domain_attr->mr_mode == 0);
+    native_info->tx_attr->op_flags |= FI_DELIVERY_COMPLETE;
+    auto fab = fabric::create(*info);
+    REQUIRE(fab);
+    auto dom = domain::create(*fab, *info);
+    REQUIRE(dom);
+    auto cq = completion_queue::create(*dom);
+    REQUIRE(cq);
+    auto av = address_vector::create(*dom);
+    REQUIRE(av);
+    auto ep = endpoint::create(*dom, *info);
+    REQUIRE(ep);
+    REQUIRE(ep->bind_cq(*cq, cq_bind::transmit | cq_bind::recv));
+    REQUIRE(ep->bind_av(*av));
+    REQUIRE(ep->enable());
+    auto address = ep->get_local_address();
+    REQUIRE(address);
+    auto peer = av->insert(*address);
+    REQUIRE(peer);
+    std::array<std::byte, 64> buffer{};
+    buffer[0] = std::byte{42};
+    auto mr = memory_region::register_memory(*dom,
+                                             buffer,
+                                             mr_access_flags::remote_write | mr_access_flags::read |
+                                                 mr_access_flags::write);
+    REQUIRE(mr);
+    auto remote = remote_memory::from_mr(*mr);
+    remote.addr += 16;
+    remote.length = 1;
+    int context{};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+    result<void> submitted;
+    do {
+        submitted = rma::write_to(*ep,
+                                  std::span<const std::byte>{buffer}.first(1),
+                                  *mr,
+                                  fabric_addr{peer->value},
+                                  remote,
+                                  &context);
+        if (submitted || submitted.error() != errc::again)
+            break;
+        (void)cq->poll();
+        std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    REQUIRE(submitted);
+    std::optional<completion_event> completion;
+    do {
+        completion = cq->poll();
+        if (completion)
+            break;
+        std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    REQUIRE(completion);
+    REQUIRE_FALSE(completion->error);
+    REQUIRE(buffer[16] == std::byte{42});
+}
+
+TEST_CASE("DMA-BUF remote addresses reject overflowing virtual offsets",
+          "[memory][remote_address]") {
+    test::mock_domain provider{FI_MR_VIRT_ADDR};
+    std::array<std::byte, 64> buffer{};
+    auto region = memory_region::register_dmabuf(provider.dom,
+                                                 buffer.data(),
+                                                 buffer.size(),
+                                                 mr_access_flags::remote_write,
+                                                 7,
+                                                 std::numeric_limits<std::uint64_t>::max());
+    REQUIRE_FALSE(region);
+    REQUIRE(region.error() == errc::invalid_argument);
+    REQUIRE(provider.registrations == 0);
 }
