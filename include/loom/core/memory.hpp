@@ -127,7 +127,10 @@ private:
  *
  * Memory regions must be registered with a domain before they can be used
  * for remote memory access operations. Registration pins the memory and
- * makes it accessible to the fabric hardware.
+ * makes it accessible to the fabric hardware. Application-selected keys are
+ * allocated uniquely among live Loom registrations in the domain. The domain's
+ * memory resource must outlive all registrations. Native registrations created
+ * outside Loom must coordinate their keys separately.
  */
 class memory_region : public fabric_object_base<memory_region> {
 public:

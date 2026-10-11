@@ -2,11 +2,13 @@
 #include <loom/loom.hpp>
 
 #include <array>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace loom;
 
@@ -158,4 +160,139 @@ TEST_CASE("remote memory descriptor", "[memory]") {
     REQUIRE(remote.addr == addr);
     REQUIRE(remote.key == key);
     REQUIRE(remote.length == length);
+}
+
+TEST_CASE("simultaneous software memory registrations receive distinct keys", "[memory][mr_keys]") {
+    const auto provider = GENERATE("tcp", "sockets");
+    fabric_hints hints{};
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::rma;
+    hints.provider_name = provider;
+    auto info = query_fabric(hints);
+    if (!info) {
+        SKIP("Requested software provider unavailable");
+    }
+    auto fab = fabric::create(*info);
+    REQUIRE(fab);
+    auto dom = domain::create(*fab, *info);
+    REQUIRE(dom);
+    std::array<std::byte, 64> first_buffer{}, second_buffer{};
+    auto first = memory_region::register_memory(*dom, first_buffer, mr_access_flags::remote_write);
+    REQUIRE(first);
+    auto second =
+        memory_region::register_memory(*dom, second_buffer, mr_access_flags::remote_write);
+    REQUIRE(second);
+    REQUIRE(first->key() != second->key());
+}
+
+TEST_CASE("registration keys span all memory interfaces and follow region lifetimes",
+          "[memory][mr_keys]") {
+    test::mock_domain provider{0, 1};
+    std::array<std::byte, 64> buffer{};
+    std::vector<memory_region> regions;
+    const auto access = mr_access_flags::remote_write;
+    for (int i = 0; i < 256; ++i) {
+        auto region =
+            i % 3 == 0 ? memory_region::register_memory(provider.dom, buffer, access)
+            : i % 3 == 1
+                ? memory_region::register_hmem(
+                      provider.dom, buffer.data(), buffer.size(), access, hmem_device::cuda(0))
+                : memory_region::register_dmabuf(
+                      provider.dom, buffer.data(), buffer.size(), access, 7);
+        REQUIRE(region);
+        REQUIRE(region->key() < 256);
+        regions.push_back(std::move(*region));
+    }
+    REQUIRE(provider.keys.size() == 256);
+    auto full = memory_region::register_memory(provider.dom, buffer, access);
+    REQUIRE_FALSE(full);
+    REQUIRE(full.error() == make_error_code_from_fi_errno(FI_ENOKEY));
+    REQUIRE(provider.registrations == 256);
+    auto retained = std::move(regions[17]);
+    REQUIRE_FALSE(memory_region::register_memory(provider.dom, buffer, access));
+    const auto released = retained.key();
+    retained = {};
+    auto replacement = memory_region::register_memory(provider.dom, buffer, access);
+    REQUIRE(replacement);
+    REQUIRE(replacement->key() == released);
+    auto moved_domain = std::move(provider.dom);
+    regions.clear();
+    replacement = memory_region{};
+    REQUIRE(provider.live_regions == 0);
+    auto reused = memory_region::register_memory(moved_domain, buffer, access);
+    REQUIRE(reused);
+}
+
+TEST_CASE("failed registrations return their application keys", "[memory][mr_keys]") {
+    const auto interface = GENERATE(0, 1, 2);
+    test::mock_domain provider{0, 0};  // A one-key space forces immediate reuse.
+    std::array<std::byte, 64> buffer{};
+    auto create = [&](memory_resource* resource = nullptr) -> result<memory_region> {
+        if (interface == 0)
+            return memory_region::register_memory(
+                provider.dom, buffer, mr_access_flags::read, resource);
+        if (interface == 1)
+            return memory_region::register_hmem(provider.dom,
+                                                buffer.data(),
+                                                buffer.size(),
+                                                mr_access_flags::read,
+                                                hmem_device::cuda(0),
+                                                resource);
+        return memory_region::register_dmabuf(
+            provider.dom, buffer.data(), buffer.size(), mr_access_flags::read, 7, 0, resource);
+    };
+    provider.registration_error = -FI_EIO;
+    REQUIRE_FALSE(create());
+    provider.registration_error = 0;
+    REQUIRE_THROWS_AS(create(std::pmr::null_memory_resource()), std::bad_alloc);
+    REQUIRE(provider.live_regions == 0);
+    auto success = create();
+    REQUIRE(success);
+    REQUIRE(success->key() == 0);
+}
+
+TEST_CASE("provider-selected registration keys bypass the application pool", "[memory][mr_keys]") {
+    const auto mode = GENERATE(int{FI_MR_PROV_KEY}, int{FI_MR_BASIC});
+    test::mock_domain provider{mode, 0};
+    std::array<std::byte, 64> buffer{};
+    auto first = memory_region::register_memory(provider.dom, buffer, mr_access_flags::read);
+    auto second = memory_region::register_memory(provider.dom, buffer, mr_access_flags::read);
+    REQUIRE(first);
+    REQUIRE(second);
+    REQUIRE(first->key() != second->key());
+    REQUIRE(provider.requested_keys == std::vector<std::uint64_t>{0, 0});
+}
+
+TEST_CASE("parallel registrations reserve distinct live keys", "[memory][mr_keys]") {
+    test::mock_domain provider{0, 1};
+    std::array<std::byte, 64> buffer{};
+    std::array<result<memory_region>, 64> regions;
+    {
+        std::vector<std::jthread> workers;
+        for (auto& region : regions) {
+            workers.emplace_back([&provider, &buffer, &region] {
+                region =
+                    memory_region::register_memory(provider.dom, buffer, mr_access_flags::read);
+            });
+        }
+    }
+    for (const auto& region : regions)
+        REQUIRE(region);
+    REQUIRE(provider.keys.size() == regions.size());
+}
+
+TEST_CASE("failed native closes do not release live registration keys", "[memory][mr_keys]") {
+    test::mock_domain provider{0, 0};
+    std::array<std::byte, 64> buffer{};
+    auto region = memory_region::register_memory(provider.dom, buffer, mr_access_flags::read);
+    REQUIRE(region);
+    auto* native = static_cast<fid_mr*>(region->internal_ptr());
+    provider.close_error = -FI_EBUSY;
+    *region = {};
+    auto next = memory_region::register_memory(provider.dom, buffer, mr_access_flags::read);
+    REQUIRE_FALSE(next);
+    REQUIRE(next.error() == make_error_code_from_fi_errno(FI_ENOKEY));
+    REQUIRE(provider.live_regions == 1);
+    provider.close_error = 0;
+    REQUIRE(fi_close(&native->fid) == 0);
 }

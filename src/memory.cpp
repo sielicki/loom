@@ -12,6 +12,7 @@
 #include "loom/core/endpoint.hpp"
 #include "loom/core/error.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/impl/memory_impl.hpp"
 #include "loom/detail/unique_fid.hpp"
 
 /**
@@ -19,62 +20,6 @@
  * @brief Core namespace for the loom libfabric bindings library.
  */
 namespace loom {
-
-/**
- * @namespace detail
- * @brief Internal implementation details.
- */
-namespace detail {
-/**
- * @struct memory_region_impl
- * @brief Internal implementation for memory_region.
- */
-struct memory_region_impl {
-    fid_mr* mr{nullptr};    ///< Libfabric memory region handle
-    void* addr{nullptr};    ///< Registered memory address
-    std::size_t length{0};  ///< Length of registered memory in bytes
-
-    /**
-     * @brief Default constructor.
-     */
-    memory_region_impl() = default;
-
-    /**
-     * @brief Constructs implementation with libfabric MR handle and buffer info.
-     * @param mr_ The libfabric memory region handle.
-     * @param addr_ The registered memory address.
-     * @param len_ The length of the registered memory.
-     */
-    memory_region_impl(fid_mr* mr_, void* addr_, std::size_t len_)
-        : mr(mr_), addr(addr_), length(len_) {}
-
-    /**
-     * @brief Destructor that closes the libfabric MR handle.
-     */
-    ~memory_region_impl() {
-        if (mr) {
-            fi_close(&mr->fid);
-        }
-    }
-
-    /**
-     * @brief Deleted copy constructor.
-     */
-    memory_region_impl(const memory_region_impl&) = delete;
-    /**
-     * @brief Deleted copy assignment operator.
-     */
-    auto operator=(const memory_region_impl&) -> memory_region_impl& = delete;
-    /**
-     * @brief Deleted move constructor.
-     */
-    memory_region_impl(memory_region_impl&&) = delete;
-    /**
-     * @brief Deleted move assignment operator.
-     */
-    auto operator=(memory_region_impl&&) -> memory_region_impl& = delete;
-};
-}  // namespace detail
 
 memory_region::memory_region() = default;
 
@@ -105,11 +50,22 @@ auto memory_region::register_memory(const domain& dom,
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
+    auto requested_key = detail::mr_key_lease::acquire(dom.impl_->mr_keys);
+    if (!requested_key) {
+        return std::unexpected(requested_key.error());
+    }
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fid_mr* mr = nullptr;
-    auto ret =
-        fi_mr_reg(fid_dom, addr, length, detail::to_fi_mr_access(access), 0, 0, 0, &mr, nullptr);
+    auto ret = fi_mr_reg(fid_dom,
+                         addr,
+                         length,
+                         detail::to_fi_mr_access(access),
+                         0,
+                         requested_key->get(),
+                         0,
+                         &mr,
+                         nullptr);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<memory_region>(-ret);
@@ -117,7 +73,7 @@ auto memory_region::register_memory(const domain& dom,
 
     detail::unique_fid<fid_mr> pending{mr};
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
-        resource ? resource : get_default_resource(), mr, addr, length);
+        resource ? resource : get_default_resource(), mr, addr, length, std::move(*requested_key));
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -131,6 +87,10 @@ auto memory_region::register_hmem(const domain& dom,
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
+    auto requested_key = detail::mr_key_lease::acquire(dom.impl_->mr_keys);
+    if (!requested_key) {
+        return std::unexpected(requested_key.error());
+    }
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fi_mr_attr mr_attr{};
@@ -138,7 +98,7 @@ auto memory_region::register_hmem(const domain& dom,
     mr_attr.iov_count = 0;
     mr_attr.access = detail::to_fi_mr_access(access);
     mr_attr.offset = 0;
-    mr_attr.requested_key = 0;
+    mr_attr.requested_key = requested_key->get();
     mr_attr.context = nullptr;
     mr_attr.auth_key_size = 0;
     mr_attr.auth_key = nullptr;
@@ -189,7 +149,7 @@ auto memory_region::register_hmem(const domain& dom,
 
     detail::unique_fid<fid_mr> pending{mr};
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
-        resource ? resource : get_default_resource(), mr, addr, length);
+        resource ? resource : get_default_resource(), mr, addr, length, std::move(*requested_key));
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -204,6 +164,10 @@ auto memory_region::register_dmabuf(const domain& dom,
     if (!dom) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
+    auto requested_key = detail::mr_key_lease::acquire(dom.impl_->mr_keys);
+    if (!requested_key) {
+        return std::unexpected(requested_key.error());
+    }
     auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
 
     fi_mr_dmabuf dmabuf{};
@@ -217,7 +181,7 @@ auto memory_region::register_dmabuf(const domain& dom,
     mr_attr.iov_count = 1;
     mr_attr.access = detail::to_fi_mr_access(access);
     mr_attr.offset = offset;
-    mr_attr.requested_key = 0;
+    mr_attr.requested_key = requested_key->get();
     mr_attr.context = nullptr;
 
     fid_mr* mr = nullptr;
@@ -229,7 +193,7 @@ auto memory_region::register_dmabuf(const domain& dom,
 
     detail::unique_fid<fid_mr> pending{mr};
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
-        resource ? resource : get_default_resource(), mr, addr, length);
+        resource ? resource : get_default_resource(), mr, addr, length, std::move(*requested_key));
     (void)pending.release();
     return memory_region{std::move(impl)};
 }

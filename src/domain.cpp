@@ -56,20 +56,39 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
         data_prog = detail::from_fi_progress(info_ptr->domain_attr->data_progress);
     }
 
+    const auto registration_mode = info_ptr->domain_attr ? info_ptr->domain_attr->mr_mode : 0;
+    const auto key_bytes =
+        info_ptr->domain_attr ? info_ptr->domain_attr->mr_key_size : sizeof(std::uint64_t);
     const auto format = detail::from_fi_addr_format(info_ptr->addr_format);
     const std::string domain_name =
         info_ptr->domain_attr && info_ptr->domain_attr->name ? info_ptr->domain_attr->name : "";
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::domain_impl>(
-            resource, dom, threading, control_prog, data_prog, format, domain_name);
+        auto impl = detail::make_pmr_unique<detail::domain_impl>(resource,
+                                                                 dom,
+                                                                 threading,
+                                                                 control_prog,
+                                                                 data_prog,
+                                                                 format,
+                                                                 domain_name,
+                                                                 registration_mode,
+                                                                 key_bytes,
+                                                                 resource);
         (void)pending.release();
         return domain{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::domain_impl>(
-        default_resource, dom, threading, control_prog, data_prog, format, domain_name);
+    auto impl = detail::make_pmr_unique<detail::domain_impl>(default_resource,
+                                                             dom,
+                                                             threading,
+                                                             control_prog,
+                                                             data_prog,
+                                                             format,
+                                                             domain_name,
+                                                             registration_mode,
+                                                             key_bytes,
+                                                             default_resource);
     (void)pending.release();
     return domain{std::move(impl)};
 }

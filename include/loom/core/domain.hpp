@@ -113,6 +113,7 @@ private:
     friend class endpoint;
     friend class completion_queue;
     friend class event_queue;
+    friend class memory_region;
 };
 
 }  // namespace loom
