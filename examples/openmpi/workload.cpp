@@ -3,8 +3,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <numeric>
+#include <vector>
 
 #include <mpi.h>
+
+#if defined(LOOM_OPENMPI_BACKEND)
+#    include <loom/openmpi/bridge.h>
+#endif
 
 namespace {
 void require(bool condition, const char* description) {
@@ -24,6 +29,30 @@ void check(int status) {
         MPI_Abort(MPI_COMM_WORLD, 1);
         std::abort();
     }
+}
+
+void large_transfer(int rank) {
+    std::vector<int> sent(65536), received(sent.size(), -1);
+    std::iota(sent.begin(), sent.end(), rank * 65536);
+    MPI_Status status{};
+    check(MPI_Sendrecv(sent.data(),
+                       sent.size(),
+                       MPI_INT,
+                       1 - rank,
+                       81,
+                       received.data(),
+                       received.size(),
+                       MPI_INT,
+                       1 - rank,
+                       81,
+                       MPI_COMM_WORLD,
+                       &status));
+    for (std::size_t i = 0; i < received.size(); ++i) {
+        require(received[i] == (1 - rank) * 65536 + static_cast<int>(i), "large transfer payload");
+    }
+    int count{};
+    check(MPI_Get_count(&status, MPI_INT, &count));
+    require(count == static_cast<int>(received.size()), "large transfer length");
 }
 
 void matched_probe(int rank, int sender) {
@@ -176,6 +205,9 @@ int main(int argc, char** argv) {
     if (MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &provided) != MPI_SUCCESS) {
         return 1;
     }
+#if defined(LOOM_OPENMPI_BACKEND)
+    require(ompi_mtl_ofi_loom_active() == 1, "Loom must own the MPI transport");
+#endif
     check(MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN));
     require(provided >= MPI_THREAD_FUNNELED, "thread support");
     int rank{}, size{};
@@ -187,12 +219,19 @@ int main(int argc, char** argv) {
         synchronous_probe(rank, sender);
     }
     datatype_transfer(rank);
+    large_transfer(rank);
     errors_and_empty_messages(rank);
     const int local = rank + 1;
     int sum{};
     check(MPI_Allreduce(&local, &sum, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD));
     require(sum == 3, "collective progress after point-to-point traffic");
     check(MPI_Finalize());
+#if defined(LOOM_OPENMPI_BACKEND)
+    if (ompi_mtl_ofi_loom_active() != 0) {
+        std::fputs("Loom transport remains alive after MPI_Finalize\n", stderr);
+        return 1;
+    }
+#endif
     if (rank == 0) {
         std::puts("Open MPI matching workload passed");
     }

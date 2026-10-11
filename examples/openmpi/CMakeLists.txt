@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.30)
+project(loom_openmpi LANGUAGES CXX)
+
+find_package(loom CONFIG REQUIRED)
+add_library(loom_openmpi SHARED bridge.cpp)
+target_compile_features(loom_openmpi PRIVATE cxx_std_26)
+target_compile_options(loom_openmpi PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(loom_openmpi PRIVATE loom::loom)
+
+enable_testing()
+add_executable(loom-openmpi-bridge-check bridge-check.cpp)
+target_compile_features(loom-openmpi-bridge-check PRIVATE cxx_std_26)
+target_link_libraries(loom-openmpi-bridge-check PRIVATE loom_openmpi loom::loom)
+foreach(provider IN ITEMS sockets "tcp;ofi_rxm")
+    string(REPLACE ";" "_" profile "${provider}")
+    add_test(NAME bridge_${profile} COMMAND loom-openmpi-bridge-check "${provider}")
+    set_tests_properties(bridge_${profile} PROPERTIES TIMEOUT 30)
+endforeach()
+
+install(TARGETS loom_openmpi LIBRARY DESTINATION lib)
+install(FILES bridge.h DESTINATION include/loom/openmpi)
+configure_file(loom-openmpi.pc.in loom-openmpi.pc @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/loom-openmpi.pc DESTINATION lib/pkgconfig)

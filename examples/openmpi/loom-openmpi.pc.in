@@ -1,0 +1,10 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: loom-openmpi
+Description: Loom transport bridge for the Open MPI OFI MTL
+Version: 0.1.0
+Requires: libfabric
+Libs: -L${libdir} -lloom_openmpi
+Cflags: -I${includedir}

@@ -19,10 +19,11 @@
 , prrte
 , zlib
 , libfabric
+, loomBridge ? null
 }:
 
 stdenv.mkDerivation {
-  pname = "openmpi-consumer";
+  pname = if loomBridge == null then "openmpi-consumer" else "openmpi-loom";
   version = "6.1.0-unstable-2026-10-10";
   src = runCommand "openmpi-consumer-source" { } ''
     mkdir -p $out
@@ -33,7 +34,8 @@ stdenv.mkDerivation {
   '';
 
   nativeBuildInputs = [ autoconf automake libtool perl flex python3 pkg-config ];
-  buildInputs = [ hwloc libevent pmix prrte zlib libfabric ];
+  buildInputs = [ hwloc libevent pmix prrte zlib libfabric ] ++ lib.optional (loomBridge != null) loomBridge;
+  patches = lib.optional (loomBridge != null) ./loom-backend.patch;
 
   postPatch = ''
     patchShebangs .
@@ -74,7 +76,9 @@ stdenv.mkDerivation {
 
   postInstall = ''
     $out/bin/mpic++ -std=c++26 -Wall -Wextra -Werror \
-      ${./workload.cpp} -Wl,-rpath,$out/lib -o $out/bin/openmpi-ofi-workload
+      ${./workload.cpp} -Wl,-rpath,$out/lib \
+      ${lib.optionalString (loomBridge != null) "-DLOOM_OPENMPI_BACKEND=1 $(pkg-config --cflags --libs loom-openmpi)"} \
+      -o $out/bin/openmpi-ofi-workload
     substitute ${./check.sh} $out/bin/openmpi-ofi-check \
       --replace-fail '@shell@' '${runtimeShell}' \
       --replace-fail '@timeout@' '${coreutils}/bin/timeout' \
@@ -83,7 +87,9 @@ stdenv.mkDerivation {
   '';
 
   meta = {
-    description = "Pinned Open MPI OFI baseline for Loom integration";
+    description =
+      if loomBridge == null then "Pinned Open MPI OFI baseline for Loom integration"
+      else "Open MPI OFI MTL using Loom with host-memory MPI workloads";
     homepage = "https://github.com/open-mpi/ompi";
     license = lib.licenses.bsd3;
     platforms = lib.platforms.linux;

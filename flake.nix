@@ -367,6 +367,13 @@
                 oacSource = inputs.openmpi-oac-src;
                 mpiStandardSource = inputs.mpi-standard-src;
               };
+              openmpi-bridge = pkgs.callPackage ./examples/openmpi/bridge.nix {
+                stdenv = pkgs.gcc15Stdenv;
+                inherit (self'.packages) loom;
+              };
+              openmpi-loom = self'.packages.openmpi-consumer.override {
+                loomBridge = self'.packages.openmpi-bridge;
+              };
               nixl-consumer = pkgs.callPackage ./examples/nixl/nixl.nix {
                 stdenv = pkgs.gcc15Stdenv;
                 src = inputs.nixl-src;
@@ -685,6 +692,16 @@
                   '')
                 ];
               };
+              openmpi-loom = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
+                inputsFrom = [ self'.packages.openmpi-loom ];
+                OPENMPI_SOURCE = self'.packages.openmpi-loom.src;
+                OPENMPI_LOOM_PATCH = ./examples/openmpi/loom-backend.patch;
+                packages = [
+                  (pkgs.writeShellScriptBin "openmpi-configure" ''
+                    exec ./configure ${lib.escapeShellArgs self'.packages.openmpi-loom.configureFlags} "$@"
+                  '')
+                ];
+              };
               monarch-consumer = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
                 inputsFrom = [ self'.packages.monarch-consumer ];
                 inherit (self'.packages.monarch-consumer)
@@ -759,6 +776,7 @@
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
               openmpi-consumer = self'.packages.openmpi-consumer;
+              openmpi-loom = self'.packages.openmpi-loom;
               nixl-consumer = self'.packages.nixl-consumer.tests.sdk;
               nixl-loom = self'.packages.nixl-loom;
               monarch-consumer = self'.packages.monarch-consumer;
