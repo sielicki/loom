@@ -514,15 +514,17 @@ impl Worker {
         // below; external access remains the RDMA caller's obligation.
         unsafe {
             match transfer.kind {
-                RdmaOpType::ReadIntoLocal => self.endpoint.read(
-                    std::slice::from_raw_parts_mut(address as *mut u8, transfer.length),
+                RdmaOpType::ReadIntoLocal => self.endpoint.read_raw(
+                    address as *mut u8,
+                    transfer.length,
                     &transfer.registration.region,
                     transfer.target,
                     RmaOptions::default(),
                     context,
                 ),
-                RdmaOpType::WriteFromLocal => self.endpoint.write(
-                    std::slice::from_raw_parts(address as *const u8, transfer.length),
+                RdmaOpType::WriteFromLocal => self.endpoint.write_raw(
+                    address as *const u8,
+                    transfer.length,
                     &transfer.registration.region,
                     transfer.target,
                     RmaOptions {
