@@ -33,6 +33,11 @@ struct mock_protocol {
     static constexpr bool supports_inject = true;
 };
 
+template <loom::provider_tag Provider>
+struct requests_atomics : mock_protocol {
+    using provider_type = Provider;
+};
+
 struct rma_capable_proto {
     [[nodiscard]] auto name() const noexcept -> const char* { return "test"; }
     [[nodiscard]] auto send(std::span<const std::byte>, loom::context_ptr<void>)
@@ -162,7 +167,7 @@ TEST_CASE("provider concept refinements", "[concepts][provider_traits]") {
     static_assert(!native_atomic_provider<provider::efa_tag>);
 
     static_assert(staged_atomic_provider<provider::efa_tag>);
-    static_assert(staged_atomic_provider<provider::tcp_tag>);
+    static_assert(!staged_atomic_provider<provider::tcp_tag>);
     static_assert(!staged_atomic_provider<provider::verbs_tag>);
 
     static_assert(inject_capable_provider<provider::verbs_tag>);
@@ -177,6 +182,17 @@ TEST_CASE("provider concept refinements", "[concepts][provider_traits]") {
 
     static_assert(local_key_required_provider<provider::verbs_tag>);
     static_assert(!local_key_required_provider<provider::efa_tag>);
+}
+
+TEST_CASE("base provider capabilities constrain atomic protocols", "[concepts][provider_traits]") {
+    using namespace loom;
+
+    static_assert(atomic_enabled_protocol<requests_atomics<provider::verbs_tag>>);
+    static_assert(atomic_enabled_protocol<requests_atomics<provider::efa_tag>>);
+    static_assert(!atomic_enabled_protocol<requests_atomics<provider::tcp_tag>>);
+    static_assert(!atomic_enabled_protocol<requests_atomics<provider::ucx_tag>>);
+    static_assert(rma_event_provider<provider::tcp_tag>);
+    static_assert(!rma_event_provider<provider::ucx_tag>);
 }
 
 TEST_CASE("provider defaults preserve required data polling", "[concepts][provider_traits]") {

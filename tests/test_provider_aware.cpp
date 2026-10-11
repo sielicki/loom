@@ -106,7 +106,7 @@ TEST_CASE("provider_traits static properties tcp", "[provider_aware]") {
     using traits = loom::provider_traits<loom::provider::tcp_tag>;
 
     REQUIRE_FALSE(traits::supports_native_atomics);
-    REQUIRE(traits::uses_staged_atomics);
+    REQUIRE_FALSE(traits::uses_staged_atomics);
 
     REQUIRE(std::string_view{traits::provider_name()} == "tcp");
 }

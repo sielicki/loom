@@ -404,6 +404,11 @@ actual polling: provider layering, hints, and configuration can change
 the applicable requirements. A provider tag alone does not establish a
 negotiated endpoint contract.
 
+The base TCP and libfabric UCX providers do not expose atomics. A layered
+provider may have different capabilities and needs its own established
+contract. Atomic-capable providers still require validation of the
+operation, datatype, and element count through libfabric's atomic queries.
+
 ### Protocol Abstraction Layer
 
 Define custom protocol types with compile-time capability validation:

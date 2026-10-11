@@ -410,6 +410,7 @@ TEST_CASE("native_atomic_provider concept", "[provider_atomic]") {
     static_assert(loom::native_atomic_provider<loom::provider::shm_tag>);
     static_assert(!loom::native_atomic_provider<loom::provider::efa_tag>);
     static_assert(!loom::native_atomic_provider<loom::provider::tcp_tag>);
+    static_assert(!loom::native_atomic_provider<loom::provider::ucx_tag>);
 }
 
 TEST_CASE("staged_atomic_provider concept", "[provider_atomic]") {
@@ -417,5 +418,6 @@ TEST_CASE("staged_atomic_provider concept", "[provider_atomic]") {
     static_assert(!loom::staged_atomic_provider<loom::provider::slingshot_tag>);
     static_assert(!loom::staged_atomic_provider<loom::provider::shm_tag>);
     static_assert(loom::staged_atomic_provider<loom::provider::efa_tag>);
-    static_assert(loom::staged_atomic_provider<loom::provider::tcp_tag>);
+    static_assert(!loom::staged_atomic_provider<loom::provider::tcp_tag>);
+    static_assert(!loom::staged_atomic_provider<loom::provider::ucx_tag>);
 }

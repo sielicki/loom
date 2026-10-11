@@ -266,17 +266,18 @@ struct provider_traits<provider::shm_tag> {
  * @struct provider_traits<provider::tcp_tag>
  * @brief Traits specialization for the TCP sockets provider.
  *
- * TCP uses staged atomics and does not support RMA events.
+ * The base TCP provider supports RMA events but does not implement atomics.
  */
 template <>
 struct provider_traits<provider::tcp_tag> {
     using tag_type = provider::tcp_tag;
+    // libfabric v2.7.0: xnet_attr.c capabilities and xnet_rdm.c atomic stubs.
     static constexpr bool supports_native_atomics = false;
-    static constexpr bool uses_staged_atomics = true;
+    static constexpr bool uses_staged_atomics = false;
     static constexpr bool supports_inject = true;
     static constexpr bool supports_selective_completion = true;
     static constexpr bool uses_completion_queue_for_inject = false;
-    static constexpr bool supports_rma_event = false;
+    static constexpr bool supports_rma_event = true;
     static constexpr bool supports_multi_recv = true;
     static constexpr mr_mode default_mr_mode = mr_mode_flags::basic;
     static constexpr std::size_t max_inject_size = 64;
@@ -316,16 +317,18 @@ struct provider_traits<provider::tcp_tag> {
  * @brief Traits specialization for the UCX provider.
  *
  * The UCX adapter requires manual data progress and provides automatic control progress.
+ * It exposes neither atomics nor RMA events through libfabric.
  */
 template <>
 struct provider_traits<provider::ucx_tag> {
     using tag_type = provider::ucx_tag;
-    static constexpr bool supports_native_atomics = true;
+    // libfabric v2.7.0: ucx.h FI_UCX_CAPS and ucx_domain.c query_atomic.
+    static constexpr bool supports_native_atomics = false;
     static constexpr bool uses_staged_atomics = false;
     static constexpr bool supports_inject = true;
     static constexpr bool supports_selective_completion = true;
     static constexpr bool uses_completion_queue_for_inject = false;
-    static constexpr bool supports_rma_event = true;
+    static constexpr bool supports_rma_event = false;
     static constexpr bool supports_multi_recv = true;
     static constexpr mr_mode default_mr_mode = mr_mode_flags::basic;
     static constexpr std::size_t max_inject_size = 128;
@@ -568,7 +571,10 @@ template <provider_tag P>
 static_assert(native_atomic_provider<provider::verbs_tag>);
 static_assert(native_atomic_provider<provider::slingshot_tag>);
 static_assert(staged_atomic_provider<provider::efa_tag>);
-static_assert(staged_atomic_provider<provider::tcp_tag>);
+static_assert(!staged_atomic_provider<provider::tcp_tag>);
+static_assert(!native_atomic_provider<provider::tcp_tag>);
+static_assert(!staged_atomic_provider<provider::ucx_tag>);
+static_assert(!native_atomic_provider<provider::ucx_tag>);
 static_assert(inject_capable_provider<provider::verbs_tag>);
 static_assert(inject_capable_provider<provider::efa_tag>);
 static_assert(local_key_required_provider<provider::verbs_tag>);
