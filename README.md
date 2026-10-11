@@ -368,6 +368,33 @@ return `errc::invalid_argument`. An empty range at the parent's end is valid
 when its address is representable. Both helpers preserve the full remote key
 and work with virtual-address and offset-based registrations.
 
+Scalar exports are checked: `memory_region::key()`, `remote_memory::from_mr()`,
+provider-specific exports and MR-cache exports return `result`. Empty regions
+report `invalid_argument`, unavailable native keys report `again`, and raw-key
+domains report `not_supported` through these scalar interfaces. Registered Asio
+buffer key accessors follow the same contract.
+
+For raw-key registrations, use `mr.export_raw()` and exchange the returned
+`raw_remote_memory` fields through the consumer's wire protocol. Preserve
+`base_addr`, `addr`, `length` and every key byte. The native mapping base and
+the RMA address are distinct, including for offset-based registrations.
+On the initiating peer:
+
+```cpp
+auto mapping = mapped_remote_memory::map(domain, std::move(received_metadata)).value();
+auto remote = mapping.remote().value();
+// Submit RMA or atomics with remote, then retire every accepted operation.
+mapping.close().value();
+```
+
+The mapping retains its raw bytes and unmaps its native key on destruction.
+Call `close()` explicitly to observe failures; a failed close retains ownership
+for retry. The initiating domain, backing memory resources and exported target
+registration must outlive their use. Move construction transfers ownership;
+move assignment exchanges mappings without implicitly closing either one.
+Use mapped descriptors only with endpoints in the initiating domain; copying a
+descriptor does not retain its mapping.
+
 To count remote writes and modifying atomics to a specific registration,
 request `memory_registration{.access = mr_access_flags::remote_write,
 .rma_events = true}` and call `mr.bind(counter)`. Accessing endpoints must

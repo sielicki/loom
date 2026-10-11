@@ -965,7 +965,7 @@ TEST_CASE("RMA senders complete sockets transfers with selective completion",
     auto target_mr = memory_region::register_memory(
         *dom, target, mr_access_flags::remote_read | mr_access_flags::remote_write);
     REQUIRE(target_mr);
-    const auto remote = remote_memory::from_mr(*target_mr);
+    const auto remote = remote_memory::from_mr(*target_mr).value();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
     completion_state state;
     auto run = [&](auto sender) {
@@ -1368,7 +1368,7 @@ TEST_CASE("borrowed atomic senders update a registered RDM peer",
                                        std::as_writable_bytes(std::span{&remote_value, 1}),
                                        mr_access_flags::remote_read | mr_access_flags::remote_write)
             .value();
-    const auto remote = remote_memory::from_mr(remote_mr);
+    const auto remote = remote_memory::from_mr(remote_mr).value();
     std::size_t limit{};
     REQUIRE(
         atomic::is_fetch_valid(source, atomic::operation::sum, atomic::datatype::uint64, &limit));

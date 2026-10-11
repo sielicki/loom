@@ -55,8 +55,9 @@ struct provider_remote_memory : provider_aware_remote_memory_base<provider_remot
      * @param mr The memory region.
      * @return A provider-specific remote memory descriptor.
      */
-    static auto from_mr(const memory_region& mr) -> provider_remote_memory {
-        return provider_remote_memory{remote_memory::from_mr(mr)};
+    static auto from_mr(const memory_region& mr) -> result<provider_remote_memory> {
+        return remote_memory::from_mr(mr).transform(
+            [](const remote_memory& remote) { return provider_remote_memory{remote}; });
     }
 
     /**

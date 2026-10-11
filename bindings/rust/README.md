@@ -157,6 +157,11 @@ ordinary system memory uses `Unspecified`. Negative ordinals and device
 allocation flags on the system interface are rejected before registration.
 Provider errors never trigger a fallback to system memory.
 
+`MemoryRegion::key()` and `remote_memory()` now return `Result`. Check their
+results before exchanging metadata: raw-key registrations and unavailable keys
+cannot be exported as ordinary scalar descriptors. Raw-key mapping is available
+through the C++ API; the Rust scalar interface rejects those registrations.
+
 Negotiate `Capabilities::HMEM` and satisfy the returned MR requirements
 before registering accelerator memory. Retain the allocation through all
 registration clones and accepted operations. Registration does not synchronize

@@ -509,7 +509,7 @@ auto av_insert(const AddressVectorHandle& av, rust::Slice<const std::uint8_t> ad
 }
 
 auto mr_key(const MemoryRegionHandle& mr) -> std::uint64_t {
-    return mr.get().key();
+    return unwrap_or_throw(mr.get().key());
 }
 
 auto mr_descriptor(const MemoryRegionHandle& mr) -> std::uintptr_t {
@@ -517,7 +517,8 @@ auto mr_descriptor(const MemoryRegionHandle& mr) -> std::uintptr_t {
 }
 
 auto mr_remote_memory(const MemoryRegionHandle& mr) -> RemoteMemory {
-    return {.addr = mr.get().remote_address(), .key = mr.get().key(), .length = mr.get().length()};
+    const auto remote = unwrap_or_throw(loom::remote_memory::from_mr(mr.get()));
+    return {.addr = remote.addr, .key = remote.key, .length = remote.length};
 }
 
 auto cap_msg() -> std::uint64_t {

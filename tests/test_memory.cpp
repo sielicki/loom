@@ -387,7 +387,7 @@ TEST_CASE("registration keys span all memory interfaces and follow region lifeti
                 : memory_region::register_dmabuf(
                       provider.dom, buffer.data(), buffer.size(), access, 7);
         REQUIRE(region);
-        REQUIRE(region->key() < 256);
+        REQUIRE(region->key().value() < 256);
         regions.push_back(std::move(*region));
     }
     REQUIRE(provider.keys.size() == 256);
@@ -519,15 +519,15 @@ TEST_CASE("remote descriptors honor registration addressing modes", "[memory][re
                         (interface == 2 ? 16 : 0);
     REQUIRE(moved.remote_address() == expected);
     REQUIRE(region->remote_address() == 0);
-    const auto generic = remote_memory::from_mr(moved);
+    const auto generic = remote_memory::from_mr(moved).value();
     REQUIRE(generic.addr == expected);
     REQUIRE(generic.key == moved.key());
     REQUIRE(generic.length == buffer.size());
-    const auto specialized = provider_remote_memory<provider::tcp_tag>::from_mr(moved);
+    const auto specialized = provider_remote_memory<provider::tcp_tag>::from_mr(moved).value();
     REQUIRE(specialized.addr == expected);
     REQUIRE(specialized.key == moved.key());
     REQUIRE(specialized.length == buffer.size());
-    REQUIRE(remote_memory::from_mr(*region).addr == 0);
+    REQUIRE_FALSE(remote_memory::from_mr(*region));
 }
 
 TEST_CASE("cached memory exports registration-relative remote addresses",
@@ -538,7 +538,7 @@ TEST_CASE("cached memory exports registration-relative remote addresses",
     std::array<std::byte, 64> buffer{};
     auto handle = cache.lookup(buffer, mr_access_flags::remote_write);
     REQUIRE(handle);
-    const auto remote = handle->to_remote_memory();
+    const auto remote = handle->to_remote_memory().value();
     const auto expected =
         mode == 0
             ? 0
@@ -583,7 +583,7 @@ TEST_CASE("exported remote addresses support sockets loopback writes", "[memory]
                                              mr_access_flags::remote_write | mr_access_flags::read |
                                                  mr_access_flags::write);
     REQUIRE(mr);
-    const auto remote = remote_memory::from_mr(*mr).subregion(16, 1).value();
+    const auto remote = remote_memory::from_mr(*mr).value().subregion(16, 1).value();
     for (const auto& rejected : {rma::write_to(*ep,
                                                std::span<const std::byte>{buffer}.first(2),
                                                *mr,

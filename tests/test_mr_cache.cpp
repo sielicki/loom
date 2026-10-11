@@ -352,16 +352,15 @@ TEST_CASE("handle default state", "[mr_cache]") {
     REQUIRE_FALSE(handle.valid());
     REQUIRE_FALSE(handle);
     REQUIRE(handle.mr() == nullptr);
-    REQUIRE(handle.key() == 0UL);
+    REQUIRE(handle.key().error() == loom::errc::invalid_argument);
     REQUIRE_FALSE(handle.descriptor());
     REQUIRE(handle.base_address() == nullptr);
     REQUIRE(handle.length() == 0UL);
     REQUIRE(handle.refcount() == 0UL);
 
     auto remote = handle.to_remote_memory();
-    REQUIRE(remote.addr == 0UL);
-    REQUIRE(remote.key == 0UL);
-    REQUIRE(remote.length == 0UL);
+    REQUIRE_FALSE(remote);
+    REQUIRE(remote.error() == loom::errc::invalid_argument);
 }
 
 TEST_CASE("handle copy and move", "[mr_cache]") {

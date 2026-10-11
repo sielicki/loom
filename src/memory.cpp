@@ -83,7 +83,8 @@ auto memory_region::register_memory(const domain& dom,
         addr,
         length,
         std::move(*requested_key),
-        *remote_address);
+        *remote_address,
+        dom.impl_->mr_mode);
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -191,7 +192,8 @@ auto memory_region::register_memory(const domain& dom,
         *local_address,
         length,
         std::move(*requested_key),
-        *remote_address);
+        *remote_address,
+        dom.impl_->mr_mode);
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -228,11 +230,42 @@ auto memory_region::descriptor() const noexcept -> mr_descriptor {
     return mr_descriptor{fi_mr_desc(impl_->mr)};
 }
 
-auto memory_region::key() const noexcept -> std::uint64_t {
-    if (!impl_ || !impl_->mr) {
-        return 0;
-    }
-    return fi_mr_key(impl_->mr);
+auto memory_region::key() const noexcept -> result<std::uint64_t> {
+    if (!impl_ || !impl_->mr)
+        return make_error_result<std::uint64_t>(errc::invalid_argument);
+    if (impl_->registration_mode & FI_MR_RAW)
+        return make_error_result<std::uint64_t>(errc::not_supported);
+    const auto key = fi_mr_key(impl_->mr);
+    if (key == FI_KEY_NOTAVAIL)
+        return make_error_result<std::uint64_t>(errc::again);
+    return key;
+}
+
+auto memory_region::export_raw(memory_resource* resource) const -> result<raw_remote_memory> {
+    if (!impl_ || !impl_->mr)
+        return make_error_result<raw_remote_memory>(errc::invalid_argument);
+    if (!FI_CHECK_OP(impl_->mr->fid.ops, fi_ops, control))
+        return make_error_result<raw_remote_memory>(errc::not_supported);
+    std::size_t size{};
+    std::uint64_t base{};
+    const auto probe = fi_mr_raw_attr(impl_->mr, &base, nullptr, &size, 0);
+    if (probe != 0 && probe != -FI_ETOOSMALL)
+        return make_error_result_from_fi_errno<raw_remote_memory>(-probe);
+    raw_remote_memory raw{
+        .addr = impl_->remote_addr,
+        .length = impl_->length,
+        .key = pmr::vector<std::byte>{resource ? resource : get_default_resource()},
+    };
+    raw.key.resize(size);
+    const auto status =
+        fi_mr_raw_attr(impl_->mr, &base, reinterpret_cast<std::uint8_t*>(raw.key.data()), &size, 0);
+    if (status != 0)
+        return make_error_result_from_fi_errno<raw_remote_memory>(-status);
+    if (size > raw.key.size())
+        return make_error_result<raw_remote_memory>(errc::io_error);
+    raw.key.resize(size);
+    raw.base_addr = base;
+    return raw;
 }
 
 auto memory_region::address() const noexcept -> void* {
@@ -307,6 +340,52 @@ auto memory_region::refresh() -> result<void> {
 
 auto memory_region::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->mr : nullptr;
+}
+
+mapped_remote_memory::mapped_remote_memory() = default;
+mapped_remote_memory::~mapped_remote_memory() = default;
+mapped_remote_memory::mapped_remote_memory(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+mapped_remote_memory::mapped_remote_memory(mapped_remote_memory&&) noexcept = default;
+
+auto mapped_remote_memory::operator=(mapped_remote_memory&& other) noexcept
+    -> mapped_remote_memory& {
+    impl_.swap(other.impl_);
+    return *this;
+}
+
+auto mapped_remote_memory::map(const domain& dom, raw_remote_memory raw, memory_resource* resource)
+    -> result<mapped_remote_memory> {
+    if (!dom || !remote_memory{raw.addr, 0, raw.length}.contains(0, raw.length))
+        return make_error_result<mapped_remote_memory>(errc::invalid_argument);
+    auto* native = static_cast<fid_domain*>(dom.internal_ptr());
+    if (!FI_CHECK_OP(native->fid.ops, fi_ops, control))
+        return make_error_result<mapped_remote_memory>(errc::not_supported);
+    auto impl = detail::make_pmr_unique<detail::mapped_remote_memory_impl>(
+        resource ? resource : get_default_resource(), std::move(raw));
+    const auto status = fi_mr_map_raw(native,
+                                      impl->raw.base_addr,
+                                      reinterpret_cast<std::uint8_t*>(impl->raw.key.data()),
+                                      impl->raw.key.size(),
+                                      &impl->key,
+                                      0);
+    if (status != 0)
+        return make_error_result_from_fi_errno<mapped_remote_memory>(-status);
+    impl->domain = native;
+    return mapped_remote_memory{std::move(impl)};
+}
+
+mapped_remote_memory::operator bool() const noexcept {
+    return impl_ && impl_->domain;
+}
+
+auto mapped_remote_memory::remote() const noexcept -> result<remote_memory> {
+    if (!*this)
+        return make_error_result<remote_memory>(errc::invalid_argument);
+    return remote_memory{impl_->raw.addr, impl_->key, impl_->raw.length};
+}
+
+auto mapped_remote_memory::close() noexcept -> void_result {
+    return impl_ ? impl_->close() : make_success();
 }
 
 }  // namespace loom

@@ -120,7 +120,7 @@ fn domain_filters_and_registration_facts_reach_rust() {
         .memory_region_mode
         .intersects(MrMode::VIRT_ADDR | MrMode::BASIC);
     assert_eq!(
-        registration.remote_memory().addr,
+        registration.remote_memory().unwrap().addr,
         if virtual_address {
             buffer.as_ptr() as u64
         } else {

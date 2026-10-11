@@ -94,7 +94,9 @@ public:
         return mr_ ? mr_->descriptor() : mr_descriptor{};
     }
 
-    [[nodiscard]] auto key() const noexcept -> std::uint64_t { return mr_ ? mr_->key() : 0; }
+    [[nodiscard]] auto key() const noexcept -> result<std::uint64_t> {
+        return mr_ ? mr_->key() : make_error_result<std::uint64_t>(errc::invalid_argument);
+    }
 
     auto operator+=(std::size_t n) noexcept -> mutable_registered_buffer& {
         buffer_ += n;
@@ -140,7 +142,9 @@ public:
         return mr_ ? mr_->descriptor() : mr_descriptor{};
     }
 
-    [[nodiscard]] auto key() const noexcept -> std::uint64_t { return mr_ ? mr_->key() : 0; }
+    [[nodiscard]] auto key() const noexcept -> result<std::uint64_t> {
+        return mr_ ? mr_->key() : make_error_result<std::uint64_t>(errc::invalid_argument);
+    }
 
     auto operator+=(std::size_t n) noexcept -> const_registered_buffer& {
         buffer_ += n;

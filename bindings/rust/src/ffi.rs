@@ -311,6 +311,9 @@ pub mod ffi {
     #[cfg(feature = "test_fixtures")]
     unsafe extern "C++" {
         include!("tests/completion_fixture.hpp");
+        include!("tests/memory_fixture.hpp");
+        fn test_memory_key(raw: bool, key: u64) -> Result<u64>;
+        fn test_memory_export(raw: bool, key: u64) -> Result<RemoteMemory>;
 
         fn test_completion_read(
             kind: TestCompletionKind,
@@ -527,13 +530,13 @@ pub mod ffi {
         // ====================================================================
 
         /// Get the key for a memory region.
-        fn mr_key(mr: &MemoryRegionHandle) -> u64;
+        fn mr_key(mr: &MemoryRegionHandle) -> Result<u64>;
 
         /// Get the local descriptor for a memory region.
         fn mr_descriptor(mr: &MemoryRegionHandle) -> usize;
 
         /// Export the negotiated address model, full key and registered length.
-        fn mr_remote_memory(mr: &MemoryRegionHandle) -> RemoteMemory;
+        fn mr_remote_memory(mr: &MemoryRegionHandle) -> Result<RemoteMemory>;
 
         // ====================================================================
         // Capability constants

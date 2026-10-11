@@ -7,6 +7,8 @@
 #include <iterator>
 
 #include "loom/core/crtp/crtp_detection.hpp"
+#include "loom/core/result.hpp"
+#include "loom/core/types.hpp"
 
 /**
  * @namespace loom
@@ -65,8 +67,8 @@ concept remote_memory_descriptor_duck = requires(const T& rm) {
  */
 template <typename T>
 concept memory_region_type = requires(const T& mr) {
-    { mr.descriptor() } noexcept -> std::convertible_to<void*>;
-    { mr.key() } noexcept -> std::convertible_to<std::uint64_t>;
+    { mr.descriptor() } noexcept -> std::same_as<mr_descriptor>;
+    { mr.key() } noexcept -> std::same_as<result<std::uint64_t>>;
     { mr.address() } noexcept -> std::convertible_to<void*>;
     { mr.length() } noexcept -> std::convertible_to<std::size_t>;
 };

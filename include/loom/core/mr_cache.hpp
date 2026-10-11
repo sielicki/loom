@@ -227,10 +227,11 @@ public:
 
     /**
      * @brief Gets the memory region key.
-     * @return The key, or 0 if invalid.
+     * @return The scalar key, or an error for invalid or raw-key regions.
      */
-    [[nodiscard]] auto key() const noexcept -> std::uint64_t {
-        return entry_ && entry_->mr ? entry_->mr->key() : 0;
+    [[nodiscard]] auto key() const noexcept -> result<std::uint64_t> {
+        return entry_ && entry_->mr ? entry_->mr->key()
+                                    : make_error_result<std::uint64_t>(errc::invalid_argument);
     }
 
     /**
@@ -269,9 +270,9 @@ public:
      * @brief Converts to a remote memory descriptor.
      * @return The remote memory descriptor.
      */
-    [[nodiscard]] auto to_remote_memory() const noexcept -> remote_memory {
+    [[nodiscard]] auto to_remote_memory() const noexcept -> result<remote_memory> {
         if (!entry_ || !entry_->mr) {
-            return remote_memory{};
+            return make_error_result<remote_memory>(errc::invalid_argument);
         }
         return remote_memory::from_mr(*entry_->mr);
     }

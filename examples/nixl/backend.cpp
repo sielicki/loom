@@ -916,7 +916,7 @@ public:
                                        local->memory->base,
                                        std::uint64_t{region.length()},
                                        region.remote_address(),
-                                       region.key(),
+                                       checked(region.key()),
                                        std::to_underlying(local->memory->identity.space),
                                        local->memory->identity.device,
                                        std::to_underlying(local->memory->id)});

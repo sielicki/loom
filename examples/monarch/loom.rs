@@ -580,7 +580,7 @@ impl Worker {
             .checked_add(1)
             .context("Loom registration generations exhausted")?;
         self.next_registration = generation;
-        let remote = registration.region.remote_memory();
+        let remote = registration.region.remote_memory()?;
         let context = LoomRemoteContext {
             schema: SCHEMA,
             protocol: self.attributes.protocol,

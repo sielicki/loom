@@ -598,7 +598,7 @@ TEST_CASE("registered RDM atomics select the destination peer", "[atomic][peer][
     REQUIRE(comparison_mr);
     REQUIRE(output_mr);
     REQUIRE(target_mr);
-    const auto remote = remote_memory::from_mr(*target_mr);
+    const auto remote = remote_memory::from_mr(*target_mr).value();
     std::size_t limit{};
     REQUIRE(
         atomic::is_fetch_valid(*source, atomic::operation::sum, atomic::datatype::uint64, &limit));

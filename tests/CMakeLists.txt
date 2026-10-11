@@ -63,6 +63,7 @@ loom_add_test(test_types)
 loom_add_test(test_error)
 loom_add_test(test_memory)
 loom_add_test(test_memory_events)
+loom_add_test(test_raw_memory)
 loom_add_test(test_resource_allocations)
 loom_add_test(test_fabric_import)
 loom_add_test(test_mr_cache)
@@ -114,6 +115,7 @@ target_link_libraries(loom_test_implementation
 add_executable(test_implementation
     test_memory.cpp
     test_memory_events.cpp
+    test_raw_memory.cpp
     test_resource_allocations.cpp
     test_empty_resources.cpp
     test_atomic.cpp

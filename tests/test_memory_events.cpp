@@ -235,7 +235,7 @@ TEST_CASE("sockets counts remote writes only to the bound MR", "[memory][rma_eve
     int context{};
     for (const auto count_write : {true, false, true}) {
         source.fill(std::byte{static_cast<unsigned char>(++context)});
-        const auto remote = remote_memory::from_mr(count_write ? counted : uncounted);
+        const auto remote = remote_memory::from_mr(count_write ? counted : uncounted).value();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
         void_result submitted;
         do {

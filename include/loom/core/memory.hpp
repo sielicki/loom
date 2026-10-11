@@ -31,6 +31,7 @@ namespace detail {
  * @brief Internal implementation for memory_region.
  */
 struct memory_region_impl;
+struct mapped_remote_memory_impl;
 }  // namespace detail
 
 /**
@@ -145,6 +146,17 @@ struct memory_registration {
     bool rma_events{};
 };
 
+/// Owned wire metadata for a registration with a raw protection key.
+/// The key bytes and native base address must reach the peer unchanged. addr
+/// is the RMA address (virtual or MR-relative), distinct from the mapping base.
+/// This metadata does not retain the exported registration or allocation.
+struct raw_remote_memory {
+    std::uint64_t base_addr{};
+    std::uint64_t addr{};
+    std::size_t length{};
+    pmr::vector<std::byte> key{};
+};
+
 /**
  * @class memory_region
  * @brief Represents a registered memory region for RDMA operations.
@@ -231,7 +243,14 @@ public:
 
     [[nodiscard]] auto descriptor() const noexcept -> mr_descriptor;
 
-    [[nodiscard]] auto key() const noexcept -> std::uint64_t;
+    /// Export a scalar key. Raw-key domains require export_raw() and peer
+    /// mapping; an unavailable native key reports errc::again.
+    [[nodiscard]] auto key() const noexcept -> result<std::uint64_t>;
+
+    /// Export owned raw-key metadata through the provider's MR control.
+    /// The supplied memory resource must outlive the returned key bytes.
+    [[nodiscard]] auto export_raw(memory_resource* resource = nullptr) const
+        -> result<raw_remote_memory>;
 
     /// Start of the registered local span, including any DMA-BUF offset.
     /// Null when a DMA-BUF has no local mapping, or this region is empty.
@@ -304,11 +323,47 @@ struct remote_memory : remote_memory_base<remote_memory> {
     /**
      * @brief Creates a remote_memory descriptor from a local memory region.
      * @param mr The local memory region to describe.
-     * @return A remote_memory descriptor for the given region.
+     * @return A scalar descriptor, or an error for an empty region, a raw-key
+     * domain, or an unavailable native key.
      */
-    static auto from_mr(const memory_region& mr) -> remote_memory {
-        return remote_memory{mr.remote_address(), mr.key(), mr.length()};
+    [[nodiscard]] static auto from_mr(const memory_region& mr) noexcept -> result<remote_memory> {
+        return mr.key().transform([&](std::uint64_t key) {
+            return remote_memory{mr.remote_address(), key, mr.length()};
+        });
     }
+};
+
+/// Owns a peer raw-key mapping in the initiating domain. The domain and memory
+/// resources backing this owner and its raw bytes must outlive it. All operations
+/// using remote() must retire before close or destruction; exported target
+/// registrations must also remain alive.
+/// Call close() to observe unmapping errors and retry before destruction.
+class mapped_remote_memory {
+public:
+    mapped_remote_memory();
+    ~mapped_remote_memory();
+    mapped_remote_memory(const mapped_remote_memory&) = delete;
+    auto operator=(const mapped_remote_memory&) -> mapped_remote_memory& = delete;
+    mapped_remote_memory(mapped_remote_memory&&) noexcept;
+    /// Exchange ownership, retaining the destination's previous mapping in other.
+    auto operator=(mapped_remote_memory&& other) noexcept -> mapped_remote_memory&;
+
+    /// The owner retains raw bytes through unmapping. Passing an rvalue avoids
+    /// copying the wire metadata. No native mapping is acquired before allocation.
+    [[nodiscard]] static auto
+    map(const domain& dom, raw_remote_memory raw, memory_resource* resource = nullptr)
+        -> result<mapped_remote_memory>;
+    [[nodiscard]] explicit operator bool() const noexcept;
+    /// Borrow a descriptor for endpoints in the initiating domain. Copies do
+    /// not retain the mapping and must not be used after unmapping.
+    [[nodiscard]] auto remote() const noexcept -> result<remote_memory>;
+    /// Success invalidates the owner; failure preserves it for a retry.
+    [[nodiscard]] auto close() noexcept -> void_result;
+
+private:
+    using impl_ptr = detail::pmr_unique_ptr<detail::mapped_remote_memory_impl>;
+    explicit mapped_remote_memory(impl_ptr impl) noexcept;
+    impl_ptr impl_;
 };
 
 }  // namespace loom

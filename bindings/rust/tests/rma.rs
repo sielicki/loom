@@ -67,6 +67,7 @@ impl Node {
             memory: remote
                 .region
                 .remote_memory()
+                .unwrap()
                 .subregion(offset, length)
                 .unwrap(),
         }
@@ -399,7 +400,7 @@ fn invalid_device_attributes_cannot_register_as_system_memory() {
         )
     }
     .unwrap();
-    assert_eq!(valid.remote_memory().length, buffer.len());
+    assert_eq!(valid.remote_memory().unwrap().length, buffer.len());
 }
 
 #[test]
@@ -466,7 +467,12 @@ async fn async_registered_transfers(provider: &str) {
     let peer = unsafe { addresses.insert(&remote.endpoint.name().unwrap()) }.unwrap();
     let destination = RmaTarget {
         peer,
-        memory: remote.region.remote_memory().subregion(31, 199).unwrap(),
+        memory: remote
+            .region
+            .remote_memory()
+            .unwrap()
+            .subregion(31, 199)
+            .unwrap(),
     };
     let delivered = RmaOptions {
         completion: RmaCompletion::Delivery,

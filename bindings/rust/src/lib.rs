@@ -638,9 +638,9 @@ impl MemoryRegion {
         })
     }
 
-    /// Get the memory region key for remote access.
-    pub fn key(&self) -> u64 {
-        ffi::ffi::mr_key(&self.inner)
+    /// Export a scalar key; raw-key and unavailable registrations return errors.
+    pub fn key(&self) -> Result<u64> {
+        Ok(ffi::ffi::mr_key(&self.inner)?)
     }
 
     /// Get the local descriptor for use in operations.
@@ -650,8 +650,9 @@ impl MemoryRegion {
 
     /// Export the negotiated remote address, 64-bit key and registered length.
     /// Peers may use this metadata only while this registration remains alive.
-    pub fn remote_memory(&self) -> RemoteMemory {
-        ffi::ffi::mr_remote_memory(&self.inner)
+    /// Raw-key and unavailable registrations return errors rather than scalar metadata.
+    pub fn remote_memory(&self) -> Result<RemoteMemory> {
+        Ok(ffi::ffi::mr_remote_memory(&self.inner)?)
     }
 }
 
@@ -1238,3 +1239,7 @@ mod tests {
 #[cfg(all(test, feature = "test_fixtures"))]
 #[path = "../tests/fixtures/completion_metadata.rs"]
 mod completion_metadata;
+
+#[cfg(all(test, feature = "test_fixtures"))]
+#[path = "../tests/fixtures/raw_memory.rs"]
+mod raw_memory;
