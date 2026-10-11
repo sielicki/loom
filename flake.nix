@@ -121,6 +121,11 @@
           # Asio (standalone, header-only)
           asio = pkgs.asio;
 
+          checkInstalled = loom: pkgs.callPackage ./nix/checks/installed {
+            inherit loom;
+            stdenv = if isDarwin then pkgs.llvmPackages_latest.stdenv else pkgs.gcc15Stdenv;
+          };
+
           # Common build inputs for all targets
           commonBuildInputs = with pkgs;
             [
@@ -203,10 +208,8 @@
 
               buildInputs =
                 [
-                  libfabric
                   pkgs.catch2_3
                 ]
-                ++ lib.optionals enableAsio [ asio ]
                 ++ lib.optionals (!stdenv.isDarwin) [
                   rdma-core
                   numactl
@@ -215,6 +218,8 @@
                   # Apple SDK (includes all frameworks)
                   pkgs.apple-sdk_15
                 ];
+
+              propagatedBuildInputs = [ libfabric ] ++ lib.optionals enableAsio [ asio ];
 
               cmakeFlags =
                 [
@@ -298,12 +303,12 @@
               loom-clang = pkgs.llvmPackages_latest.callPackage mkLoom { inherit libfabric; };
 
               loom-stdexec = loom.overrideAttrs (old: {
-                buildInputs = old.buildInputs ++ [ stdexec ];
+                propagatedBuildInputs = old.propagatedBuildInputs ++ [ stdexec ];
                 cmakeFlags = old.cmakeFlags ++ [ "-DLOOM_USE_STDEXEC=ON" ];
               });
 
               loom-beman = loom.overrideAttrs (old: {
-                buildInputs = old.buildInputs ++ [ beman-execution ];
+                propagatedBuildInputs = old.propagatedBuildInputs ++ [ beman-execution ];
                 cmakeFlags = old.cmakeFlags ++ [ "-DLOOM_USE_BEMAN_EXECUTION=ON" ];
               });
 
@@ -646,6 +651,11 @@
 
               loom-build-stdexec = self'.packages.loom-stdexec;
               loom-build-beman = self'.packages.loom-beman;
+
+              loom-installed = checkInstalled self'.packages.loom;
+              loom-installed-stdexec = checkInstalled self'.packages.loom-stdexec;
+              loom-installed-beman = checkInstalled self'.packages.loom-beman;
+              loom-installed-asio = checkInstalled self'.packages.loom-asio;
 
               # Formatting check (treefmt)
               formatting = config.treefmt.build.check self;
