@@ -115,6 +115,7 @@
               ./nix/pkgs/libfabric/sockets-probe-metadata.patch
               ./nix/pkgs/libfabric/sockets-unified-progress.patch
               ./nix/pkgs/libfabric/srx-probe-metadata.patch
+              ./nix/pkgs/libfabric/discovery-copy-ownership.patch
             ];
             doCheck = !isDarwin && pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
             checkPhase = ''
@@ -127,6 +128,13 @@
                 -o test-name-server
               ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
                 timeout 30 ./test-name-server
+              "$CC" -g -O1 -Iinclude -Wall -Wextra -Werror \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                ${./nix/pkgs/libfabric/test-dupinfo.c} \
+                -Lsrc/.libs -Wl,-rpath,"$PWD/src/.libs" -lfabric \
+                -o test-dupinfo
+              ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+                timeout 30 ./test-dupinfo
             '' + lib.optionalString pkgs.stdenv.hostPlatform.isx86_64 ''
               "$CC" -g -O1 -D_GNU_SOURCE -Iinclude \
                 -fsanitize=address,undefined -fno-omit-frame-pointer \

@@ -1,0 +1,17 @@
+Keep the source NIC alive when duplicating discovery information fails.
+Until FI_DUP succeeds, the shallow-copied NIC still belongs to the source.
+Allocation and provider-copy failures must not close it during cleanup.
+
+Based on ofiwg/libfabric v2.7.0.
+
+--- a/src/fabric.c
++++ b/src/fabric.c
+@@ -1661,6 +1661,8 @@
+ 	return dup;
+ 
+ fail:
++	/* FI_DUP has not transferred ownership of a NIC to this copy. */
++	dup->nic = NULL;
+ 	fi_freeinfo(dup);
+ 	return NULL;
+ }
