@@ -380,6 +380,10 @@
                   config.allowUnfree = true;
                 }).cudaPackages;
               };
+              nccl-loom = pkgs.callPackage ./examples/nccl {
+                stdenv = pkgs.gcc15Stdenv;
+                inherit (self'.packages) loom nccl-plugin-sdk;
+              };
               openmpi-consumer = pkgs.callPackage ./examples/openmpi {
                 stdenv = pkgs.gcc15Stdenv;
                 inherit libfabric;
@@ -810,6 +814,7 @@
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
               nccl-plugin-sdk = self'.packages.nccl-plugin-sdk;
+              nccl-loom = self'.packages.nccl-loom;
               openmpi-consumer = self'.packages.openmpi-consumer;
               openmpi-loom = self'.packages.openmpi-loom;
               openmpi-pmix-get = pkgs.callPackage ./examples/openmpi/pmix-get-check.nix {

@@ -17,14 +17,100 @@ headers and pkg-config metadata. It needs no GPU or CUDA driver. The packaged
 headers include NCCL's communicator configuration, request accounting, memory
 registration, DMA-BUF, and receive-visibility callbacks.
 
-The Loom transport implementation and NCCL collective workloads are still
-pending. The target is a host-driven network plugin with nonblocking connection
-setup, bounded requests, registered tagged transfers, and shared CQ dispatch.
-HMEM support must retain the allocation's interface, device, registration
-requirements, and lifetime, and establish GPU receive visibility before
-completion is reported to NCCL. CUDA registration and successful transport
-completion alone do not establish that visibility guarantee.
+Build the Loom plugin and run its ABI workloads:
 
-Software-provider ABI workloads and GPU collective workloads will be separate
-acceptance checks. CUDA collective validation requires an NVIDIA GPU and
-driver; compiling the SDK on another machine does not establish GPU support.
+```sh
+nix build .#nccl-loom
+./result/bin/nccl-loom-workload ./result/lib/libnccl-net-loom.so sockets
+./result/bin/nccl-loom-workload ./result/lib/libnccl-net-loom.so 'tcp;ofi_rxm' --processes
+```
+
+The package runs four workloads: same-process and separate-process transfers
+on sockets and TCP/RxM. The executable loads the installed shared object and
+calls its exported `ncclNetPlugin_v12` table. It checks nonblocking connection
+setup, all 32 request slots, backpressure, reversed tag order including the sign
+bit, zero-byte transfers, actual completion lengths, truncation, registration
+retention after deregistration, invalid handles/ranges, and incomplete-accept
+cleanup. The separate-process workload verifies a registered 1 MiB payload.
+Payload and connection-handshake messages go through Loom; its bootstrap
+socket only exchanges NCCL's handle and test coordination.
+
+To build locally with the pinned dependencies:
+
+```sh
+nix develop .#nccl-plugin
+cmake -S examples/nccl -B build/nccl -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/nccl
+ctest --test-dir build/nccl --output-on-failure
+```
+
+## Current transport contract
+
+The library is `libnccl-net-loom.so`; NCCL selects it with
+`NCCL_NET_PLUGIN=loom` and its directory on the library search path.
+`NCCL_LOOM_PROVIDER` and `NCCL_LOOM_DOMAIN` are discovery filters, defaulting
+to `sockets` and `lo`. The defaults are for local software-provider validation.
+Remote hosts require a reachable domain selected explicitly. Capabilities,
+context obligations, MR modes, tag-bit availability, and transfer limits are
+validated from numeric attributes, independently of provider names.
+
+The first implementation exposes one IPv4 RDM adapter, host pointers, one
+receive per request, and 32 outstanding requests per comm. Each comm owns its
+endpoint, CQ, address vector, and registrations. Sends and receives share the
+CQ's registered dispatch mechanism. Tags are mapped into the provider's usable
+bits; peer metadata verifies the wire version, protocol, and tag format.
+Receive lengths come from completions, while send requests retain their size.
+The reported speed is a nominal software-adapter value, not a measured NIC rate.
+
+Connect and accept advance only available work and return null until the
+handshake completes. Each listener establishes one receiving comm. A context
+owns unfinished connects, and successful native endpoint close retires their
+contexts before releasing memory. If native close fails, the handle retains
+its resource graph for a close retry; this is not a bounded recovery protocol
+for a failed provider. Registered allocations must remain alive until their
+requests finish, even after the public registration handle is deregistered.
+
+The host ABI workloads also pass with Loom and the plugin built with address
+and undefined-behavior sanitizers and leak detection. These workloads do not
+run NCCL kernels or establish CUDA collective correctness. Device offload,
+virtual NIC aggregation, multirail, and collective-network offload are absent.
+
+## HMEM work across the examples
+
+The pinned libfabric build already enables CUDA, ROCr, and Level Zero HMEM.
+Loom's `memory_registration` now combines the device interface and ordinal,
+allocation kind, and optional DMA-BUF descriptor and offset in one request.
+For example, an adapter registering device-only CUDA memory can supply:
+
+```cpp
+loom::memory_registration attributes{
+    .access = loom::mr_access_flags::send | loom::mr_access_flags::recv,
+    .device = loom::hmem_device::cuda(device_ordinal),
+    .allocation = loom::hmem_allocation_kind::device,
+    .dmabuf = loom::dmabuf_registration{fd, offset},
+};
+auto region = loom::memory_region::register_memory(domain, base, size, attributes);
+```
+
+Omit `dmabuf` for ordinary device registration. The domain must negotiate
+`capability::hmem`; endpoint binding and enabling remain necessary when
+required by the returned MR mode. Registration does not own the allocation
+or establish GPU visibility.
+
+The remaining adapter work is explicit:
+
+| Example | HMEM work still required |
+| --- | --- |
+| NIXL | Accept device segments, preserve allocation/device metadata, negotiate HMEM, and establish visibility before transfer/notification completion. |
+| Monarch | Carry GPU allocation identity through the Rust/C++ registration boundary and retain its keepalive through retirement and visibility completion. |
+| Open MPI | Enable accelerator dependencies, retain MTL device registrations and descriptors in the Loom bridge, and validate matching/packing with device buffers. |
+| NCCL | Implement CUDA pointer classification, HMEM/DMA-BUF registration and `iflush`; advertise CUDA only with a supported visibility path. |
+| AWS OFI NCCL / NVSHMEM | Create the consumer integrations and apply the same registration, lifetime, progress, and visibility contracts. |
+
+For every adapter, native transfer completion and GPU visibility are distinct
+requirements. GPU acceptance must allocate actual device memory, transfer it,
+and verify results from device execution, including nonzero device ordinals,
+subranges, cancellation/failure retirement, and allocation reuse. Mocked
+registration checks establish attribute forwarding only. CUDA collective
+validation requires an NVIDIA GPU and driver; the current AMD/WSL host does
+not provide that validation environment.
