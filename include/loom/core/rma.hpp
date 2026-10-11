@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <vector>
 
 #include <sys/uio.h>
 
@@ -17,6 +16,7 @@
 #include "loom/core/result.hpp"
 #include "loom/core/types.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/native_array.hpp"
 
 /**
  * @namespace loom::rma
@@ -190,16 +190,10 @@ auto readv_to(endpoint& ep,
         return make_error_result<void>(errc::not_supported);
     }
 
-    std::vector<void*> raw_desc;
-    raw_desc.reserve(desc.size());
-    for (const auto descriptor : desc) {
-        raw_desc.push_back(descriptor.raw());
-    }
-    std::vector<::fi_rma_iov> raw_remote;
-    raw_remote.reserve(remote_iov.size());
-    for (const auto& remote : remote_iov) {
-        raw_remote.push_back({remote.addr, remote.len, remote.key});
-    }
+    loom::detail::native_array<void*> raw_desc{desc, &mr_descriptor::raw};
+    loom::detail::native_array<::fi_rma_iov> raw_remote{
+        remote_iov,
+        [](const auto& remote) -> ::fi_rma_iov { return {remote.addr, remote.len, remote.key}; }};
     const ::fi_msg_rma message{
         .msg_iov = local_iov.data(),
         .desc = raw_desc.empty() ? nullptr : raw_desc.data(),
@@ -314,16 +308,10 @@ auto writev_to(endpoint& ep,
         return make_error_result<void>(errc::not_supported);
     }
 
-    std::vector<void*> raw_desc;
-    raw_desc.reserve(desc.size());
-    for (const auto descriptor : desc) {
-        raw_desc.push_back(descriptor.raw());
-    }
-    std::vector<::fi_rma_iov> raw_remote;
-    raw_remote.reserve(remote_iov.size());
-    for (const auto& remote : remote_iov) {
-        raw_remote.push_back({remote.addr, remote.len, remote.key});
-    }
+    loom::detail::native_array<void*> raw_desc{desc, &mr_descriptor::raw};
+    loom::detail::native_array<::fi_rma_iov> raw_remote{
+        remote_iov,
+        [](const auto& remote) -> ::fi_rma_iov { return {remote.addr, remote.len, remote.key}; }};
     const ::fi_msg_rma message{
         .msg_iov = local_iov.data(),
         .desc = raw_desc.empty() ? nullptr : raw_desc.data(),

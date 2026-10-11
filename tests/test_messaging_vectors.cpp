@@ -299,21 +299,23 @@ TEST_CASE("deferred operations reject mismatched descriptor counts", "[message][
 
 TEST_CASE("message vectors preserve registrations and reject mismatched counts", "[message]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
-    const auto count = GENERATE(0, 1, 20, 21);
-    CAPTURE(operation, count);
+    const auto iov_count = GENERATE(1UZ, 16UZ, 17UZ, 64UZ);
+    const auto count = GENERATE_COPY(0UZ, 1UZ, iov_count, iov_count + 1);
+    CAPTURE(operation, iov_count, count);
     message_provider native;
     auto ep = native.endpoint();
     auto counter = native.counter();
     context trigger_context;
     const loom::trigger::threshold_condition trigger{&counter, 1};
-    std::array<std::byte, 21> storage{};
-    std::array<iovec, 20> iov{};
+    std::array<std::byte, 65> storage{};
+    std::array<iovec, 64> iov_storage{};
+    const auto iov = std::span{iov_storage}.first(iov_count);
     std::vector<loom::mr_descriptor> descriptors;
     std::vector<void*> expected;
     for (std::size_t i = 0; i < iov.size(); ++i) {
         iov[i] = {storage.data() + i, 1};
     }
-    for (int i = 0; i < count; ++i) {
+    for (std::size_t i = 0; i < count; ++i) {
         descriptors.emplace_back(storage.data() + i);
         expected.push_back(storage.data() + i);
     }
@@ -364,7 +366,7 @@ TEST_CASE("message vectors preserve registrations and reject mismatched counts",
                     trigger);
         }
     }();
-    if (count == 0 || count == 20) {
+    if (count == 0 || count == iov_count) {
         REQUIRE(result);
         REQUIRE(native.calls == 1);
         REQUIRE(native.descriptors == expected);

@@ -304,31 +304,48 @@ TEST_CASE("vectored RMA preserves every remote segment", "[rma]") {
     REQUIRE(std::ranges::all_of(second, [](auto byte) { return byte == std::byte{42}; }));
 }
 
-TEST_CASE("vectored RMA retains all memory descriptors", "[rma]") {
+TEST_CASE("vectored RMA retains all descriptors and remote segments", "[rma]") {
+    const auto local_count = GENERATE(1UZ, 16UZ, 17UZ, 64UZ);
+    const auto remote_count = GENERATE(1UZ, 16UZ, 17UZ, 64UZ);
+    CAPTURE(local_count, remote_count);
     rma_provider native;
     auto ep = native.endpoint();
-    std::array<std::byte, 20> local{}, remote{};
-    std::array<iovec, 20> iov{};
-    std::array<mr_descriptor, 20> descriptors{};
+    std::array<std::byte, 64> local{}, remote{};
+    std::array<iovec, 64> iov_storage{};
+    std::array<mr_descriptor, 65> descriptors{};
+    std::array<rma::rma_iov, 64> remote_storage{};
+    const auto iov = std::span{iov_storage}.first(local_count);
+    const auto desc = std::span{descriptors}.first(local_count);
+    const auto remote_iov = std::span{remote_storage}.first(remote_count);
     std::vector<void*> expected;
-    for (std::size_t i = 0; i < local.size(); ++i) {
-        iov[i] = {local.data() + i, 1};
-        descriptors[i] = mr_descriptor{local.data() + i};
+    std::vector<std::uint64_t> expected_keys;
+    for (std::size_t i = 0; i < local_count; ++i) {
+        iov[i] = {local.data() + i, i + 1 == local_count ? local.size() - i : 1};
+        desc[i] = mr_descriptor{local.data() + i};
         expected.push_back(local.data() + i);
     }
-    std::array remote_iov{
-        rma::rma_iov{reinterpret_cast<std::uintptr_t>(remote.data()), remote.size(), 1}};
+    for (std::size_t i = 0; i < remote_count; ++i) {
+        remote_iov[i] = {reinterpret_cast<std::uintptr_t>(remote.data() + i),
+                         i + 1 == remote_count ? remote.size() - i : 1,
+                         i + 1000};
+        expected_keys.push_back(i + 1000);
+    }
     SECTION("read") {
-        REQUIRE(rma::readv(ep, iov, descriptors, remote_iov));
+        for (std::size_t i = 0; i < remote.size(); ++i)
+            remote[i] = static_cast<std::byte>(i + 1);
+        REQUIRE(rma::readv(ep, iov, desc, remote_iov));
     }
     SECTION("write") {
-        REQUIRE(rma::writev(ep, iov, descriptors, remote_iov));
+        for (std::size_t i = 0; i < local.size(); ++i)
+            local[i] = static_cast<std::byte>(i + 1);
+        REQUIRE(rma::writev(ep, iov, desc, remote_iov));
     }
+    REQUIRE(local == remote);
     REQUIRE(native.descriptors == expected);
-    REQUIRE(rma::readv(ep, iov, std::span{descriptors}.first(1), remote_iov).error() ==
-            errc::invalid_argument);
-    REQUIRE(rma::writev(ep, iov, std::span{descriptors}.first(1), remote_iov).error() ==
-            errc::invalid_argument);
+    REQUIRE(native.keys == expected_keys);
+    const auto mismatched = std::span{descriptors}.first(local_count + 1);
+    REQUIRE(rma::readv(ep, iov, mismatched, remote_iov).error() == errc::invalid_argument);
+    REQUIRE(rma::writev(ep, iov, mismatched, remote_iov).error() == errc::invalid_argument);
     REQUIRE(native.calls == 1);
 }
 

@@ -490,6 +490,7 @@ target_sources(loom PUBLIC
         include/loom/detail/collective_traits.hpp
         include/loom/detail/conversions.hpp
         include/loom/detail/native_address.hpp
+        include/loom/detail/native_array.hpp
         include/loom/detail/mr_key.hpp
         include/loom/detail/unique_fid.hpp
 

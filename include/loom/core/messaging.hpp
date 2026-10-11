@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <ranges>
 #include <span>
-#include <vector>
 
 #include <sys/uio.h>
 
@@ -19,6 +18,7 @@
 #include "loom/core/result.hpp"
 #include "loom/core/shared_context.hpp"
 #include "loom/core/types.hpp"
+#include "loom/detail/native_array.hpp"
 
 /**
  * @namespace loom::msg
@@ -131,14 +131,8 @@ namespace detail {
 }
 
 /// Convert every registration descriptor without imposing a provider limit.
-[[nodiscard]] inline auto descriptors_to_raw(std::span<const mr_descriptor> desc)
-    -> std::vector<void*> {
-    std::vector<void*> raw;
-    raw.reserve(desc.size());
-    for (const auto descriptor : desc) {
-        raw.push_back(descriptor.raw());
-    }
-    return raw;
+[[nodiscard]] inline auto descriptors_to_raw(std::span<const mr_descriptor> desc) {
+    return loom::detail::native_array<void*>{desc, &mr_descriptor::raw};
 }
 
 /// The caller validates the endpoint and its tagged recvmsg entry. Descriptor

@@ -418,6 +418,12 @@ return `errc::invalid_argument`. An empty range at the parent's end is valid
 when its address is representable. Both helpers preserve the full remote key
 and work with virtual-address and offset-based registrations.
 
+Registered message helpers and vectored RMA keep up to 16 native entries
+per descriptor or remote-IOV array inline. Larger arrays use heap storage
+and preserve every entry; the endpoint's advertised IOV limits still apply.
+This avoids temporary-array allocations for small submissions. Provider
+work and asynchronous operation state can allocate independently.
+
 Scalar exports are checked: `memory_region::key()`, `remote_memory::from_mr()`,
 provider-specific exports and MR-cache exports return `result`. Empty regions
 report `invalid_argument`, unavailable native keys report `again`, and raw-key
