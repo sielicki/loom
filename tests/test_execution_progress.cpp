@@ -61,6 +61,11 @@ struct provider {
     std::size_t completion_length{7};
     void* expected_result{};
     void* expected_result_descriptor{};
+    const void* expected_atomic_input{};
+    void* expected_atomic_input_descriptor{};
+    const void* expected_atomic_comparison{};
+    void* expected_atomic_comparison_descriptor{};
+    fi_addr_t expected_atomic_peer{FI_ADDR_UNSPEC};
     std::uint64_t remote_value{42};
     void* local_descriptor{};
     fi_addr_t peer{};
@@ -188,7 +193,7 @@ struct provider {
         .compwritemsg = [](fid_ep* ep,
                            const fi_msg_atomic* message,
                            const fi_ioc* compare,
-                           void**,
+                           void** compare_descriptors,
                            std::size_t compare_count,
                            fi_ioc* results,
                            void** descriptors,
@@ -202,7 +207,8 @@ struct provider {
                                       compare[0].addr,
                                       results[0],
                                       descriptors ? descriptors[0] : nullptr,
-                                      flags);
+                                      flags,
+                                      compare_descriptors ? compare_descriptors[0] : nullptr);
         },
     };
     fi_ops_cq completions{
@@ -326,18 +332,26 @@ struct provider {
                              const void* compare,
                              fi_ioc result,
                              void* descriptor,
-                             std::uint64_t flags) -> ssize_t {
+                             std::uint64_t flags,
+                             void* compare_descriptor = nullptr) -> ssize_t {
         submitted_flags = flags;
+        submitted_context = message.context;
         REQUIRE(message.iov_count == 1);
         REQUIRE(message.msg_iov[0].count == 1);
         REQUIRE(message.rma_iov_count == 1);
         REQUIRE(message.rma_iov[0].count == 1);
         REQUIRE(message.rma_iov[0].addr == 0x1000);
         REQUIRE(message.rma_iov[0].key == 1);
-        REQUIRE(message.addr == FI_ADDR_UNSPEC);
+        REQUIRE(message.addr == expected_atomic_peer);
         REQUIRE(message.datatype == FI_UINT64);
         REQUIRE(message.op == (compare ? FI_CSWAP : FI_SUM));
         REQUIRE(result.count == 1);
+        if (expected_atomic_input) {
+            REQUIRE(message.msg_iov[0].addr == expected_atomic_input);
+            REQUIRE((message.desc ? message.desc[0] : nullptr) == expected_atomic_input_descriptor);
+            REQUIRE(compare == expected_atomic_comparison);
+            REQUIRE(compare_descriptor == expected_atomic_comparison_descriptor);
+        }
         return post_atomic(
             message.msg_iov[0].addr, compare, result.addr, descriptor, message.context, flags);
     }
@@ -948,6 +962,279 @@ TEST_CASE("atomic senders store results in the supplied registration", "[executi
         run(loom::rma_async(fabric.ep).fetch_add<std::uint64_t>(
             loom::rma_addr{0x1000}, 1, loom::mr_key{1}, &mr, &fabric.cq));
     }
+}
+
+TEST_CASE("atomic senders borrow registered operands for explicit peers",
+          "[execution][progress][atomic]") {
+    const auto compare_swap = GENERATE(false, true);
+    const auto registered = GENERATE(false, true);
+    provider native{0, FI_MORE | FI_FENCE | FI_DELIVERY_COMPLETE};
+    native.selective_completion = true;
+    native.submission_status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
+    native.expected_atomic_peer = GENERATE(fi_addr_t{37}, FI_ADDR_UNSPEC);
+    std::array<std::uint64_t, 3> inputs{0, 3, 0}, comparisons{0, 42, 0}, results{};
+    const auto& input = inputs[1];
+    const auto& comparison = comparisons[1];
+    auto& result = results[1];
+    fid_mr input_handle{.fid = {.ops = &native.ops}, .mem_desc = &input_handle};
+    fid_mr compare_handle{.fid = {.ops = &native.ops}, .mem_desc = &compare_handle};
+    fid_mr result_handle{.fid = {.ops = &native.ops}, .mem_desc = &result_handle};
+    const auto region = [&](auto& values, fid_mr& handle) {
+        return loom::memory_region{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+            loom::get_default_resource(), &handle, values.data(), sizeof(values))};
+    };
+    const auto input_mr = region(inputs, input_handle);
+    const auto compare_mr = region(comparisons, compare_handle);
+    const auto result_mr = region(results, result_handle);
+    native.expected_atomic_input = &input;
+    native.expected_atomic_input_descriptor = registered ? &input_handle : nullptr;
+    native.expected_atomic_comparison = compare_swap ? &comparison : nullptr;
+    native.expected_atomic_comparison_descriptor =
+        registered && compare_swap ? &compare_handle : nullptr;
+    native.expected_result = &result;
+    native.expected_result_descriptor = registered ? &result_handle : nullptr;
+    const loom::fabric_addr peer{native.expected_atomic_peer};
+    const loom::remote_memory remote{0x1000, 1, sizeof(result)};
+    completion_state state;
+    auto run = [&](auto make_sender) {
+        auto operation = [&] {
+            auto sender = make_sender();
+            static_assert(loom::execution::sender<decltype(sender)>);
+            return loom::execution::connect(std::move(sender), receiver{&state});
+        }();
+        loom::execution::start(operation);
+        REQUIRE(native.submitted_flags == (FI_COMPLETION | FI_FENCE | FI_DELIVERY_COMPLETE));
+        REQUIRE(result == 0);
+        if (native.submission_status) {
+            REQUIRE(state.calls == 1);
+            REQUIRE(state.error == loom::make_error_code_from_fi_errno(-native.submission_status));
+            REQUIRE_FALSE(native.cq.dispatch(loom::completion_event{
+                .context = loom::context_ptr<void>{native.submitted_context}}));
+        } else {
+            REQUIRE(state.calls == 0);
+            REQUIRE(native.atomic_pending.size() == 1);
+            REQUIRE(loom::execution::poll_completions(native.cq).value().completed == 1);
+            REQUIRE(state.calls == 1);
+            REQUIRE_FALSE(state.error);
+            REQUIRE(state.bytes == 42);
+            REQUIRE(result == 42);
+            REQUIRE(native.remote_value == (compare_swap ? 3 : 45));
+        }
+        REQUIRE(native.pending.empty());
+        REQUIRE(native.atomic_pending.empty());
+    };
+    const auto operations = loom::rma_async(native.ep);
+    if (compare_swap) {
+        run([&] {
+            return operations.compare_swap_to(comparison,
+                                              registered ? &compare_mr : nullptr,
+                                              input,
+                                              registered ? &input_mr : nullptr,
+                                              result,
+                                              registered ? &result_mr : nullptr,
+                                              peer,
+                                              remote,
+                                              &native.cq);
+        });
+    } else {
+        run([&] {
+            return operations.fetch_add_to(input,
+                                           registered ? &input_mr : nullptr,
+                                           result,
+                                           registered ? &result_mr : nullptr,
+                                           peer,
+                                           remote,
+                                           &native.cq);
+        });
+    }
+}
+
+TEST_CASE("borrowed atomic senders reject invalid registered ranges",
+          "[execution][progress][atomic]") {
+    const auto which = GENERATE(0, 1, 2);
+    const auto invalid = GENERATE(0, 1, 2, 3, 4);
+    const auto compare_swap = GENERATE(false, true);
+    if (!compare_swap && which == 1)
+        return;
+    provider native;
+    std::array<std::uint64_t, 3> values{3, 42, 0};
+    std::array<fid_mr, 3> handles;
+    std::array<loom::memory_region, 3> regions;
+    for (std::size_t i = 0; i < regions.size(); ++i) {
+        handles[i] = {.fid = {.ops = &native.ops}, .mem_desc = &handles[i]};
+        void* address = &values[i];
+        std::size_t length = sizeof(std::uint64_t);
+        auto* handle = &handles[i];
+        if (i == static_cast<std::size_t>(which)) {
+            switch (invalid) {
+                case 0:
+                    handle = nullptr;
+                    break;
+                case 1:
+                    address = nullptr;
+                    break;
+                case 2:
+                    --length;
+                    break;
+                case 3:
+                    address = values.data() + i + 1;
+                    break;
+                case 4:
+                    length = 0;
+                    break;
+            }
+        }
+        regions[i] =
+            loom::memory_region{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+                loom::get_default_resource(), handle, address, length)};
+    }
+    completion_state state;
+    const auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        REQUIRE(state.calls == 1);
+        REQUIRE(state.error == loom::errc::invalid_argument);
+        REQUIRE(native.submitted_flags == 0);
+        REQUIRE(native.pending.empty());
+        REQUIRE(native.atomic_pending.empty());
+    };
+    const auto operations = loom::rma_async(native.ep);
+    const loom::remote_memory remote{0x1000, 1, sizeof(std::uint64_t)};
+    if (compare_swap)
+        run(operations.compare_swap_to(values[1],
+                                       &regions[1],
+                                       values[0],
+                                       &regions[0],
+                                       values[2],
+                                       &regions[2],
+                                       loom::fabric_addr{19},
+                                       remote,
+                                       &native.cq));
+    else
+        run(operations.fetch_add_to(values[0],
+                                    &regions[0],
+                                    values[2],
+                                    &regions[2],
+                                    loom::fabric_addr{19},
+                                    remote,
+                                    &native.cq));
+}
+
+TEST_CASE("borrowed atomic senders require valid endpoints and remote ranges",
+          "[execution][progress][atomic]") {
+    const auto compare_swap = GENERATE(false, true);
+    const auto invalid = GENERATE(0, 1, 2);
+    provider native;
+    if (invalid == 0)
+        native.ep = {};
+    if (invalid == 1)
+        native.cq = {};
+    std::uint64_t input{3}, comparison{42}, result{};
+    completion_state state;
+    const auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        REQUIRE(state.calls == 1);
+        REQUIRE(state.error == (invalid == 2
+                                    ? loom::make_error_code(loom::errc::invalid_argument)
+                                    : std::make_error_code(std::errc::bad_file_descriptor)));
+        REQUIRE(native.submitted_flags == 0);
+        REQUIRE(native.pending.empty());
+    };
+    const auto operations = loom::rma_async(native.ep);
+    const loom::remote_memory remote{0x1000, 1, invalid == 2 ? sizeof(result) - 1 : sizeof(result)};
+    if (compare_swap)
+        run(operations.compare_swap_to(comparison,
+                                       nullptr,
+                                       input,
+                                       nullptr,
+                                       result,
+                                       nullptr,
+                                       loom::fabric_addr{19},
+                                       remote,
+                                       &native.cq));
+    else
+        run(operations.fetch_add_to(
+            input, nullptr, result, nullptr, loom::fabric_addr{19}, remote, &native.cq));
+}
+
+TEST_CASE("borrowed atomic senders update a registered RDM peer",
+          "[execution][progress][atomic][loopback]") {
+    using namespace loom;
+    fabric_hints hints{};
+    hints.provider_name = "sockets";
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg | capability::atomic;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Sockets provider unavailable");
+    static_cast<fi_info*>(info->internal_ptr())->tx_attr->op_flags = FI_DELIVERY_COMPLETE;
+    auto fab = fabric::create(*info).value();
+    auto dom = domain::create(fab, *info).value();
+    auto cq = completion_queue::create(dom).value();
+    auto av = address_vector::create(dom).value();
+    auto source = endpoint::create(dom, *info).value();
+    auto target = endpoint::create(dom, *info).value();
+    for (auto* ep : {&source, &target}) {
+        REQUIRE(ep->bind_cq(cq, cq_bind::transmit | cq_bind::recv | cq_bind::selective_completion));
+        REQUIRE(ep->bind_av(av));
+        REQUIRE(ep->enable());
+    }
+    const fabric_addr peer{av.insert(target.get_local_address().value()).value().value};
+    std::array<std::uint64_t, 3> local{3, 46, 0};
+    std::uint64_t remote_value{42};
+    const auto local_mr =
+        memory_region::register_memory(dom,
+                                       std::as_writable_bytes(std::span{local}),
+                                       mr_access_flags::read | mr_access_flags::write)
+            .value();
+    auto remote_mr =
+        memory_region::register_memory(dom,
+                                       std::as_writable_bytes(std::span{&remote_value, 1}),
+                                       mr_access_flags::remote_read | mr_access_flags::remote_write)
+            .value();
+    const auto remote = remote_memory::from_mr(remote_mr);
+    std::size_t limit{};
+    REQUIRE(
+        atomic::is_fetch_valid(source, atomic::operation::sum, atomic::datatype::uint64, &limit));
+    REQUIRE(limit >= 1);
+    REQUIRE(atomic::is_compare_valid(
+        source, atomic::operation::compare_swap, atomic::datatype::uint64, &limit));
+    REQUIRE(limit >= 1);
+    completion_state state;
+    const auto run = [&](auto sender) {
+        state = {};
+        auto operation = execution::connect(std::move(sender), receiver{&state});
+        execution::start(operation);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (state.calls == 0 && std::chrono::steady_clock::now() < deadline) {
+            const auto progress = execution::poll_completions(cq);
+            if (!progress || progress->unhandled)
+                break;
+            std::this_thread::yield();
+        }
+        if (state.calls == 0) {
+            REQUIRE(source.close());
+            REQUIRE(target.close());
+            FAIL("RDM atomic sender did not complete");
+        }
+        REQUIRE(state.calls == 1);
+        REQUIRE_FALSE(state.error);
+        REQUIRE(state.bytes == local[2]);
+    };
+    const auto operations = rma_async(source);
+    run(operations.fetch_add_to(local[0], &local_mr, local[2], &local_mr, peer, remote, &cq));
+    REQUIRE(local[2] == 42);
+    REQUIRE(remote_value == 45);
+    run(operations.compare_swap_to(
+        local[1], &local_mr, local[0], &local_mr, local[2], &local_mr, peer, remote, &cq));
+    REQUIRE(local[2] == 45);
+    REQUIRE(remote_value == 45);
+    local[1] = 45;
+    run(operations.compare_swap_to(
+        local[1], &local_mr, local[0], &local_mr, local[2], &local_mr, peer, remote, &cq));
+    REQUIRE(local[2] == 45);
+    REQUIRE(remote_value == 3);
 }
 
 TEST_CASE("atomic senders reject invalid result registrations", "[execution][progress]") {

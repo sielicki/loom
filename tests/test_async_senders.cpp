@@ -16,6 +16,55 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+namespace {
+template <typename Input, typename Result>
+concept can_borrow_fetch_add =
+    requires(loom::execution::rma_sender_factory& ops, Input&& input, Result& result) {
+        ops.fetch_add_to(std::forward<Input>(input),
+                         nullptr,
+                         result,
+                         nullptr,
+                         loom::fabric_addr{},
+                         loom::remote_memory{},
+                         nullptr);
+    };
+
+template <typename Compare, typename Input, typename Result>
+concept can_borrow_compare_swap = requires(
+    loom::execution::rma_sender_factory& ops, Compare&& comparison, Input&& input, Result& result) {
+    ops.compare_swap_to(std::forward<Compare>(comparison),
+                        nullptr,
+                        std::forward<Input>(input),
+                        nullptr,
+                        result,
+                        nullptr,
+                        loom::fabric_addr{},
+                        loom::remote_memory{},
+                        nullptr);
+};
+}  // namespace
+
+TEST_CASE("borrowed atomic senders require matching live objects", "[execution][senders]") {
+    using value = std::uint64_t;
+    static_assert(can_borrow_fetch_add<value&, value>);
+    static_assert(can_borrow_fetch_add<const value&, value>);
+    static_assert(!can_borrow_fetch_add<value, value>);
+    static_assert(!can_borrow_fetch_add<const value, value>);
+    static_assert(!can_borrow_fetch_add<volatile value&, value>);
+    static_assert(!can_borrow_fetch_add<value&, const value>);
+    static_assert(!can_borrow_fetch_add<value&, std::uint32_t>);
+    static_assert(!can_borrow_fetch_add<std::byte&, std::byte>);
+    static_assert(can_borrow_compare_swap<value&, value&, value>);
+    static_assert(can_borrow_compare_swap<const value&, const value&, value>);
+    static_assert(!can_borrow_compare_swap<value, value&, value>);
+    static_assert(!can_borrow_compare_swap<value&, value, value>);
+    static_assert(!can_borrow_compare_swap<const value, value&, value>);
+    static_assert(!can_borrow_compare_swap<value&, const value, value>);
+    static_assert(!can_borrow_compare_swap<value&, volatile value&, value>);
+    static_assert(!can_borrow_compare_swap<value&, std::uint32_t&, value>);
+    static_assert(!can_borrow_compare_swap<value&, value&, const value>);
+}
+
 TEST_CASE("execution backend matches the requested implementation", "[execution]") {
 #if defined(LOOM_EXECUTION_USE_STDEXEC)
     REQUIRE(std::string_view(loom::execution::execution_backend_name) == "stdexec");

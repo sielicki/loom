@@ -1033,6 +1033,34 @@ auto atomic_op = rma_ops.fetch_add<std::uint64_t>(addr, 1, key, result_mr, &cq)
                  });
 ```
 
+For registered atomic operands or explicit RDM peers, use the borrowed forms:
+
+```cpp
+auto operations = loom::rma_async(ep);
+auto add = operations.fetch_add_to(operand, &operand_mr, result, &result_mr,
+                                   peer, remote, &cq);
+auto cas = operations.compare_swap_to(expected, &expected_mr,
+                                      replacement, &replacement_mr,
+                                      result, &result_mr, peer, remote, &cq);
+```
+
+These senders retain the addresses of the supplied objects and return the
+original remote value through `set_value`. Inputs may be const; inputs and
+result must have the same supported atomic value type. Temporaries cannot
+bind to these overloads. Each registration must cover its associated object,
+including when several objects occupy different offsets within one region.
+Invalid registrations and remote ranges shorter than one value are rejected
+before submission. A null registration is permitted only when the negotiated
+MR mode allows it.
+
+Keep the objects, registrations, endpoint, and CQ alive through completion.
+Do not modify inputs or access the result while the operation is outstanding.
+The result must be host-accessible because the sender reads it after completion.
+The older `fetch_add` and `compare_swap` forms copy their inputs into operation
+storage and require a provider configuration that accepts unregistered inputs.
+Datatype and operation support remain subject to the provider's atomic
+validity queries.
+
 #### Scheduler
 
 `loom::scheduler` retains a completion queue, but its schedule sender completes

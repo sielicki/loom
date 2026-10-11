@@ -25,7 +25,7 @@
  * auto write_sender = rma_ops.write(local_buf, remote_addr, key, &cq);
  *
  * // Atomic fetch-and-add
- * auto atomic_sender = rma_ops.fetch_add<uint64_t>(remote_addr, 1, key, &cq);
+ * auto atomic_sender = rma_ops.fetch_add<uint64_t>(remote_addr, 1, key, nullptr, &cq);
  * ```
  */
 
@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <system_error>
 #include <type_traits>
@@ -471,6 +472,141 @@ private:
 template <typename T>
 using atomic_sender = fetch_add_sender<T>;
 
+namespace detail {
+
+template <typename T>
+concept atomic_lvalue = std::is_lvalue_reference_v<T> &&
+                        atomic::atomic_type<std::remove_const_t<std::remove_reference_t<T>>>;
+
+template <atomic::atomic_type T>
+struct atomic_request {
+    const T* input;
+    const memory_region* input_mr;
+    T* result;
+    const memory_region* result_mr;
+    fabric_addr peer;
+    remote_memory remote;
+    const T* comparison{};
+    const memory_region* comparison_mr{};
+};
+
+template <atomic::atomic_type T>
+[[nodiscard]] auto valid_atomic_buffer(const void* address, const memory_region* region) noexcept
+    -> bool {
+    const auto value = reinterpret_cast<std::uintptr_t>(address);
+    if (!address || value % alignof(T) != 0)
+        return false;
+    if (!region)
+        return true;
+    const auto base = reinterpret_cast<std::uintptr_t>(region->address());
+    return *region && base != 0 && region->length() >= sizeof(T) && value >= base &&
+           value - base <= region->length() - sizeof(T);
+}
+
+template <typename Receiver, atomic::atomic_type T, atomic::operation Operation>
+    requires(Operation == atomic::operation::sum || Operation == atomic::operation::compare_swap)
+class borrowed_atomic_operation_state final
+    : public fabric_operation_state_base<borrowed_atomic_operation_state<Receiver, T, Operation>,
+                                         Receiver,
+                                         T> {
+    using base = fabric_operation_state_base<borrowed_atomic_operation_state, Receiver, T>;
+
+public:
+    borrowed_atomic_operation_state(endpoint* ep,
+                                    atomic_request<T> request,
+                                    completion_queue* cq,
+                                    Receiver receiver) noexcept
+        : base(std::move(receiver), cq), ep_(ep), request_(request), cq_(cq) {}
+
+    void start() & noexcept {
+        if (!ep_ || !*ep_ || !cq_ || !*cq_) {
+            this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
+            return;
+        }
+        if (request_.remote.length < sizeof(T) ||
+            !valid_atomic_buffer<T>(request_.input, request_.input_mr) ||
+            !valid_atomic_buffer<T>(request_.result, request_.result_mr) ||
+            (Operation == atomic::operation::compare_swap &&
+             !valid_atomic_buffer<T>(request_.comparison, request_.comparison_mr))) {
+            this->complete_error(make_error_code(errc::invalid_argument));
+            return;
+        }
+        if (!this->register_completion())
+            return;
+        this->submit([&] {
+            if constexpr (Operation == atomic::operation::sum) {
+                return atomic::fetch_to<operation_defaults::inherit_without_more>(
+                    *ep_,
+                    Operation,
+                    atomic::get_datatype<T>(),
+                    request_.input,
+                    request_.result,
+                    1,
+                    request_.input_mr,
+                    request_.result_mr,
+                    request_.peer,
+                    request_.remote,
+                    op_flag::completion,
+                    this->as_fi_context());
+            } else {
+                return atomic::compare_swap_to<operation_defaults::inherit_without_more>(
+                    *ep_,
+                    atomic::get_datatype<T>(),
+                    request_.comparison,
+                    request_.input,
+                    request_.result,
+                    1,
+                    request_.comparison_mr,
+                    request_.input_mr,
+                    request_.result_mr,
+                    request_.peer,
+                    request_.remote,
+                    op_flag::completion,
+                    this->as_fi_context());
+            }
+        });
+    }
+
+    [[nodiscard]] auto get_result() const noexcept -> T { return *request_.result; }
+
+private:
+    endpoint* ep_;
+    atomic_request<T> request_;
+    completion_queue* cq_;
+};
+
+template <atomic::atomic_type T, atomic::operation Operation>
+    requires(Operation == atomic::operation::sum || Operation == atomic::operation::compare_swap)
+class borrowed_atomic_sender {
+public:
+    using sender_concept = sender_tag;
+    using completion_signatures = loom::execution::
+        completion_signatures<set_value_t(T), set_error_t(std::error_code), set_stopped_t()>;
+
+    [[nodiscard]] static consteval auto get_completion_signatures() noexcept
+        -> completion_signatures {
+        return {};
+    }
+
+    borrowed_atomic_sender(endpoint* ep, atomic_request<T> request, completion_queue* cq) noexcept
+        : ep_(ep), request_(request), cq_(cq) {}
+
+    template <typename Receiver>
+    [[nodiscard]] auto connect(Receiver receiver) && noexcept
+        -> borrowed_atomic_operation_state<std::decay_t<Receiver>, T, Operation> {
+        return {ep_, request_, cq_, std::move(receiver)};
+    }
+
+    [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_}; }
+
+private:
+    endpoint* ep_;
+    atomic_request<T> request_;
+    completion_queue* cq_;
+};
+
+}  // namespace detail
+
 /**
  * @brief Factory for creating RMA senders for an endpoint.
  *
@@ -489,6 +625,55 @@ using atomic_sender = fetch_add_sender<T>;
 class rma_sender_factory {
 public:
     explicit rma_sender_factory(endpoint& ep) noexcept : ep_(&ep) {}
+
+    /// Fetch-add using borrowed objects and optional registrations for an explicit peer.
+    /// Inputs, the host-accessible result, registrations, endpoint and CQ must
+    /// remain valid until completion. Each registration must cover its object;
+    /// null is allowed only when the negotiated MR mode permits it. The sender
+    /// does not copy or read the input before native submission.
+    template <detail::atomic_lvalue T>
+    [[nodiscard]] auto fetch_add_to(T&& input,
+                                    const memory_region* input_mr,
+                                    std::remove_cvref_t<T>& result,
+                                    const memory_region* result_mr,
+                                    fabric_addr peer,
+                                    remote_memory remote,
+                                    completion_queue* cq) const noexcept {
+        using value_type = std::remove_cvref_t<T>;
+        return detail::borrowed_atomic_sender<value_type, atomic::operation::sum>{
+            ep_,
+            {std::addressof(input), input_mr, std::addressof(result), result_mr, peer, remote},
+            cq};
+    }
+
+    /// Compare-and-swap with borrowed comparison, replacement and result objects.
+    /// Shares fetch_add_to's lifetime and registration contract. Both input types
+    /// must match the mutable, host-accessible result type. Temporaries cannot
+    /// bind to the input parameters.
+    template <detail::atomic_lvalue T, detail::atomic_lvalue U>
+        requires std::same_as<std::remove_cvref_t<T>, std::remove_cvref_t<U>>
+    [[nodiscard]] auto compare_swap_to(T&& comparison,
+                                       const memory_region* comparison_mr,
+                                       U&& replacement,
+                                       const memory_region* replacement_mr,
+                                       std::remove_cvref_t<T>& result,
+                                       const memory_region* result_mr,
+                                       fabric_addr peer,
+                                       remote_memory remote,
+                                       completion_queue* cq) const noexcept {
+        using value_type = std::remove_cvref_t<T>;
+        return detail::borrowed_atomic_sender<value_type, atomic::operation::compare_swap>{
+            ep_,
+            {std::addressof(replacement),
+             replacement_mr,
+             std::addressof(result),
+             result_mr,
+             peer,
+             remote,
+             std::addressof(comparison),
+             comparison_mr},
+            cq};
+    }
 
     /// Read from an explicit peer using a local registration. The endpoint,
     /// CQ, buffer, and registration must remain alive until completion.
