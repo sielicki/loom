@@ -110,7 +110,8 @@ auto event_queue::poll() -> std::optional<fabric_event> {
         return event;
     }
 
-    auto decoded = detail::decode_eq_event(event_type, buffer, static_cast<std::size_t>(ret));
+    auto decoded = detail::decode_eq_event(
+        event_type, buffer, static_cast<std::size_t>(ret), impl_.get_deleter().resource);
     if (!decoded) {
         fabric_event event{};
         event.error = decoded.error();
@@ -165,7 +166,8 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
         return event;
     }
 
-    return detail::decode_eq_event(event_type, buffer, static_cast<std::size_t>(ret));
+    return detail::decode_eq_event(
+        event_type, buffer, static_cast<std::size_t>(ret), impl_.get_deleter().resource);
 }
 
 auto event_queue::read() -> result<fabric_event> {

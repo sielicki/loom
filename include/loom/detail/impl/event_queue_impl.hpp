@@ -16,6 +16,7 @@
 #include "loom/core/error.hpp"
 #include "loom/core/event_queue.hpp"
 #include "loom/core/fabric.hpp"
+#include "loom/detail/impl/fabric_impl.hpp"
 #include "loom/detail/unique_fid.hpp"
 
 namespace loom::detail {
@@ -43,7 +44,8 @@ inline auto fi_event_to_loom(std::uint32_t fi_event) -> event_type {
 // Control completions and connection notifications have distinct native layouts.
 inline auto decode_eq_event(std::uint32_t type,
                             std::span<const std::byte> buffer,
-                            std::size_t count) -> result<fabric_event> {
+                            std::size_t count,
+                            memory_resource* resource) -> result<fabric_event> {
     if (count > buffer.size()) {
         return make_error_result_from_fi_errno<fabric_event>(FI_EIO);
     }
@@ -73,6 +75,16 @@ inline auto decode_eq_event(std::uint32_t type,
             ::fi_eq_cm_entry entry{};
             std::memcpy(&entry, buffer.data(), sizeof(entry));
             event.fid = entry.fid;
+            if (event.type == event_type::connreq && entry.info) {
+                std::unique_ptr<::fi_info, decltype(&::fi_freeinfo)> pending{entry.info,
+                                                                             ::fi_freeinfo};
+                auto* allocator = resource ? resource : get_default_resource();
+                auto impl = make_pmr_unique<fabric_info_impl>(allocator, entry.info);
+                (void)pending.release();
+                fabric_info info{std::move(impl)};
+                event.connection_info = std::allocate_shared<fabric_info>(
+                    pmr_allocator<fabric_info>{allocator}, std::move(info));
+            }
             break;
         }
         case event_type::unknown:
@@ -205,7 +217,8 @@ auto event_queue::poll() -> std::optional<fabric_event> {
         return event;
     }
 
-    auto decoded = detail::decode_eq_event(event_type, buffer, static_cast<std::size_t>(ret));
+    auto decoded = detail::decode_eq_event(
+        event_type, buffer, static_cast<std::size_t>(ret), impl_.get_deleter().resource);
     if (!decoded) {
         fabric_event event{};
         event.error = decoded.error();
@@ -260,7 +273,8 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
         return event;
     }
 
-    return detail::decode_eq_event(event_type, buffer, static_cast<std::size_t>(ret));
+    return detail::decode_eq_event(
+        event_type, buffer, static_cast<std::size_t>(ret), impl_.get_deleter().resource);
 }
 
 auto event_queue::read() -> result<fabric_event> {

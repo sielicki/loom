@@ -13,6 +13,7 @@
 #include "loom/core/crtp/event_base.hpp"
 #include "loom/core/crtp/fabric_object_base.hpp"
 #include "loom/core/domain.hpp"
+#include "loom/core/fabric.hpp"
 #include "loom/core/result.hpp"
 #include "loom/core/types.hpp"
 
@@ -62,6 +63,10 @@ struct fabric_event : event_base<fabric_event> {
     std::uint64_t data{0};      ///< Event-specific data
     std::span<std::byte> info;  ///< Additional event information
     std::size_t info_len{0};    ///< Length of info data
+
+    /// Incoming connection metadata, usable with endpoint::create. Event copies
+    /// share ownership; the queue's memory resource must outlive every copy.
+    std::shared_ptr<const fabric_info> connection_info{};
 
     /**
      * @brief Returns the error code for this event.

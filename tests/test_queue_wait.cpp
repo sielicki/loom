@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/async/completion_queue.hpp>
+#include <loom/core/endpoint.hpp>
 #include <loom/core/event_queue.hpp>
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
@@ -20,6 +21,8 @@ struct queue_provider {
     std::uint32_t native_event{FI_CONNECTED};
     fi_wait_obj requested_wait{};
     bool short_entry{};
+    fi_info* accepted_info{};
+    int freed_infos{};
 
     auto read_event(fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t length) -> ssize_t {
         ++calls;
@@ -35,13 +38,22 @@ struct queue_provider {
             std::memcpy(buffer, &entry, count);
             return static_cast<ssize_t>(count);
         }
-        const fi_eq_cm_entry entry{.fid = &eq->fid};
-        if (length < sizeof(entry))
+        if (length < sizeof(fi_eq_cm_entry))
             return -FI_ETOOSMALL;
+        const fi_eq_cm_entry entry{
+            .fid = &eq->fid,
+            .info = native_event == FI_CONNREQ ? connection_request.release() : nullptr,
+        };
         const auto count = short_entry ? sizeof(entry) - 1 : sizeof(entry);
         std::memcpy(buffer, &entry, count);
         return static_cast<ssize_t>(count);
     }
+    fi_ops info_ops{.size = sizeof(fi_ops), .close = [](fid* handle) {
+                        ++static_cast<queue_provider*>(handle->context)->freed_infos;
+                        return 0;
+                    }};
+    fid_nic native_nic{.fid = {.context = this, .ops = &info_ops}};
+    std::unique_ptr<fi_info, decltype(&fi_freeinfo)> connection_request{nullptr, fi_freeinfo};
     fi_ops lifetime_ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_cq cq_ops{
         .size = sizeof(fi_ops_cq),
@@ -91,6 +103,7 @@ struct queue_provider {
     };
     fid_cq native_cq{.fid = {.context = this, .ops = &lifetime_ops}, .ops = &cq_ops};
     fid_eq native_eq{.fid = {.context = this, .ops = &lifetime_ops}, .ops = &eq_ops};
+    fid_ep native_endpoint{.fid = {.context = this, .ops = &lifetime_ops}};
     fi_ops_domain domain_ops{
         .size = sizeof(fi_ops_domain),
         .cq_open =
@@ -98,6 +111,13 @@ struct queue_provider {
                 auto& self = *static_cast<queue_provider*>(dom->fid.context);
                 self.requested_wait = attr->wait_obj;
                 *result = &self.native_cq;
+                return 0;
+            },
+        .endpoint =
+            [](fid_domain* dom, fi_info* info, fid_ep** result, void*) {
+                auto& self = *static_cast<queue_provider*>(dom->fid.context);
+                self.accepted_info = info;
+                *result = &self.native_endpoint;
                 return 0;
             },
     };
@@ -129,6 +149,27 @@ struct queue_provider {
             REQUIRE(created);
             action(*created);
         }
+    }
+};
+struct limited_resource : loom::memory_resource {
+    int remaining{-1};
+    int live{};
+
+    auto do_allocate(std::size_t bytes, std::size_t alignment) -> void* override {
+        if (remaining == 0)
+            throw std::bad_alloc{};
+        if (remaining > 0)
+            --remaining;
+        auto* ptr = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        ++live;
+        return ptr;
+    }
+    void do_deallocate(void* ptr, std::size_t bytes, std::size_t alignment) override {
+        --live;
+        std::pmr::new_delete_resource()->deallocate(ptr, bytes, alignment);
+    }
+    auto do_is_equal(const std::pmr::memory_resource& other) const noexcept -> bool override {
+        return this == &other;
     }
 };
 }  // namespace
@@ -326,4 +367,58 @@ TEST_CASE("short native event entries are rejected", "[queue][event_entry]") {
         REQUIRE(event);
         REQUIRE(event->error == loom::make_error_code_from_fi_errno(FI_EIO));
     }
+}
+
+TEST_CASE("connection events own their native request information", "[queue][connreq]") {
+    const auto waiting = GENERATE(false, true);
+    queue_provider provider;
+    provider.native_event = FI_CONNREQ;
+    provider.connection_request.reset(fi_allocinfo());
+    REQUIRE(provider.connection_request);
+    provider.connection_request->nic = &provider.native_nic;
+    provider.connection_request->caps = FI_MSG;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
+    REQUIRE(queue);
+    auto event = waiting ? std::optional{queue->wait().value()} : queue->poll();
+    REQUIRE(event);
+    REQUIRE_FALSE(event->error);
+    REQUIRE(event->type == loom::event_type::connreq);
+    REQUIRE(event->connection_info);
+    REQUIRE(event->connection_info->get_caps() == loom::capability::msg);
+    auto copy = *event;
+    event.reset();
+    *queue = {};
+    REQUIRE(copy.connection_info);
+    REQUIRE(copy.connection_info->get_caps() == loom::capability::msg);
+    auto endpoint = loom::endpoint::create(provider.domain, *copy.connection_info);
+    REQUIRE(endpoint);
+    REQUIRE(provider.accepted_info == copy.connection_info->internal_ptr());
+    REQUIRE(provider.freed_infos == 0);
+    copy.connection_info.reset();
+    REQUIRE(provider.freed_infos == 1);
+}
+
+TEST_CASE("connection information is released after allocation failures", "[queue][connreq]") {
+    const auto waiting = GENERATE(false, true);
+    const auto remaining = GENERATE(0, 1);
+    limited_resource resource;
+    queue_provider provider;
+    provider.native_event = FI_CONNREQ;
+    provider.connection_request.reset(fi_allocinfo());
+    REQUIRE(provider.connection_request);
+    provider.connection_request->nic = &provider.native_nic;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting}, &resource);
+    REQUIRE(queue);
+    const auto before = resource.live;
+    resource.remaining = remaining;
+    if (waiting) {
+        REQUIRE_THROWS_AS(queue->wait(), std::bad_alloc);
+    } else {
+        REQUIRE_THROWS_AS(queue->poll(), std::bad_alloc);
+    }
+    REQUIRE(resource.live == before);
+    REQUIRE_FALSE(provider.connection_request);
+    REQUIRE(provider.freed_infos == 1);
+    *queue = {};
+    REQUIRE(resource.live == 0);
 }
