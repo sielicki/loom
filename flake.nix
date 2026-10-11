@@ -13,6 +13,10 @@
       url = "github:ofiwg/libfabric/v2.7.0";
       flake = false;
     };
+    nixl-src = {
+      url = "github:ai-dynamo/nixl/b69182fe73ac64221dcdbeeee744161f76006dda";
+      flake = false;
+    };
   };
 
   outputs =
@@ -316,6 +320,11 @@
                   };
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
+              nixl-consumer = pkgs.callPackage ./examples/nixl/nixl.nix {
+                stdenv = pkgs.gcc15Stdenv;
+                src = inputs.nixl-src;
+              };
+
               loom-debug = pkgs.callPackage mkLoom {
                 inherit libfabric;
                 enableAsan = true;
@@ -643,6 +652,8 @@
 
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
+              nixl-consumer = self'.packages.nixl-consumer.tests.sdk;
+
               # Build check with sanitizers (Linux only)
               loom-build-sanitizers = self'.packages.loom-debug;
 

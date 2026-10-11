@@ -73,6 +73,23 @@
         "type": "github"
       }
     },
+    "nixl-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791657380,
+        "narHash": "sha256-9XzmjtRgfUaEDgDXie7aycZkxzGaDSuFoctcwV8RRyY=",
+        "owner": "ai-dynamo",
+        "repo": "nixl",
+        "rev": "b69182fe73ac64221dcdbeeee744161f76006dda",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ai-dynamo",
+        "repo": "nixl",
+        "rev": "b69182fe73ac64221dcdbeeee744161f76006dda",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1767379071,
@@ -124,6 +141,7 @@
         "flake-parts": "flake-parts",
         "libfabric": "libfabric",
         "libfabric-src": "libfabric-src",
+        "nixl-src": "nixl-src",
         "nixpkgs": "nixpkgs",
         "systems": "systems",
         "treefmt-nix": "treefmt-nix"
