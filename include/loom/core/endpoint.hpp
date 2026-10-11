@@ -209,6 +209,11 @@ public:
     /// Serialize binding changes with submissions and resource destruction.
     /// Bound queues must remain alive through the endpoint's native work.
     [[nodiscard]] auto bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result;
+    /// Observe the last successful binding, or null if unbound or destroyed.
+    /// The pointer names the queue's current wrapper after a move. Do not retain
+    /// it across wrapper moves or race observation with resource destruction.
+    [[nodiscard]] auto bound_cq(completion_direction direction) const noexcept
+        -> const completion_queue*;
     [[nodiscard]] auto bind_tx_cq(completion_queue& cq) -> void_result;
     [[nodiscard]] auto bind_rx_cq(completion_queue& cq) -> void_result;
     [[nodiscard]] auto bind_eq(event_queue& eq, std::uint64_t flags = 0) -> void_result;

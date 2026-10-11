@@ -928,6 +928,10 @@ preserving configured fence and delivery requirements.
 Configure those defaults before creating the endpoint or scalable context;
 subsequent raw `FI_SETOPSFLAG` changes are not tracked by Loom.
 
+Receive frontends require a CQ layout that reports message lengths (`msg`,
+`data`, or the default `tagged`). They reject context-only queues before
+submission rather than treating an unavailable byte count as a zero-byte message.
+
 Tagged and untagged receive frontends complete once per operation. They reject
 inherited `FI_MULTI_RECV` with `errc::not_supported` before posting any work.
 Use the core message APIs for multi-receive and retain the buffer and context

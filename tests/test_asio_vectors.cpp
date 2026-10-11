@@ -489,6 +489,74 @@ TEST_CASE("Asio messages preserve registered buffer descriptors", "[asio][endpoi
     REQUIRE(calls == 1);
 }
 
+TEST_CASE("Asio receives require completion lengths", "[asio][endpoint]") {
+    const auto tagged = GENERATE(false, true);
+    const auto helper = GENERATE(false, true);
+    const auto format =
+        GENERATE(FI_CQ_FORMAT_CONTEXT, FI_CQ_FORMAT_MSG, FI_CQ_FORMAT_DATA, FI_CQ_FORMAT_TAGGED);
+    vector_provider native;
+    native.rx =
+        loom::completion_queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+            loom::get_default_resource(),
+            &native.rx_handle,
+            loom::runtime_progress_policy{},
+            false,
+            format)};
+    native.tx =
+        loom::completion_queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+            loom::get_default_resource(),
+            &native.tx_handle,
+            loom::runtime_progress_policy{},
+            false,
+            format)};
+    ::asio::io_context ioc;
+    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    std::array<std::byte, 16> storage{};
+    int calls{};
+    std::error_code result;
+    std::size_t bytes{};
+    auto handler =
+        ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t count) {
+            ++calls;
+            result = error;
+            bytes = count;
+        });
+    if (helper) {
+        if (tagged)
+            loom::asio::initiate_fabric_tagged_recv{ep.native_handle()}(
+                handler, ::asio::buffer(storage), 42, 0x80);
+        else
+            loom::asio::initiate_fabric_recv{ep.native_handle()}(handler, ::asio::buffer(storage));
+    } else if (tagged)
+        ep.async_tagged_receive(::asio::buffer(storage), 42, 0x80, handler);
+    else
+        ep.async_receive(::asio::buffer(storage), handler);
+    const auto rejected = format == FI_CQ_FORMAT_CONTEXT;
+    CHECK((native.attempted_context == nullptr) == rejected);
+    REQUIRE(calls == 0);
+    if (native.context) {
+        loom::completion_event event{.context = loom::context_ptr<void>{native.context},
+                                     .bytes_transferred = 7};
+        REQUIRE(native.rx.dispatch(event));
+    }
+    ioc.run();
+    REQUIRE(calls == 1);
+    CHECK(result ==
+          (rejected ? loom::make_error_code(loom::errc::not_supported) : std::error_code{}));
+    CHECK(bytes == (rejected ? 0 : 7));
+
+    calls = 0;
+    ioc.restart();
+    ep.async_send(::asio::buffer(storage), handler);
+    REQUIRE(calls == 0);
+    loom::completion_event sent{.context = loom::context_ptr<void>{native.context}};
+    REQUIRE(native.tx.dispatch(sent));
+    ioc.run();
+    REQUIRE(calls == 1);
+    REQUIRE_FALSE(result);
+    REQUIRE(bytes == storage.size());
+}
+
 TEST_CASE("Asio receives reject multi-receive defaults", "[asio][endpoint]") {
     const auto tagged = GENERATE(false, true);
     const auto helper = GENERATE(false, true);

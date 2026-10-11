@@ -22,6 +22,7 @@
 #include "loom/core/fabric.hpp"
 #include "loom/core/shared_context.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/impl/completion_queue_impl.hpp"
 #include "loom/detail/native_address.hpp"
 #include "loom/detail/unique_fid.hpp"
 
@@ -597,6 +598,23 @@ auto completion_registration::bind(endpoint& ep,
         return make_error_result<void>(errc::invalid_argument);
     }
     return bind_to(*queue, context, object, complete);
+}
+
+auto endpoint::bound_cq(completion_direction direction) const noexcept -> const completion_queue* {
+    if (!impl_ || !impl_->ep)
+        return nullptr;
+    const detail::completion_queue_impl* queue{};
+    switch (direction) {
+        case completion_direction::transmit:
+            queue = impl_->tx_cq.owner;
+            break;
+        case completion_direction::receive:
+            queue = impl_->rx_cq.owner;
+            break;
+        default:
+            return nullptr;
+    }
+    return queue ? queue->wrapper : nullptr;
 }
 
 auto endpoint::bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result {

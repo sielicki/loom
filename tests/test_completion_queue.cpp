@@ -226,6 +226,9 @@ TEST_CASE("completion formats select and decode native single entries",
     REQUIRE(created);
     REQUIRE(provider.format == native_format);
     auto queue = std::move(*created);
+    REQUIRE(queue.format() ==
+            (format == loom::cq_format::unspecified ? loom::cq_format::tagged : format));
+    REQUIRE(created->format() == loom::cq_format::unspecified);
     const auto polled = queue.poll();
     REQUIRE(polled);
     provider.check(*polled, 0);

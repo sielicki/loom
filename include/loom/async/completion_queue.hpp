@@ -265,6 +265,9 @@ public:
     [[nodiscard("read result must be checked for errors")]]
     auto read() const -> result<completion_event>;
 
+    /// Native entry layout; unspecified for an empty queue.
+    [[nodiscard]] auto format() const noexcept -> cq_format;
+
     /// Minimum capacity requested at creation; zero if unknown or provider-selected.
     [[nodiscard]] auto capacity() const noexcept -> std::size_t;
 

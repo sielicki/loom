@@ -234,9 +234,22 @@ TEST_CASE("endpoint completion bindings survive wrapper moves", "[cq][dispatch][
     REQUIRE(fixture.endpoint.bind_cq(
         tx.queue, loom::cq_bind::transmit | loom::cq_bind::selective_completion));
     REQUIRE(fixture.endpoint.bind_rx_cq(rx.queue));
+    REQUIRE(fixture.endpoint.bound_cq(loom::completion_direction::transmit) == &tx.queue);
+    REQUIRE(fixture.endpoint.bound_cq(loom::completion_direction::receive) == &rx.queue);
     auto endpoint = std::move(fixture.endpoint);
     auto transmit = std::move(tx.queue);
     auto receive = std::move(rx.queue);
+    REQUIRE(endpoint.bound_cq(loom::completion_direction::transmit) == &transmit);
+    REQUIRE(endpoint.bound_cq(loom::completion_direction::receive) == &receive);
+    tx.queue = std::move(transmit);
+    rx.queue = std::move(receive);
+    REQUIRE(endpoint.bound_cq(loom::completion_direction::transmit) == &tx.queue);
+    REQUIRE(endpoint.bound_cq(loom::completion_direction::receive) == &rx.queue);
+    transmit = std::move(tx.queue);
+    receive = std::move(rx.queue);
+    REQUIRE(endpoint.bound_cq(loom::completion_direction::transmit) == &transmit);
+    REQUIRE(endpoint.bound_cq(loom::completion_direction::receive) == &receive);
+    REQUIRE_FALSE(fixture.endpoint.bound_cq(loom::completion_direction::transmit));
     REQUIRE_FALSE(tx_registration.bind(fixture.endpoint,
                                        loom::completion_direction::transmit,
                                        loom::context_ptr<void>{&tx_context},
@@ -325,6 +338,7 @@ TEST_CASE("destroyed resources invalidate endpoint completion bindings",
     for (auto* endpoint : {&first.endpoint, &second.endpoint}) {
         for (auto direction :
              {loom::completion_direction::transmit, loom::completion_direction::receive}) {
+            REQUIRE_FALSE(endpoint->bound_cq(direction));
             REQUIRE_FALSE(registration.bind(*endpoint,
                                             direction,
                                             loom::context_ptr<void>{&context},

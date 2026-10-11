@@ -379,6 +379,51 @@ TEST_CASE("message senders request selective completions", "[execution][progress
     }
 }
 
+TEST_CASE("receive senders require completion lengths", "[execution][progress][message]") {
+    const auto tagged = GENERATE(false, true);
+    const auto format =
+        GENERATE(FI_CQ_FORMAT_CONTEXT, FI_CQ_FORMAT_MSG, FI_CQ_FORMAT_DATA, FI_CQ_FORMAT_TAGGED);
+    provider native;
+    native.cq =
+        loom::completion_queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+            loom::get_default_resource(),
+            &native.cq_handle,
+            loom::runtime_progress_policy{},
+            false,
+            format)};
+    std::array<std::byte, 16> storage{};
+    completion_state state;
+    auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        const auto rejected = format == FI_CQ_FORMAT_CONTEXT;
+        CHECK(native.pending.empty() == rejected);
+        if (!native.pending.empty()) {
+            loom::completion_event event{.context = loom::context_ptr<void>{native.take()},
+                                         .bytes_transferred = 7};
+            REQUIRE(native.cq.dispatch(event));
+        }
+        REQUIRE(state.calls == 1);
+        CHECK(state.error ==
+              (rejected ? loom::make_error_code(loom::errc::not_supported) : std::error_code{}));
+        CHECK(state.bytes == (rejected ? 0 : 7));
+    };
+    auto operations = loom::async(native.ep);
+    if (tagged)
+        run(operations.tagged_recv(storage, 42, 0x80, &native.cq));
+    else
+        run(operations.recv(storage, &native.cq));
+
+    state = {};
+    auto send = loom::execution::connect(operations.send(storage, &native.cq), receiver{&state});
+    loom::execution::start(send);
+    REQUIRE(state.calls == 0);
+    loom::completion_event sent{.context = loom::context_ptr<void>{native.take()}};
+    REQUIRE(native.cq.dispatch(sent));
+    REQUIRE(state.calls == 1);
+    REQUIRE_FALSE(state.error);
+}
+
 TEST_CASE("receive senders reject multi-receive defaults", "[execution][progress][message]") {
     const auto tagged = GENERATE(false, true);
     provider native{GENERATE(FI_MULTI_RECV, FI_MULTI_RECV | FI_MORE)};

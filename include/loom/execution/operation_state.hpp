@@ -253,7 +253,8 @@ public:
 
         // This sender completes once; a multi-receive buffer remains owned by
         // the provider after ordinary receive events and needs another API.
-        if (ep_->impl_operation_flags(completion_direction::receive) & FI_MULTI_RECV) {
+        if (cq_->format() == cq_format::context ||
+            (ep_->impl_operation_flags(completion_direction::receive) & FI_MULTI_RECV)) {
             this->complete_error(make_error_code(errc::not_supported));
             return;
         }
@@ -349,7 +350,8 @@ public:
             return;
         }
 
-        if (ep_->impl_operation_flags(completion_direction::receive) & FI_MULTI_RECV) {
+        if (cq_->format() == cq_format::context ||
+            (ep_->impl_operation_flags(completion_direction::receive) & FI_MULTI_RECV)) {
             this->complete_error(make_error_code(errc::not_supported));
             return;
         }

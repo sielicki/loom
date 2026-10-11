@@ -146,13 +146,24 @@ auto completion_queue::dispatch(const completion_event& event) const -> bool {
 
 completion_queue::completion_queue() = default;
 
-completion_queue::completion_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
+completion_queue::completion_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {
+    if (impl_)
+        impl_->wrapper = this;
+}
 
 completion_queue::~completion_queue() = default;
 
-completion_queue::completion_queue(completion_queue&&) noexcept = default;
+completion_queue::completion_queue(completion_queue&& other) noexcept
+    : completion_queue(std::move(other.impl_)) {}
 
-auto completion_queue::operator=(completion_queue&&) noexcept -> completion_queue& = default;
+auto completion_queue::operator=(completion_queue&& other) noexcept -> completion_queue& {
+    if (this != &other) {
+        impl_ = std::move(other.impl_);
+        if (impl_)
+            impl_->wrapper = this;
+    }
+    return *this;
+}
 
 auto completion_queue::impl_valid() const noexcept -> bool {
     return impl_ && impl_->cq != nullptr;
@@ -375,6 +386,23 @@ auto completion_queue::read() const -> result<completion_event> {
         return make_error_result<completion_event>(errc::again);
     }
     return std::move(*event);
+}
+
+auto completion_queue::format() const noexcept -> cq_format {
+    if (!impl_ || !impl_->cq)
+        return cq_format::unspecified;
+    switch (impl_->format) {
+        case FI_CQ_FORMAT_CONTEXT:
+            return cq_format::context;
+        case FI_CQ_FORMAT_MSG:
+            return cq_format::msg;
+        case FI_CQ_FORMAT_DATA:
+            return cq_format::data;
+        case FI_CQ_FORMAT_TAGGED:
+            return cq_format::tagged;
+        default:
+            return cq_format::unspecified;
+    }
 }
 
 auto completion_queue::capacity() const noexcept -> std::size_t {
