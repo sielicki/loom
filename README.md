@@ -150,7 +150,7 @@ native copy. Native duplication failures return `errc::other`, since
 releasing the native copy. The pinned libfabric also fixes failure cleanup
 that otherwise closes the source NIC when duplication fails.
 
-### Native socket addresses
+### Native addresses
 
 `FI_SOCKADDR_IB` addresses decode to `ib_socket_address`, an alternative in
 `loom::address`. It preserves the GID, partition key, flow information,
@@ -160,6 +160,22 @@ native socket address, including through `FI_SOCKADDR`. `FI_SOCKADDR_IP`
 accepts only IPv4 and IPv6 addresses. Exhaustive address visitors must handle
 the new alternative. The existing GID/QPN/LID `ib_address` remains a separate
 identifier type and cannot be submitted as a socket address.
+
+Provider-specific formats, including EFA, CXI, UCX, and `FI_ADDR_STR`, decode
+to `opaque_address`. Its `format()` and owned `bytes()` preserve the native
+representation, including a string address's terminating null byte. Endpoint
+and AV lookups negotiate larger buffers and return errors for malformed or
+unsupported representations. Connect and AV insertion accept these addresses;
+binary batches require equal byte lengths, while string batches use the
+native array of string pointers and may have different lengths.
+
+Construct opaque addresses only from native bytes supplied by a compatible
+peer. Loom preserves provider-specific fields without interpreting them;
+matching address formats alone do not establish peer compatibility. Allocation
+exceptions can propagate from `address_from_raw`. Exhaustive visitors must
+handle `opaque_address`, and consumers must rebuild for the changed variant.
+`get_address_data` still points to the C++ object; use `opaque_address::bytes()`
+to access the native representation.
 
 ### Tagged message reservations
 

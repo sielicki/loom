@@ -13,6 +13,7 @@
 #include "loom/core/event_queue.hpp"
 #include "loom/core/fabric.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/native_address.hpp"
 #include "loom/detail/unique_fid.hpp"
 
 namespace loom {
@@ -131,16 +132,11 @@ auto passive_endpoint::get_local_address() const -> result<address> {
         return make_error_result<address>(errc::invalid_argument);
     }
 
-    std::array<std::byte, 256> raw_addr{};
-    std::size_t addrlen = raw_addr.size();
-
-    int ret = ::fi_getname(&impl_->pep->fid, raw_addr.data(), &addrlen);
-
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<address>(-ret);
-    }
-
-    return address_from_raw(raw_addr.data(), addrlen, impl_->addr_format);
+    return detail::query_address(
+        [&](void* data, std::size_t* length) {
+            return ::fi_getname(&impl_->pep->fid, data, length);
+        },
+        impl_->addr_format);
 }
 
 auto passive_endpoint::reject(const void* handle) -> void_result {

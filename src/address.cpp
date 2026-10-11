@@ -10,8 +10,7 @@
 
 namespace loom {
 
-auto address_from_raw(const void* data, std::size_t len, address_format format) noexcept
-    -> address {
+auto address_from_raw(const void* data, std::size_t len, address_format format) -> address {
     if (data == nullptr || len == 0) {
         return unspecified_address{};
     }
@@ -96,8 +95,15 @@ auto address_from_raw(const void* data, std::size_t len, address_format format) 
         }
 
         case address_format::unspecified:
-        default:
             return unspecified_address{};
+        default: {
+            if (!detail::is_opaque_address_format(format))
+                return unspecified_address{};
+            const std::span bytes{static_cast<const std::byte*>(data), len};
+            if (format == address_format::str && bytes.back() != std::byte{})
+                return unspecified_address{};
+            return opaque_address{format, bytes};
+        }
     }
 }
 

@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "loom/core/concepts.hpp"
 #include "loom/core/types.hpp"
@@ -529,6 +530,60 @@ public:
 static_assert(trivially_serializable<unspecified_address>);
 static_assert(address_type<unspecified_address>);
 
+namespace detail {
+[[nodiscard]] constexpr auto is_opaque_address_format(address_format format) noexcept -> bool {
+    switch (format) {
+        case address_format::psmx:
+        case address_format::psmx2:
+        case address_format::gni:
+        case address_format::bgq:
+        case address_format::str:
+        case address_format::mlx:
+        case address_format::ib_ud:
+        case address_format::efa:
+        case address_format::psmx3:
+        case address_format::opx:
+        case address_format::cxi:
+        case address_format::ucx:
+            return true;
+        default:
+            return false;
+    }
+}
+}  // namespace detail
+
+/// Owned bytes in a provider-specific libfabric address format.
+/// The format and bytes must come from a compatible peer's native address.
+class opaque_address {
+public:
+    /// Copies the native bytes, including the terminator for FI_ADDR_STR.
+    /// Throws invalid_argument for an unsupported format or empty/malformed storage.
+    constexpr opaque_address(address_format format, std::span<const std::byte> bytes)
+        : format_(format), bytes_(bytes.begin(), bytes.end()) {
+        if (!detail::is_opaque_address_format(format) || bytes.empty() ||
+            (format == address_format::str && bytes.back() != std::byte{})) {
+            throw std::invalid_argument("invalid opaque address");
+        }
+    }
+
+    [[nodiscard]] constexpr auto format() const noexcept -> address_format { return format_; }
+    [[nodiscard]] constexpr auto bytes() const noexcept -> std::span<const std::byte> {
+        return bytes_;
+    }
+    [[nodiscard]] constexpr auto operator<=>(const opaque_address&) const = default;
+    [[nodiscard]] constexpr auto operator==(const opaque_address&) const -> bool = default;
+
+private:
+    address_format format_;
+    std::vector<std::byte> bytes_;
+};
+
+static_assert(address_type<opaque_address>);
+namespace address_traits {
+template <>
+inline constexpr std::size_t address_size_v<opaque_address> = sizeof(opaque_address);
+}  // namespace address_traits
+
 /**
  * @typedef address
  * @brief Variant type holding any supported address type.
@@ -538,7 +593,8 @@ using address = std::variant<unspecified_address,
                              ipv6_address,
                              ib_address,
                              ethernet_address,
-                             ib_socket_address>;
+                             ib_socket_address,
+                             opaque_address>;
 
 /**
  * @namespace address_ops
@@ -761,6 +817,7 @@ template <typename Visitor>
                  [](const ipv6_address&) { return address_format::inet6; },
                  [](const ib_address&) { return address_format::ib; },
                  [](const ib_socket_address&) { return address_format::ib; },
+                 [](const opaque_address& addr) { return addr.format(); },
                  [](const ethernet_address&) { return address_format::ethernet; },
                  [](const unspecified_address&) { return address_format::unspecified; }},
         addr);
@@ -793,8 +850,10 @@ template <typename Visitor>
  * @param len Length of the data.
  * @param format The address format.
  * @return The constructed address variant.
+ * Invalid input or an unknown format returns unspecified_address. Provider-specific
+ * formats allocate owned storage; allocation exceptions propagate.
  */
-[[nodiscard]] auto
-address_from_raw(const void* data, std::size_t len, address_format format) noexcept -> address;
+[[nodiscard]] auto address_from_raw(const void* data, std::size_t len, address_format format)
+    -> address;
 
 }  // namespace loom

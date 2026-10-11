@@ -13,9 +13,10 @@
 
 namespace loom::detail {
 
-using native_address = std::variant<sockaddr_in, sockaddr_in6, native_ib_address>;
+using native_address =
+    std::variant<sockaddr_in, sockaddr_in6, native_ib_address, std::span<const std::byte>>;
 
-// These values own the native objects until the provider call returns.
+// Socket values own native objects; opaque values borrow their address's bytes.
 [[nodiscard]] inline auto to_native_address(const address& addr, address_format format)
     -> result<native_address> {
     const auto actual = get_address_format(addr);
@@ -53,8 +54,56 @@ using native_address = std::variant<sockaddr_in, sockaddr_in6, native_ib_address
     }
     if (const auto* ib = std::get_if<ib_socket_address>(&addr))
         return to_native_ib_address(*ib);
+    if (const auto* opaque = std::get_if<opaque_address>(&addr)) {
+        if (opaque->bytes().empty())
+            return make_error_result<native_address>(errc::invalid_argument);
+        return opaque->bytes();
+    }
     // A GID/QPN/LID or a MAC alone does not describe a native socket address.
     return make_error_result<native_address>(errc::not_supported);
+}
+
+[[nodiscard]] inline auto native_address_bytes(const native_address& addr) noexcept
+    -> std::span<const std::byte> {
+    return std::visit(
+        [](const auto& value) -> std::span<const std::byte> {
+            if constexpr (std::same_as<std::remove_cvref_t<decltype(value)>,
+                                       std::span<const std::byte>>)
+                return value;
+            else
+                return std::as_bytes(std::span{&value, 1});
+        },
+        addr);
+}
+
+// Both CM and AV lookup report the required size. AV lookup may return success
+// after truncating, whereas CM reports FI_ETOOSMALL.
+template <typename Query>
+[[nodiscard]] auto query_address(Query&& query, address_format format) -> result<address> {
+    std::array<std::byte, 256> initial{};
+    std::vector<std::byte> expanded;
+    std::span<std::byte> buffer{initial};
+    for (;;) {
+        auto length = buffer.size();
+        const auto ret = query(buffer.data(), &length);
+        if (ret != 0 && (ret != -FI_ETOOSMALL || length <= buffer.size()))
+            return make_error_result_from_fi_errno<address>(ret);
+        if (length > buffer.size()) {
+            expanded.resize(length);
+            buffer = expanded;
+            continue;
+        }
+        auto decoded = address_from_raw(buffer.data(), length, format);
+        if (std::holds_alternative<unspecified_address>(decoded)) {
+            const bool known = is_opaque_address_format(format) || format == address_format::inet ||
+                               format == address_format::inet6 || format == address_format::ib ||
+                               format == address_format::sockaddr ||
+                               format == address_format::sockaddr_ip ||
+                               format == address_format::ethernet;
+            return make_error_result<address>(known ? errc::invalid_argument : errc::not_supported);
+        }
+        return decoded;
+    }
 }
 
 }  // namespace loom::detail

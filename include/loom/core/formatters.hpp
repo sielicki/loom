@@ -3,6 +3,7 @@
 
 #include <format>
 #include <string_view>
+#include <utility>
 
 #include "loom/core/address.hpp"
 #include "loom/core/endpoint_types.hpp"
@@ -593,6 +594,19 @@ struct std::formatter<loom::unspecified_address> : std::formatter<std::string_vi
     template <typename FormatContext>
     auto format(const loom::unspecified_address&, FormatContext& ctx) const {
         return std::formatter<std::string_view>::format("<unspecified>", ctx);
+    }
+};
+
+template <>
+struct std::formatter<loom::opaque_address> {
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const loom::opaque_address& addr, FormatContext& ctx) const {
+        auto out = std::format_to(ctx.out(), "opaque({}):", std::to_underlying(addr.format()));
+        for (const auto byte : addr.bytes())
+            out = std::format_to(out, "{:02x}", std::to_integer<unsigned>(byte));
+        return out;
     }
 };
 

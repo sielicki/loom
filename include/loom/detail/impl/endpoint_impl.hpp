@@ -464,8 +464,8 @@ auto endpoint::connect(const address& peer_addr) -> void_result {
     if (!native) {
         return std::unexpected(native.error());
     }
-    const int ret = std::visit(
-        [&](const auto& addr) { return ::fi_connect(impl_->ep, &addr, nullptr, 0); }, *native);
+    const int ret =
+        ::fi_connect(impl_->ep, detail::native_address_bytes(*native).data(), nullptr, 0);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(-ret);
@@ -493,16 +493,11 @@ auto endpoint::get_local_address() const -> result<address> {
         return make_error_result<address>(errc::invalid_argument);
     }
 
-    std::array<std::byte, 256> raw_addr{};
-    std::size_t addrlen = raw_addr.size();
-
-    int ret = ::fi_getname(&impl_->ep->fid, raw_addr.data(), &addrlen);
-
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<address>(-ret);
-    }
-
-    return address_from_raw(raw_addr.data(), addrlen, impl_->addr_format);
+    return detail::query_address(
+        [&](void* data, std::size_t* length) {
+            return ::fi_getname(&impl_->ep->fid, data, length);
+        },
+        impl_->addr_format);
 }
 
 auto endpoint::get_peer_address() const -> result<address> {
@@ -510,16 +505,9 @@ auto endpoint::get_peer_address() const -> result<address> {
         return make_error_result<address>(errc::invalid_argument);
     }
 
-    std::array<std::byte, 256> raw_addr{};
-    std::size_t addrlen = raw_addr.size();
-
-    int ret = ::fi_getpeer(impl_->ep, raw_addr.data(), &addrlen);
-
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<address>(-ret);
-    }
-
-    return address_from_raw(raw_addr.data(), addrlen, impl_->addr_format);
+    return detail::query_address(
+        [&](void* data, std::size_t* length) { return ::fi_getpeer(impl_->ep, data, length); },
+        impl_->addr_format);
 }
 
 auto endpoint::read(std::span<std::byte> local_buffer,

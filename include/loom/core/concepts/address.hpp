@@ -13,6 +13,8 @@
  */
 namespace loom {
 
+class opaque_address;
+
 /**
  * @class ipv4_address
  * @brief Forward declaration of IPv4 address type.
@@ -83,12 +85,12 @@ concept mac_address = requires(const T& addr) {
  * @brief Concept for any supported address type.
  * @tparam T The address type.
  *
- * Union of network, GID, InfiniBand socket, MAC, or empty serializable types.
+ * Union of network, GID, InfiniBand socket, MAC, opaque, or empty serializable types.
  */
 template <typename T>
 concept address_type =
     network_address<T> || gid_address<T> || mac_address<T> || std::same_as<T, ib_socket_address> ||
-    (trivially_serializable<T> && std::is_empty_v<T>);
+    std::same_as<T, opaque_address> || (trivially_serializable<T> && std::is_empty_v<T>);
 
 /**
  * @concept address_visitor
@@ -103,6 +105,7 @@ concept address_visitor = requires(F&& f) {
     requires std::invocable<F, ipv6_address>;
     requires std::invocable<F, ib_address>;
     requires std::invocable<F, ib_socket_address>;
+    requires std::invocable<F, opaque_address>;
     requires std::invocable<F, ethernet_address>;
     requires std::invocable<F, unspecified_address>;
 };

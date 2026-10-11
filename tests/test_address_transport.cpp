@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/core/formatters.hpp>
 #include <loom/detail/conversions.hpp>
 #include <loom/detail/impl/address_vector_impl.hpp>
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
+#include <loom/detail/impl/passive_endpoint_impl.hpp>
 
 #include <algorithm>
 #include <array>
@@ -30,6 +32,12 @@ struct provider {
     std::string printable_address;
     bool report_small_buffer{};
     int lookup_calls{};
+    int lookup_result{};
+    int name_calls{};
+    int name_result{};
+    bool silent_truncation{};
+    bool string_addresses{};
+    std::vector<std::string> received_strings;
     int straddr_calls{};
     std::vector<void*> contexts;
     fi_ops ops{
@@ -69,7 +77,14 @@ struct provider {
                std::uint64_t,
                void* context) {
                 auto& self = *static_cast<provider*>(av->fid.context);
-                self.capture(addr, count);
+                if (self.string_addresses) {
+                    ++self.calls;
+                    const auto* strings = static_cast<const char* const*>(addr);
+                    for (std::size_t i = 0; i < count; ++i)
+                        self.received_strings.emplace_back(strings[i]);
+                } else {
+                    self.capture(addr, count);
+                }
                 self.contexts.push_back(context);
                 for (std::size_t i = 0; i < count; ++i) {
                     output[i] = self.fail_middle && i == 1 ? FI_ADDR_NOTAVAIL : 100 + i;
@@ -80,10 +95,13 @@ struct provider {
             [](fid_av* av, fi_addr_t, void* address, std::size_t* length) {
                 auto& self = *static_cast<provider*>(av->fid.context);
                 ++self.lookup_calls;
+                if (self.lookup_result)
+                    return self.lookup_result;
                 const auto capacity = *length;
-                std::memcpy(address,
-                            self.stored_address.data(),
-                            std::min(capacity, self.stored_address.size()));
+                if (!self.stored_address.empty())
+                    std::memcpy(address,
+                                self.stored_address.data(),
+                                std::min(capacity, self.stored_address.size()));
                 *length = self.stored_address.size();
                 return self.report_small_buffer && capacity < *length ? -FI_ETOOSMALL : 0;
             },
@@ -101,6 +119,7 @@ struct provider {
         },
     };
     fid_ep ep_handle{.fid = {.context = this, .ops = &ops}, .cm = &cm};
+    fid_pep pep_handle{.fid = {.context = this, .ops = &ops}, .cm = &cm};
     fid_av av_handle{.fid = {.context = this, .ops = &ops}, .ops = &av_ops};
     fi_ops_domain domain_ops{
         .size = sizeof(fi_ops_domain),
@@ -125,6 +144,11 @@ struct provider {
         return loom::endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
             loom::get_default_resource(), &ep_handle, loom::endpoint_types::msg, format)};
     }
+    auto passive(loom::address_format format) -> loom::passive_endpoint {
+        return loom::passive_endpoint{
+            loom::detail::make_pmr_unique<loom::detail::passive_endpoint_impl>(
+                loom::get_default_resource(), &pep_handle, format)};
+    }
     auto vector(loom::address_format format) -> loom::address_vector {
         return loom::address_vector{
             loom::detail::make_pmr_unique<loom::detail::address_vector_impl>(
@@ -135,13 +159,15 @@ struct provider {
         const auto* bytes = static_cast<const std::byte*>(address);
         received.assign(bytes, bytes + count * address_size);
     }
-    auto copy_name(void* addr, std::size_t* length) const -> int {
+    auto copy_name(void* addr, std::size_t* length) -> int {
+        ++name_calls;
+        if (name_result)
+            return name_result;
         const auto capacity = *length;
         *length = stored_address.size();
-        if (capacity < *length)
-            return -FI_ETOOSMALL;
-        std::memcpy(addr, stored_address.data(), *length);
-        return 0;
+        if (!stored_address.empty())
+            std::memcpy(addr, stored_address.data(), std::min(capacity, *length));
+        return capacity < *length && !silent_truncation ? -FI_ETOOSMALL : 0;
     }
 };
 
@@ -603,4 +629,236 @@ TEST_CASE("batch insertion forwards individual contexts", "[address]") {
     REQUIRE(native.contexts == std::vector<void*>{&first, &second});
     REQUIRE_FALSE(av.insert_batch(addresses, handles, std::span{contexts}.first(1)));
     REQUIRE(native.calls == 2);
+}
+
+TEST_CASE("provider addresses survive name lookup and reinsertion", "[address][provider]") {
+    enum class source { local, peer, passive, lookup };
+    const auto from = GENERATE(source::local, source::peer, source::passive, source::lookup);
+    const auto format = GENERATE(loom::address_format::psmx,
+                                 loom::address_format::psmx2,
+                                 loom::address_format::gni,
+                                 loom::address_format::bgq,
+                                 loom::address_format::mlx,
+                                 loom::address_format::ib_ud,
+                                 loom::address_format::efa,
+                                 loom::address_format::psmx3,
+                                 loom::address_format::opx,
+                                 loom::address_format::cxi,
+                                 loom::address_format::ucx);
+    const auto length = GENERATE(32u, 513u);
+    const auto report_small_buffer = GENERATE(false, true);
+    CAPTURE(from, format, length, report_small_buffer);
+    provider native;
+    native.report_small_buffer = report_small_buffer;
+    native.silent_truncation = !report_small_buffer;
+    native.address_size = length;
+    native.stored_address.resize(length);
+    for (std::size_t i = 0; i < length; ++i)
+        native.stored_address[i] = static_cast<std::byte>(i);
+    auto ep = native.endpoint(format);
+    auto pep = native.passive(format);
+    auto av = native.vector(format);
+    const auto result = [&]() -> loom::result<loom::address> {
+        switch (from) {
+            case source::local:
+                return ep.get_local_address();
+            case source::peer:
+                return ep.get_peer_address();
+            case source::passive:
+                return pep.get_local_address();
+            case source::lookup:
+                return av.lookup(loom::av_handle{100});
+        }
+        std::unreachable();
+    }();
+    REQUIRE(result);
+    CHECK(loom::get_address_format(*result) == format);
+    REQUIRE(std::holds_alternative<loom::opaque_address>(*result));
+    const auto& opaque = std::get<loom::opaque_address>(*result);
+    CHECK(std::ranges::equal(opaque.bytes(), native.stored_address));
+    CHECK((from == source::lookup ? native.lookup_calls : native.name_calls) ==
+          (length > 256 ? 2 : 1));
+    REQUIRE(av.insert(*result));
+    CHECK(native.received == native.stored_address);
+}
+
+TEST_CASE("opaque addresses own their bytes and retain their format", "[address][opaque]") {
+    std::array storage{std::byte{0x17}, std::byte{0xa3}, std::byte{0xff}};
+    const auto decoded =
+        loom::address_from_raw(storage.data(), storage.size(), loom::address_format::efa);
+    auto copy = decoded;
+    auto moved = std::move(copy);
+    storage.fill(std::byte{});
+    REQUIRE(std::holds_alternative<loom::opaque_address>(moved));
+    CHECK(moved == decoded);
+    CHECK(loom::get_address_format(moved) == loom::address_format::efa);
+    CHECK(std::format("{}", moved) == "opaque(14):17a3ff");
+    CHECK(loom::get_port(moved) == 0);
+    CHECK_FALSE(loom::address_ops::is_network_protocol(moved));
+    CHECK_FALSE(loom::address_ops::is_rdma_capable(moved));
+    CHECK(loom::address_ops::size(moved) == sizeof(loom::opaque_address));
+    CHECK_THROWS_AS((loom::opaque_address{loom::address_format::inet, storage}),
+                    std::invalid_argument);
+    CHECK_THROWS_AS((loom::opaque_address{loom::address_format::efa, {}}), std::invalid_argument);
+    storage.fill(std::byte{0x41});
+    CHECK_THROWS_AS((loom::opaque_address{loom::address_format::str, storage}),
+                    std::invalid_argument);
+}
+
+TEST_CASE("opaque binary addresses preserve native submission layout", "[address][opaque]") {
+    enum class submission { connect, insert, batch, batch_with_context };
+    const auto via = GENERATE(
+        submission::connect, submission::insert, submission::batch, submission::batch_with_context);
+    const auto mismatch = GENERATE(false, true);
+    provider native;
+    native.address_size = 32;
+    std::array<std::byte, 32> first{}, second{};
+    first.fill(std::byte{0x65});
+    second.fill(std::byte{0x32});
+    const std::array<loom::address, 2> addresses{
+        loom::opaque_address{loom::address_format::efa, first},
+        loom::opaque_address{loom::address_format::efa, second}};
+    auto ep = native.endpoint(mismatch ? loom::address_format::cxi : loom::address_format::efa);
+    auto av = native.vector(mismatch ? loom::address_format::cxi : loom::address_format::efa);
+    std::array<loom::av_handle, 2> handles{};
+    std::array<int, 2> tokens{};
+    std::array<void*, 2> contexts{&tokens[0], &tokens[1]};
+    const auto result = [&]() -> loom::result<void> {
+        if (via == submission::connect)
+            return ep.connect(addresses[0]);
+        if (via == submission::insert)
+            return av.insert(addresses[0]).transform([](auto) {});
+        return av
+            .insert_batch(addresses,
+                          handles,
+                          via == submission::batch_with_context ? std::span{contexts}
+                                                                : std::span<void*>{})
+            .transform([](auto) {});
+    }();
+    if (mismatch) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == loom::errc::invalid_argument);
+        CHECK(native.calls == 0);
+    } else {
+        REQUIRE(result);
+        if (via == submission::batch) {
+            REQUIRE(native.received.size() == first.size() + second.size());
+            CHECK(std::ranges::equal(std::span{native.received}.first(first.size()), first));
+            CHECK(std::ranges::equal(std::span{native.received}.last(second.size()), second));
+            CHECK(handles[0].value == 100);
+            CHECK(handles[1].value == 101);
+        } else {
+            CHECK(std::ranges::equal(native.received,
+                                     via == submission::batch_with_context ? second : first));
+            if (via == submission::batch_with_context)
+                CHECK(std::ranges::equal(native.contexts, contexts));
+        }
+    }
+}
+
+TEST_CASE("opaque binary batches reject inconsistent sizes before insertion", "[address][opaque]") {
+    const auto contexts_requested = GENERATE(false, true);
+    provider native;
+    auto av = native.vector(loom::address_format::efa);
+    std::array<std::byte, 32> storage{};
+    const std::array<loom::address, 2> addresses{
+        loom::opaque_address{loom::address_format::efa, storage},
+        loom::opaque_address{loom::address_format::efa, std::span{storage}.first(31)}};
+    std::array<loom::av_handle, 2> handles{};
+    std::array<void*, 2> contexts{};
+    const auto result = av.insert_batch(
+        addresses, handles, contexts_requested ? std::span{contexts} : std::span<void*>{});
+    REQUIRE_FALSE(result);
+    CHECK(result.error() == loom::errc::invalid_argument);
+    CHECK(native.calls == 0);
+}
+
+TEST_CASE("string addresses use native pointer arrays for AV insertion", "[address][opaque]") {
+    const auto batched = GENERATE(false, true);
+    const auto contexts_requested = GENERATE(false, true);
+    provider native;
+    native.string_addresses = true;
+    std::string first = "fi_test://" + std::string(600, 'a');
+    std::string second = "fi_test://b";
+    const auto bytes = [](const std::string& text) {
+        return std::as_bytes(std::span{text.c_str(), text.size() + 1});
+    };
+    const auto input = bytes(first);
+    native.address_size = input.size();
+    native.stored_address.assign(input.begin(), input.end());
+    auto ep = native.endpoint(loom::address_format::str);
+    auto av = native.vector(loom::address_format::str);
+    const auto decoded = ep.get_local_address();
+    REQUIRE(decoded);
+    REQUIRE(std::holds_alternative<loom::opaque_address>(*decoded));
+    CHECK(std::ranges::equal(std::get<loom::opaque_address>(*decoded).bytes(), input));
+    REQUIRE(ep.connect(*decoded));
+    CHECK(native.received == native.stored_address);
+    std::array<int, 2> tokens{};
+    std::array<void*, 2> contexts{&tokens[0], &tokens[1]};
+    if (batched) {
+        const std::array<loom::address, 2> addresses{
+            *decoded, loom::opaque_address{loom::address_format::str, bytes(second)}};
+        std::array<loom::av_handle, 2> handles{};
+        REQUIRE(av.insert_batch(addresses,
+                                handles,
+                                contexts_requested ? std::span{contexts} : std::span<void*>{})
+                    .value() == 2);
+        CHECK(native.received_strings == std::vector{first, second});
+        if (contexts_requested)
+            CHECK(std::ranges::equal(native.contexts, contexts));
+    } else {
+        REQUIRE(av.insert(*decoded, contexts_requested ? contexts[0] : nullptr));
+        CHECK(native.received_strings == std::vector{first});
+        CHECK(native.contexts[0] == (contexts_requested ? contexts[0] : nullptr));
+    }
+}
+
+TEST_CASE("address queries reject malformed and unsupported representations",
+          "[address][invalid]") {
+    const auto format = GENERATE(loom::address_format::inet,
+                                 loom::address_format::inet6,
+                                 loom::address_format::ib,
+                                 loom::address_format::str,
+                                 loom::address_format::efa,
+                                 loom::address_format::unspecified,
+                                 static_cast<loom::address_format>(0xffffffff));
+    provider native;
+    // Empty provider addresses and short/malformed typed addresses cannot be used.
+    if (format != loom::address_format::efa)
+        native.stored_address.assign(4, std::byte{0x55});
+    auto ep = native.endpoint(format);
+    auto pep = native.passive(format);
+    auto av = native.vector(format);
+    const std::array results{ep.get_local_address(),
+                             ep.get_peer_address(),
+                             pep.get_local_address(),
+                             av.lookup(loom::av_handle{100})};
+    for (const auto& result : results) {
+        REQUIRE_FALSE(result);
+        const auto expected = format == loom::address_format::unspecified ||
+                                      format == static_cast<loom::address_format>(0xffffffff)
+                                  ? loom::errc::not_supported
+                                  : loom::errc::invalid_argument;
+        CHECK(result.error() == expected);
+    }
+}
+
+TEST_CASE("address queries propagate native failures without retry loops", "[address][invalid]") {
+    const auto error = GENERATE(FI_EIO, FI_ETOOSMALL);
+    provider native;
+    native.name_result = native.lookup_result = -error;
+    auto ep = native.endpoint(loom::address_format::efa);
+    auto pep = native.passive(loom::address_format::efa);
+    auto av = native.vector(loom::address_format::efa);
+    const std::array results{ep.get_local_address(),
+                             ep.get_peer_address(),
+                             pep.get_local_address(),
+                             av.lookup(loom::av_handle{100})};
+    for (const auto& result : results) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == loom::make_error_code_from_fi_errno(error));
+    }
+    CHECK(native.name_calls == 3);
+    CHECK(native.lookup_calls == 1);
 }

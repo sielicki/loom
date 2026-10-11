@@ -142,11 +142,12 @@ auto address_vector::insert(const address& addr, void* context) -> result<av_han
     if (!native) {
         return std::unexpected(native.error());
     }
-    const int ret = std::visit(
-        [&](const auto& value) {
-            return ::fi_av_insert(impl_->av, &value, 1, &fi_addr, flags, context);
-        },
-        *native);
+    const auto bytes = detail::native_address_bytes(*native);
+    const auto* string = reinterpret_cast<const char*>(bytes.data());
+    const void* data = get_address_format(addr) == address_format::str
+                           ? static_cast<const void*>(&string)
+                           : bytes.data();
+    const int ret = ::fi_av_insert(impl_->av, data, 1, &fi_addr, flags, context);
 
     if (ret < 0) {
         return make_error_result_from_fi_errno<av_handle>(-ret);
@@ -178,6 +179,9 @@ auto address_vector::insert_batch(std::span<const address> addresses,
     // Native batch insertion uses one address stride for the entire array.
     const auto format = get_address_format(addresses.front());
     std::vector<std::byte> packed;
+    std::vector<const char*> strings;
+    if (format == address_format::str)
+        strings.reserve(addresses.size());
     std::size_t stride{};
     for (const auto& addr : addresses) {
         if (get_address_format(addr) != format)
@@ -186,20 +190,28 @@ auto address_vector::insert_batch(std::span<const address> addresses,
         if (!native) {
             return std::unexpected(native.error());
         }
-        std::visit(
-            [&](const auto& value) {
-                const auto bytes = std::as_bytes(std::span{&value, 1});
-                stride = bytes.size();
-                packed.insert(packed.end(), bytes.begin(), bytes.end());
-            },
-            *native);
+        const auto bytes = detail::native_address_bytes(*native);
+        if (format == address_format::str) {
+            strings.push_back(reinterpret_cast<const char*>(bytes.data()));
+        } else {
+            if (stride != 0 && stride != bytes.size())
+                return make_error_result<std::size_t>(errc::invalid_argument);
+            stride = bytes.size();
+            packed.insert(packed.end(), bytes.begin(), bytes.end());
+        }
     }
+
+    const auto data_at = [&](std::size_t index) -> const void* {
+        if (format == address_format::str)
+            return strings.data() + index;
+        return packed.data() + index * stride;
+    };
 
     std::vector<::fi_addr_t> fi_addrs(addresses.size(), FI_ADDR_NOTAVAIL);
     std::size_t count{};
     if (contexts.empty()) {
         const int ret =
-            ::fi_av_insert(impl_->av, packed.data(), addresses.size(), fi_addrs.data(), 0, nullptr);
+            ::fi_av_insert(impl_->av, data_at(0), addresses.size(), fi_addrs.data(), 0, nullptr);
         if (ret < 0) {
             return make_error_result_from_fi_errno<std::size_t>(ret);
         }
@@ -207,8 +219,7 @@ auto address_vector::insert_batch(std::span<const address> addresses,
     } else {
         // libfabric accepts one context per call, not an array of contexts.
         for (std::size_t i = 0; i < addresses.size(); ++i) {
-            const int ret = ::fi_av_insert(
-                impl_->av, packed.data() + i * stride, 1, &fi_addrs[i], 0, contexts[i]);
+            const int ret = ::fi_av_insert(impl_->av, data_at(i), 1, &fi_addrs[i], 0, contexts[i]);
             if (ret < 0) {
                 if (count == 0) {
                     return make_error_result_from_fi_errno<std::size_t>(ret);
@@ -288,23 +299,11 @@ auto address_vector::lookup(av_handle handle) const -> result<address> {
         return make_error_result<address>(errc::invalid_argument);
     }
 
-    std::vector<std::byte> addr_buf(256);
-    ::fi_addr_t fi_addr = handle.value;
-    std::size_t addrlen = addr_buf.size();
-
-    for (;;) {
-        addrlen = addr_buf.size();
-        const int ret = ::fi_av_lookup(impl_->av, fi_addr, addr_buf.data(), &addrlen);
-        if (ret != 0 && (ret != -FI_ETOOSMALL || addrlen <= addr_buf.size())) {
-            return make_error_result_from_fi_errno<address>(ret);
-        }
-        if (addrlen <= addr_buf.size()) {
-            break;
-        }
-        addr_buf.resize(addrlen);
-    }
-
-    return address_from_raw(addr_buf.data(), addrlen, impl_->addr_format);
+    return detail::query_address(
+        [&](void* data, std::size_t* length) {
+            return ::fi_av_lookup(impl_->av, handle.value, data, length);
+        },
+        impl_->addr_format);
 }
 
 auto address_vector::address_to_string(av_handle handle) const -> result<std::string> {
