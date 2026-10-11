@@ -329,6 +329,10 @@
                 stdenv = pkgs.gcc15Stdenv;
                 src = inputs.nixl-src;
               };
+              nixl-loom = pkgs.callPackage ./examples/nixl {
+                stdenv = pkgs.gcc15Stdenv;
+                inherit (self'.packages) loom nixl-consumer;
+              };
 
               loom-debug = pkgs.callPackage mkLoom {
                 inherit libfabric;
@@ -663,6 +667,7 @@
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
               nixl-consumer = self'.packages.nixl-consumer.tests.sdk;
+              nixl-loom = self'.packages.nixl-loom;
 
               # Build check with sanitizers (Linux only)
               loom-build-sanitizers = self'.packages.loom-debug;
