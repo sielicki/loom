@@ -4,6 +4,7 @@
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
+#include <cstring>
 #include <limits>
 
 #include <catch2/catch_test_macros.hpp>
@@ -18,6 +19,29 @@ struct queue_provider {
     int error_reads{};
     std::uint32_t native_event{FI_CONNECTED};
     fi_wait_obj requested_wait{};
+    bool short_entry{};
+
+    auto read_event(fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t length) -> ssize_t {
+        ++calls;
+        *type = native_event;
+        if (status != 1)
+            return status;
+        if (native_event == FI_MR_COMPLETE || native_event == FI_AV_COMPLETE ||
+            native_event == FI_JOIN_COMPLETE) {
+            const fi_eq_entry entry{.fid = &eq->fid, .context = &calls, .data = 73};
+            if (length < sizeof(entry))
+                return -FI_ETOOSMALL;
+            const auto count = short_entry ? sizeof(entry) - 1 : sizeof(entry);
+            std::memcpy(buffer, &entry, count);
+            return static_cast<ssize_t>(count);
+        }
+        const fi_eq_cm_entry entry{.fid = &eq->fid};
+        if (length < sizeof(entry))
+            return -FI_ETOOSMALL;
+        const auto count = short_entry ? sizeof(entry) - 1 : sizeof(entry);
+        std::memcpy(buffer, &entry, count);
+        return static_cast<ssize_t>(count);
+    }
     fi_ops lifetime_ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_cq cq_ops{
         .size = sizeof(fi_ops_cq),
@@ -41,15 +65,10 @@ struct queue_provider {
     };
     fi_ops_eq eq_ops{
         .size = sizeof(fi_ops_eq),
-        .read = [](fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t, std::uint64_t)
+        .read = [](fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t length, std::uint64_t)
             -> ssize_t {
-            auto& self = *static_cast<queue_provider*>(eq->fid.context);
-            ++self.calls;
-            *type = self.native_event;
-            if (self.status != 1)
-                return self.status;
-            *static_cast<fi_eq_cm_entry*>(buffer) = {.fid = &eq->fid};
-            return sizeof(fi_eq_cm_entry);
+            return static_cast<queue_provider*>(eq->fid.context)
+                ->read_event(eq, type, buffer, length);
         },
         .readerr = [](fid_eq* eq, fi_eq_err_entry* error, std::uint64_t) -> ssize_t {
             auto& self = *static_cast<queue_provider*>(eq->fid.context);
@@ -62,17 +81,12 @@ struct queue_provider {
         .sread = [](fid_eq* eq,
                     std::uint32_t* type,
                     void* buffer,
-                    std::size_t,
+                    std::size_t length,
                     int timeout,
                     std::uint64_t) -> ssize_t {
             auto& self = *static_cast<queue_provider*>(eq->fid.context);
-            ++self.calls;
             self.timeout = timeout;
-            *type = self.native_event;
-            if (self.status != 1)
-                return self.status;
-            *static_cast<fi_eq_cm_entry*>(buffer) = {.fid = &eq->fid};
-            return sizeof(fi_eq_cm_entry);
+            return self.read_event(eq, type, buffer, length);
         },
     };
     fid_cq native_cq{.fid = {.context = this, .ops = &lifetime_ops}, .ops = &cq_ops};
@@ -274,4 +288,42 @@ TEST_CASE("unrecognized events do not report a successful connection", "[queue][
     REQUIRE(event);
     REQUIRE(event->type == loom::event_type::unknown);
     REQUIRE_FALSE(event->error);
+}
+
+TEST_CASE("control event entries retain their context and data", "[queue][event_entry]") {
+    const auto waiting = GENERATE(false, true);
+    const auto type = GENERATE(FI_MR_COMPLETE, FI_AV_COMPLETE, FI_JOIN_COMPLETE);
+    queue_provider provider;
+    provider.native_event = type;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
+    REQUIRE(queue);
+    const auto event = waiting ? std::optional{queue->wait().value()} : queue->poll();
+    REQUIRE(event);
+    REQUIRE_FALSE(event->error);
+    REQUIRE(event->fid == &provider.native_eq.fid);
+    REQUIRE(event->context == &provider.calls);
+    REQUIRE(event->data == 73);
+    const auto expected = type == FI_MR_COMPLETE   ? loom::event_type::mr_complete
+                          : type == FI_AV_COMPLETE ? loom::event_type::av_complete
+                                                   : loom::event_type::join_complete;
+    REQUIRE(event->type == expected);
+}
+
+TEST_CASE("short native event entries are rejected", "[queue][event_entry]") {
+    const auto waiting = GENERATE(false, true);
+    const auto type = GENERATE(FI_CONNECTED, FI_MR_COMPLETE);
+    queue_provider provider;
+    provider.native_event = type;
+    provider.short_entry = true;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
+    REQUIRE(queue);
+    if (waiting) {
+        const auto event = queue->wait();
+        REQUIRE_FALSE(event);
+        REQUIRE(event.error() == loom::make_error_code_from_fi_errno(FI_EIO));
+    } else {
+        const auto event = queue->poll();
+        REQUIRE(event);
+        REQUIRE(event->error == loom::make_error_code_from_fi_errno(FI_EIO));
+    }
 }

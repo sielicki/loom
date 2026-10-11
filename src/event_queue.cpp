@@ -19,26 +19,6 @@ namespace loom {
 
 
 
-/// @brief Converts libfabric event type to loom event type.
-static auto fi_event_to_loom(std::uint32_t fi_event) -> event_type {
-    switch (fi_event) {
-        case FI_CONNECTED:
-            return event_type::connected;
-        case FI_CONNREQ:
-            return event_type::connreq;
-        case FI_SHUTDOWN:
-            return event_type::shutdown;
-        case FI_JOIN_COMPLETE:
-            return event_type::join_complete;
-        case FI_MR_COMPLETE:
-            return event_type::mr_complete;
-        case FI_AV_COMPLETE:
-            return event_type::av_complete;
-        default:
-            return event_type::unknown;
-    }
-}
-
 event_queue::event_queue() = default;
 
 event_queue::event_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
@@ -95,10 +75,12 @@ auto event_queue::poll() -> std::optional<fabric_event> {
     }
 
     std::uint32_t event_type = 0;
-    ::fi_eq_cm_entry entry{};
+    alignas(::fi_eq_entry)
+        std::array<std::byte, std::max(sizeof(::fi_eq_entry), sizeof(::fi_eq_cm_entry))>
+            buffer{};
     std::uint64_t flags = 0;
 
-    ssize_t ret = ::fi_eq_read(impl_->eq, &event_type, &entry, sizeof(entry), flags);
+    ssize_t ret = ::fi_eq_read(impl_->eq, &event_type, buffer.data(), buffer.size(), flags);
 
     if (ret == 0 || ret == -FI_EAGAIN) {
         return std::nullopt;
@@ -128,13 +110,13 @@ auto event_queue::poll() -> std::optional<fabric_event> {
         return event;
     }
 
-    fabric_event event{};
-    event.type = fi_event_to_loom(event_type);
-    event.fid = entry.fid;
-    event.context = nullptr;
-    event.error = std::error_code{};
-
-    return event;
+    auto decoded = detail::decode_eq_event(event_type, buffer, static_cast<std::size_t>(ret));
+    if (!decoded) {
+        fabric_event event{};
+        event.error = decoded.error();
+        return event;
+    }
+    return std::move(*decoded);
 }
 
 auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> result<fabric_event> {
@@ -143,7 +125,9 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
     }
 
     std::uint32_t event_type = 0;
-    ::fi_eq_cm_entry entry{};
+    alignas(::fi_eq_entry)
+        std::array<std::byte, std::max(sizeof(::fi_eq_entry), sizeof(::fi_eq_cm_entry))>
+            buffer{};
     std::uint64_t flags = 0;
 
     int timeout_ms = -1;
@@ -154,7 +138,8 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
         timeout_ms = static_cast<int>(timeout->count());
     }
 
-    ssize_t ret = ::fi_eq_sread(impl_->eq, &event_type, &entry, sizeof(entry), timeout_ms, flags);
+    ssize_t ret =
+        ::fi_eq_sread(impl_->eq, &event_type, buffer.data(), buffer.size(), timeout_ms, flags);
 
     if (ret == 0) {
         return make_error_result<fabric_event>(errc::again);
@@ -180,13 +165,7 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
         return event;
     }
 
-    fabric_event event{};
-    event.type = fi_event_to_loom(event_type);
-    event.fid = entry.fid;
-    event.context = nullptr;
-    event.error = std::error_code{};
-
-    return event;
+    return detail::decode_eq_event(event_type, buffer, static_cast<std::size_t>(ret));
 }
 
 auto event_queue::read() -> result<fabric_event> {
