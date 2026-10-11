@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/core/fabric.hpp>
+#include <loom/core/progress_policy.hpp>
+#include <loom/detail/conversions.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -78,4 +80,48 @@ TEST_CASE("partial native masks do not invent completion ordering guarantees",
                 (mask == FI_ORDER_STRICT));
         REQUIRE(attributes->rx_comp_ordering.has(loom::completion_ordering::data));
     }
+}
+
+TEST_CASE("unified control progress survives negotiation and requires polling",
+          "[fabric][attributes][progress]") {
+    fi_domain_attr domain{};
+    domain.control_progress = FI_PROGRESS_CONTROL_UNIFIED;
+    domain.data_progress = FI_PROGRESS_MANUAL;
+    fi_info native{};
+    native.domain_attr = &domain;
+    const auto info = wrap(native);
+    const auto attributes = info.get_domain_attr();
+    REQUIRE(attributes);
+    REQUIRE(attributes->control_progress == loom::progress_mode::control_unified);
+    CHECK(loom::detail::to_fi_progress(attributes->control_progress) ==
+          FI_PROGRESS_CONTROL_UNIFIED);
+    const loom::runtime_progress_policy policy{attributes->control_progress,
+                                               attributes->data_progress};
+    CHECK(policy.requires_manual_control_progress());
+    CHECK(policy.requires_manual_data_progress());
+    CHECK_FALSE(policy.supports_blocking_wait());
+    using static_policy =
+        loom::static_progress_policy<loom::detail::from_fi_progress(FI_PROGRESS_CONTROL_UNIFIED),
+                                     loom::progress_mode::manual>;
+    CHECK(static_policy::requires_manual_control_progress());
+    CHECK(static_policy::requires_manual_data_progress());
+    CHECK_FALSE(static_policy::supports_blocking_wait());
+}
+
+TEST_CASE("manual-all progress requests retain the native manual requirement",
+          "[fabric][attributes][progress]") {
+    REQUIRE(loom::detail::to_fi_progress(loom::progress_mode::manual_all) == FI_PROGRESS_MANUAL);
+}
+
+TEST_CASE("native progress modes round trip without changing manual requirements",
+          "[fabric][attributes][progress]") {
+    const auto native = GENERATE(
+        FI_PROGRESS_UNSPEC, FI_PROGRESS_AUTO, FI_PROGRESS_MANUAL, FI_PROGRESS_CONTROL_UNIFIED);
+    const auto converted = loom::detail::from_fi_progress(native);
+    REQUIRE(loom::detail::to_fi_progress(converted) == native);
+    const loom::runtime_progress_policy policy{converted, converted};
+    const bool manual = native == FI_PROGRESS_MANUAL || native == FI_PROGRESS_CONTROL_UNIFIED;
+    REQUIRE(policy.requires_manual_control_progress() == manual);
+    REQUIRE(policy.requires_manual_data_progress() == manual);
+    REQUIRE(policy.supports_blocking_wait() == (native == FI_PROGRESS_AUTO));
 }

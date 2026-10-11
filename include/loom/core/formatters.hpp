@@ -273,6 +273,8 @@ struct std::formatter<loom::progress_mode> : std::formatter<std::string_view> {
                     return "manual";
                 case loom::progress_mode::manual_all:
                     return "manual_all";
+                case loom::progress_mode::control_unified:
+                    return "control_unified";
                 default:
                     return "unknown";
             }

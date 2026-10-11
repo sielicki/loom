@@ -626,6 +626,8 @@ enum class progress_mode : std::uint32_t {
     auto_progress = 1,  ///< Provider drives progress automatically
     manual = 2,         ///< Application must poll for progress
     manual_all = 3,     ///< Application controls all progress
+    control_unified =
+        4,  ///< Manual control progress; application serializes control and data calls
 };
 
 /**

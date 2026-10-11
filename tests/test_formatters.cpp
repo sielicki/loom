@@ -63,6 +63,8 @@ TEST_CASE("format progress_mode enum", "[formatters]") {
     REQUIRE(std::format("{}", loom::progress_mode::unspecified) == "unspecified");
     REQUIRE(std::format("{}", loom::progress_mode::auto_progress) == "auto");
     REQUIRE(std::format("{}", loom::progress_mode::manual) == "manual");
+    REQUIRE(std::format("{}", loom::progress_mode::manual_all) == "manual_all");
+    REQUIRE(std::format("{}", loom::progress_mode::control_unified) == "control_unified");
 }
 
 TEST_CASE("format errc enum", "[formatters]") {

@@ -258,7 +258,10 @@ namespace loom::detail {
         case progress_mode::auto_progress:
             return FI_PROGRESS_AUTO;
         case progress_mode::manual:
+        case progress_mode::manual_all:
             return FI_PROGRESS_MANUAL;
+        case progress_mode::control_unified:
+            return FI_PROGRESS_CONTROL_UNIFIED;
         default:
             return FI_PROGRESS_UNSPEC;
     }
@@ -275,6 +278,8 @@ namespace loom::detail {
             return progress_mode::auto_progress;
         case FI_PROGRESS_MANUAL:
             return progress_mode::manual;
+        case FI_PROGRESS_CONTROL_UNIFIED:
+            return progress_mode::control_unified;
         default:
             return progress_mode::unspecified;
     }

@@ -68,7 +68,8 @@ struct runtime_progress_policy {
      * @return True if manual progress needed.
      */
     [[nodiscard]] constexpr auto requires_manual_data_progress() const noexcept -> bool {
-        return data == progress_mode::manual || data == progress_mode::manual_all;
+        return data == progress_mode::manual || data == progress_mode::manual_all ||
+               data == progress_mode::control_unified;
     }
 
     /**
@@ -76,7 +77,8 @@ struct runtime_progress_policy {
      * @return True if manual progress needed.
      */
     [[nodiscard]] constexpr auto requires_manual_control_progress() const noexcept -> bool {
-        return control == progress_mode::manual || control == progress_mode::manual_all;
+        return control == progress_mode::manual || control == progress_mode::manual_all ||
+               control == progress_mode::control_unified;
     }
 
     /**
@@ -123,7 +125,8 @@ struct static_progress_policy {
      * @return True if manual progress needed.
      */
     [[nodiscard]] static constexpr auto requires_manual_data_progress() noexcept -> bool {
-        return DataProgress == progress_mode::manual || DataProgress == progress_mode::manual_all;
+        return DataProgress == progress_mode::manual || DataProgress == progress_mode::manual_all ||
+               DataProgress == progress_mode::control_unified;
     }
 
     /**
@@ -132,7 +135,8 @@ struct static_progress_policy {
      */
     [[nodiscard]] static constexpr auto requires_manual_control_progress() noexcept -> bool {
         return ControlProgress == progress_mode::manual ||
-               ControlProgress == progress_mode::manual_all;
+               ControlProgress == progress_mode::manual_all ||
+               ControlProgress == progress_mode::control_unified;
     }
 
     /**
