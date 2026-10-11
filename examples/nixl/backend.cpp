@@ -62,7 +62,7 @@ auto option(const nixlBackendInitParams& params, const std::string& key, std::st
 
 enum class wire_kind : std::uint64_t {
     connection_v1 = 0x4c4f4f4d0101,
-    memory_v1 = 0x4c4f4f4d0102,
+    memory_v2 = 0x4c4f4f4d0202,
     notification_v1 = 0x4c4f4f4d0103
 };
 
@@ -188,10 +188,18 @@ struct resources {
     }
 };
 
+enum class memory_space : std::uint64_t { host };
+struct memory_identity {
+    memory_space space;
+    std::uint64_t device;
+    auto operator==(const memory_identity&) const -> bool = default;
+};
+
 struct local_memory {
     std::shared_ptr<resources> fabric;
     loom::memory_region region;
     std::uint64_t base;
+    memory_identity identity;
 };
 
 struct local_metadata final : nixlBackendMD {
@@ -214,8 +222,13 @@ struct remote_metadata final : nixlBackendMD {
     std::shared_ptr<peer> destination;
     std::uint64_t base;
     loom::remote_memory region;
-    remote_metadata(std::shared_ptr<peer> target, std::uint64_t address, loom::remote_memory memory)
-        : nixlBackendMD(false), destination(std::move(target)), base(address), region(memory) {}
+    memory_identity identity;
+    remote_metadata(std::shared_ptr<peer> target,
+                    std::uint64_t address,
+                    loom::remote_memory memory,
+                    memory_identity device)
+        : nixlBackendMD(false), destination(std::move(target)), base(address), region(memory),
+          identity(device) {}
 };
 
 struct request;
@@ -573,7 +586,11 @@ public:
                 {reinterpret_cast<std::byte*>(memory.addr), memory.len},
                 loom::mr_access_flags::read | loom::mr_access_flags::write |
                     loom::mr_access_flags::remote_read | loom::mr_access_flags::remote_write);
-            auto local = std::make_shared<local_memory>(fabric_, std::move(region), memory.addr);
+            auto local =
+                std::make_shared<local_memory>(fabric_,
+                                               std::move(region),
+                                               memory.addr,
+                                               memory_identity{memory_space::host, memory.devId});
             output = new local_metadata(std::move(local));
             return NIXL_SUCCESS;
         });
@@ -595,11 +612,13 @@ public:
             return NIXL_ERR_INVALID_PARAM;
         return protect([&] {
             const auto& region = local->memory->region;
-            output = encode(std::array{std::to_underlying(wire_kind::memory_v1),
+            output = encode(std::array{std::to_underlying(wire_kind::memory_v2),
                                        local->memory->base,
                                        std::uint64_t{region.length()},
                                        region.remote_address(),
-                                       region.key()});
+                                       region.key(),
+                                       std::to_underlying(local->memory->identity.space),
+                                       local->memory->identity.device});
             return NIXL_SUCCESS;
         });
     }
@@ -679,10 +698,11 @@ public:
         output = nullptr;
         if (type != DRAM_SEG)
             return NIXL_ERR_NOT_SUPPORTED;
-        const auto data = decode<5>(memory.metaInfo);
-        if (!data || (*data)[0] != std::to_underlying(wire_kind::memory_v1) ||
+        const auto data = decode<7>(memory.metaInfo);
+        if (!data || (*data)[0] != std::to_underlying(wire_kind::memory_v2) ||
             (*data)[1] != memory.addr || (*data)[2] != memory.len || memory.len == 0 ||
-            memory.len > std::numeric_limits<std::uint64_t>::max() - (*data)[3])
+            memory.len > std::numeric_limits<std::uint64_t>::max() - (*data)[3] ||
+            (*data)[5] != std::to_underlying(memory_space::host) || (*data)[6] != memory.devId)
             return NIXL_ERR_MISMATCH;
         return protect([&] {
             std::lock_guard lock(mutex_);
@@ -691,7 +711,8 @@ public:
                 return NIXL_ERR_NOT_FOUND;
             output = new remote_metadata(target->second,
                                          memory.addr,
-                                         loom::remote_memory{(*data)[3], (*data)[4], memory.len});
+                                         loom::remote_memory{(*data)[3], (*data)[4], memory.len},
+                                         memory_identity{memory_space::host, memory.devId});
             return NIXL_SUCCESS;
         });
     }
@@ -726,6 +747,9 @@ public:
                     size > local[i].len || size > remote[i].len ||
                     source->memory->fabric != fabric_ ||
                     target->destination != destination->second ||
+                    source->memory->identity !=
+                        memory_identity{memory_space::host, local[i].devId} ||
+                    target->identity != memory_identity{memory_space::host, remote[i].devId} ||
                     !covers(source->memory->base,
                             source->memory->region.length(),
                             local[i].addr,

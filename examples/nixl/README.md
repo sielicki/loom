@@ -29,8 +29,9 @@ nix build .#nixl-loom
 ./result/bin/nixl-loom-workload 'tcp;ofi_rxm' --processes
 ```
 
-The build runs all four workloads. The installed executable sets
-`NIXL_PLUGIN_DIR` to its packaged `libplugin_LOOM.so`; transfers explicitly
+The build runs all four workloads and two plugin ABI contract checks. The
+installed executable sets `NIXL_PLUGIN_DIR` to its packaged
+`libplugin_LOOM.so`; transfers explicitly
 select the LOOM backend. To develop with the same dependencies:
 
 ```sh
@@ -46,6 +47,9 @@ The backend validates a typed profile requiring registered RMA, messages,
 thread-safe resources, and supported native context modes. Provider names
 only select discovery results; they do not establish capability guarantees.
 Peer metadata carries a versioned numeric envelope and protocol identity.
+Memory metadata also preserves the descriptor's memory space and device ID;
+imports and prepared transfers reject mismatched identities. Memory envelope
+version 2 is required on both peers; older metadata is rejected.
 
 Each backend owns a worker that polls even when its agent has no local
 requests. Submission and progress share a mutex. Up to 64 prepared requests,

@@ -12,7 +12,7 @@ stdenv.mkDerivation {
   version = "0.1.0";
   src = lib.fileset.toSource {
     root = ./.;
-    fileset = lib.fileset.unions [ ./CMakeLists.txt ./backend.cpp ./workload.cpp ];
+    fileset = lib.fileset.unions [ ./CMakeLists.txt ./backend.cpp ./workload.cpp ./test-contract.cpp ];
   };
   nativeBuildInputs = [ cmake ninja pkg-config makeWrapper ];
   buildInputs = [ loom nixl-consumer ];
