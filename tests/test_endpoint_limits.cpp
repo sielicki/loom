@@ -22,7 +22,8 @@ struct limit_provider {
                 auto& self = *static_cast<limit_provider*>(endpoint->context);
                 REQUIRE(level == FI_OPT_ENDPOINT);
                 REQUIRE(*length == sizeof(std::size_t));
-                REQUIRE((option == FI_OPT_MAX_RMA_SIZE || option == FI_OPT_INJECT_RMA_SIZE));
+                REQUIRE((option == FI_OPT_MAX_RMA_SIZE || option == FI_OPT_INJECT_RMA_SIZE ||
+                         option == FI_OPT_INJECT_MSG_SIZE));
                 *static_cast<std::size_t*>(output) =
                     option == FI_OPT_MAX_RMA_SIZE ? self.rma_limit : self.inject_limit;
                 *length = self.returned_length;
@@ -116,4 +117,39 @@ TEST_CASE("unavailable RMA size limits return zero", "[rma][endpoint]") {
     }
     REQUIRE(loom::rma::get_max_rma_size(ep) == 0);
     REQUIRE(loom::rma::get_inject_size(ep) == 0);
+}
+
+TEST_CASE("message inject bounds preserve native query failures", "[endpoint][inject]") {
+    limit_provider native;
+    auto original = native.endpoint();
+    auto ep = std::move(original);
+    REQUIRE(original.message_inject_size().error() == loom::errc::invalid_argument);
+    REQUIRE(ep.message_inject_size().value() == 48);
+    native.query_result = 0;
+    REQUIRE(ep.message_inject_size().value() == 24);
+    native.inject_limit = 0;
+    REQUIRE(ep.message_inject_size().value() == 0);
+    native.query_result = -FI_EIO;
+    REQUIRE(ep.message_inject_size().error() == loom::errc::io_error);
+    native.query_result = 0;
+    native.returned_length = 1;
+    REQUIRE(ep.message_inject_size().error() == loom::errc::io_error);
+}
+
+TEST_CASE("message inject queries handle unavailable operation tables", "[endpoint][inject]") {
+    limit_provider native;
+    auto ep = native.endpoint();
+    SECTION("unsupported option") {
+        native.query_result = GENERATE(-FI_ENOPROTOOPT, -FI_ENOSYS);
+    }
+    SECTION("absent operation table") {
+        native.handle.ops = nullptr;
+    }
+    SECTION("absent callback") {
+        native.endpoint_ops.getopt = nullptr;
+    }
+    SECTION("truncated operation table") {
+        native.endpoint_ops.size = offsetof(fi_ops_ep, getopt);
+    }
+    REQUIRE(ep.message_inject_size().value() == 48);
 }

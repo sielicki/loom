@@ -138,6 +138,9 @@ public:
 
     [[nodiscard]] auto get_type() const -> result<endpoint_type>;
 
+    /// Current untagged inject bound; unsupported size queries use the creation attributes.
+    [[nodiscard]] auto message_inject_size() const -> result<std::size_t>;
+
     [[nodiscard]] auto send(std::span<const std::byte> data, context_ptr<void> ctx = {})
         -> void_result;
 

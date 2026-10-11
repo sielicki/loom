@@ -58,11 +58,12 @@ struct endpoint_impl {
         : ep(ep_), type(type_), addr_format(fmt), max_msg_size(max_msg_size_),
           inject_size(inject_size_), capabilities(capabilities_) {}
 
-    [[nodiscard]] auto size_limit(int option, std::size_t fallback) const -> std::size_t {
+    [[nodiscard]] auto query_size_limit(int option, std::size_t fallback) const
+        -> result<std::size_t> {
         if (!ep) {
-            return 0;
+            return make_error_result<std::size_t>(errc::invalid_argument);
         }
-        if (!ep->ops || !ep->ops->getopt) {
+        if (!ep->ops || !FI_CHECK_OP(ep->ops, fi_ops_ep, getopt)) {
             return fallback;
         }
         std::size_t value{};
@@ -71,7 +72,17 @@ struct endpoint_impl {
         if (result == -FI_ENOPROTOOPT || result == -FI_ENOSYS) {
             return fallback;
         }
-        return result == 0 && length == sizeof(value) ? value : 0;
+        if (result != 0) {
+            return make_error_result_from_fi_errno<std::size_t>(-result);
+        }
+        if (length != sizeof(value)) {
+            return make_error_result<std::size_t>(errc::io_error);
+        }
+        return value;
+    }
+
+    [[nodiscard]] auto size_limit(int option, std::size_t fallback) const -> std::size_t {
+        return query_size_limit(option, fallback).value_or(0);
     }
 
     /// @brief Destructor that closes the libfabric endpoint.
@@ -168,6 +179,13 @@ auto endpoint::get_type() const -> result<endpoint_type> {
     }
 
     return impl_->type;
+}
+
+auto endpoint::message_inject_size() const -> result<std::size_t> {
+    if (!impl_) {
+        return make_error_result<std::size_t>(errc::invalid_argument);
+    }
+    return impl_->query_size_limit(FI_OPT_INJECT_MSG_SIZE, impl_->inject_size);
 }
 
 auto endpoint::send(std::span<const std::byte> data, context_ptr<void> ctx) -> void_result {

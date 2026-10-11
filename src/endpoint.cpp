@@ -101,6 +101,13 @@ auto endpoint::get_type() const -> result<endpoint_type> {
     return impl_->type;
 }
 
+auto endpoint::message_inject_size() const -> result<std::size_t> {
+    if (!impl_) {
+        return make_error_result<std::size_t>(errc::invalid_argument);
+    }
+    return impl_->query_size_limit(FI_OPT_INJECT_MSG_SIZE, impl_->inject_size);
+}
+
 auto endpoint::send(std::span<const std::byte> data, context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
