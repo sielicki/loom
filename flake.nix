@@ -121,10 +121,24 @@
               ./nix/pkgs/libfabric/sockets-receive-cleanup.patch
               ./nix/pkgs/libfabric/srx-probe-metadata.patch
               ./nix/pkgs/libfabric/discovery-copy-ownership.patch
+              ./nix/pkgs/libfabric/cuda-device-ordinal.patch
             ];
             doCheck = !isDarwin && pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
             checkPhase = ''
               runHook preCheck
+              cat > check-cuda-device.mk <<'EOF'
+              .RECIPEPREFIX := >
+              test-cuda-device:
+              >$(CC) $(CPPFLAGS) -g -O1 -D_GNU_SOURCE -DHAVE_CONFIG_H -I. -Iinclude \
+              >  -ftrivial-auto-var-init=pattern -ffunction-sections -fdata-sections \
+              >  -fsanitize=address,undefined -fno-omit-frame-pointer \
+              >  ${./nix/pkgs/libfabric/test-cuda-device.c} \
+              >  -Wl,--gc-sections -Lsrc/.libs -Wl,-rpath,$(CURDIR)/src/.libs -lfabric \
+              >  -o test-cuda-device
+              EOF
+              make -f Makefile -f check-cuda-device.mk test-cuda-device
+              ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+                timeout 30 ./test-cuda-device
               "$CC" -g -O1 -D_GNU_SOURCE -I. -Iinclude \
                 -fsanitize=address,undefined -fno-omit-frame-pointer \
                 ${./nix/pkgs/libfabric/test-name-server.c} \
