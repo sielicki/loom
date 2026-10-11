@@ -38,7 +38,7 @@ The patched Monarch backend is disabled by default. Enable it with
 filter. Capabilities and obligations are checked against returned typed
 attributes, without inferring behavior from names.
 
-The initial profile is CPU memory, IPv4 RDM, registered reads and writes,
+The default profile is CPU memory, IPv4 RDM, registered reads and writes,
 ordinary scalar keys, and context/context2 storage. It rejects endpoint-bound,
 raw-key, and other unsupported registration requirements. Metadata carries a
 schema version, numeric protocol identity, portable IPv4 address, remote
@@ -58,13 +58,15 @@ for retry; accepted submissions are never reposted. Conflicting local
 read/write ranges are serialized.
 
 Writes request delivery completion and then await the target's visibility
-acknowledgment through Monarch's actor transport. Metadata schema 2 binds
+acknowledgment through Monarch's actor transport. Metadata schema 3 binds
 that request to the native endpoint address, export ID, and a registration
 generation that is never reused by the worker. Released, stale, or mismatched
-exports fail the acknowledgment. The current host profile needs no device
-flush; it exercises the same request and failure path planned for GPU writes.
+exports fail the acknowledgment. Host memory needs no device flush and
+exercises the same request and failure path as GPU writes.
 A fault test verifies that delivered bytes cannot turn stale metadata, an
 unrelated control actor, or a target visibility failure into transfer success.
+It also injects a local-read visibility failure after native completion and
+checks that the caller receives an error before a later transfer succeeds.
 
 Successful reads permit local buffer
 access. Timeout or observer drop does not grant buffer reuse: accepted DMA
@@ -77,10 +79,42 @@ cannot keep a stopped actor's worker alive. Shutdown stops new submissions,
 drains accepted work, and closes the endpoint before releasing registrations.
 Failed close retains the native resource graph and leases. Draining can
 still block when a provider fails to retire work; bounded failure recovery
-remains open. GPU registration and visibility, multirail support, reusable
+remains open. GPU hardware validation, multirail support, reusable
 allocation-aware registration caches, and allocation-free operation are
 additional milestones. The exercised providers run on loopback; these tests
 make no claim about RDMA hardware or GPU correctness.
+
+## Experimental CUDA profile
+
+Set `MONARCH_RDMA_LOOM_CUDA=true` together with `MONARCH_RDMA_ALLOW_LOOM=true`
+to request direct CUDA transfers. The same provider and domain filters apply.
+Initialization requires `FI_HMEM`, supported registration modes, and successful
+disabling of provider CUDA API calls before endpoint enable. It also checks
+GPUDirect support and a usable visibility mechanism on every visible GPU.
+Select the intended devices with `CUDA_VISIBLE_DEVICES` when necessary.
+
+Registration reuses the CUDA policy from the NCCL and NIXL examples. It queries
+the allocation's actual device and owning context, checks Monarch's device
+identity when supplied, enables `SYNC_MEMOPS`, and requests a CUDA device-only
+MR. Managed, contextless, and non-GPUDirect allocations are rejected. Allocation
+keepalives and the loaded driver remain retained through native retirement.
+The caller must finish device producers before submitting a transfer.
+
+Read completions establish local GPU visibility before releasing their
+registration, including when the observer has disappeared. Write completion
+waits for the target worker to flush its exported allocation before returning
+an acknowledgment. The shared policy uses native all-device ordering when
+available; otherwise it pushes the owning CUDA context, performs the GPUDirect
+flush, and restores the previous context. It never synchronizes the whole
+device. A failed flush is an operation error.
+
+The pinned CUDA build compiles the real backend and runs injected CUDA policy
+checks plus the host acknowledgment workloads. GPU transfers, running-kernel
+visibility, and multiple device ordinals still require hardware validation;
+no passing GPU workload is claimed for Monarch. Endpoint-bound registrations,
+DMA-BUF, managed/VMM allocation support, and ROCm transfers remain unsupported
+by this example. The bridge rejects CUDA activation when compiled without the
+CUDA SDK; a complete ROCm consumer build has not been validated.
 
 ## Pinned build
 

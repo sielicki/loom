@@ -37,11 +37,15 @@ rustPlatform.buildRustPackage {
     name = if withLoom then "monarch-loom-source" else "monarch-consumer-source";
     inherit src;
     patches = [ ./writable-rdma-source.patch ./type-name-interning.patch ]
-      ++ lib.optionals withLoom [ ./loom-backend.patch ];
+      ++ lib.optionals withLoom [ ./loom-backend.patch ./cuda-policy.patch ];
     postPatch = lib.optionalString withLoom ''
       cp -R ${loomSource} loom
       cp ${./loom.rs} monarch_rdma/src/backend/loom.rs
       cp ${./loom_tests.rs} monarch_rdma/src/backend/loom_tests.rs
+      cp ${./cuda.rs} monarch_rdma/src/backend/loom_cuda.rs
+      mkdir -p rdmaxcel-sys/src/loom rdmaxcel-sys/src/hmem
+      cp ${./cuda.cpp} rdmaxcel-sys/src/loom/cuda.cpp
+      cp ${../hmem/cuda.hpp} rdmaxcel-sys/src/hmem/cuda.hpp
     '';
   };
 
@@ -78,6 +82,10 @@ rustPlatform.buildRustPackage {
     testBinary=$(jq -r 'select(.reason == "compiler-artifact" and .profile.test and .target.name == "monarch_rdma") | .executable' build.json)
     test -n "$testBinary"
     cp "$testBinary" monarch-rdma-tests
+  '' + lib.optionalString withLoom ''
+    $CXX -std=c++26 -I"$CUDA_HOME/include" -I${../hmem} \
+      ${../hmem/test-cuda.cpp} -ldl -o cuda-policy-tests
+  '' + ''
     runHook postBuild
   '';
 
@@ -95,11 +103,12 @@ rustPlatform.buildRustPackage {
       timeout 60 ./monarch-rdma-tests --exact "$testName"
     done
   '' + lib.optionalString withLoom ''
+    ./cuda-policy-tests
     for test in sockets_actor_round_trip rxm_actor_round_trip \
       sockets_process_round_trip rxm_process_round_trip \
       dropped_observer_retains_dma timeout_retains_dma partial_failure_retains_accepted_dma \
       pending_operations_respect_completion_capacity \
-      writes_require_target_visibility_acknowledgment; do
+      transfers_require_visibility; do
       testName="backend::loom::tests::$test"
       grep -Fx "$testName: test" tests.list
       timeout 60 ./monarch-rdma-tests --exact "$testName"

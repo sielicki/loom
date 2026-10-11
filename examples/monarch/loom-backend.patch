@@ -65,16 +65,23 @@
  }
 --- a/monarch_rdma/src/config.rs
 +++ b/monarch_rdma/src/config.rs
-@@ -16,6 +16,27 @@
+@@ -16,6 +16,34 @@
  use hyperactor_config::attrs::declare_attrs;
 
  declare_attrs! {
-+    /// Enable the host-memory Loom backend. GPU registrations are rejected.
++    /// Enable the Loom backend. CUDA memory requires RDMA_LOOM_CUDA.
 +    @meta(CONFIG = ConfigAttr::new(
 +        Some("MONARCH_RDMA_ALLOW_LOOM".to_string()),
 +        Some("rdma_allow_loom".to_string()),
 +    ))
 +    pub attr RDMA_ALLOW_LOOM: bool = false;
++
++    /// Enable the experimental direct CUDA transfer profile.
++    @meta(CONFIG = ConfigAttr::new(
++        Some("MONARCH_RDMA_LOOM_CUDA".to_string()),
++        Some("rdma_loom_cuda".to_string()),
++    ))
++    pub attr RDMA_LOOM_CUDA: bool = false;
 +
 +    /// Provider discovery filter; capability checks use reported attributes.
 +    @meta(CONFIG = ConfigAttr::new(

@@ -1,0 +1,24 @@
+--- a/rdmaxcel-sys/build.rs
++++ b/rdmaxcel-sys/build.rs
+@@ -120,6 +120,21 @@
+     let compute_include_path = format!("{}/include", compute_home);
+     println!("cargo:rustc-env=CUDA_INCLUDE_PATH={}", compute_include_path);
+
++    // Loom's policy shares the CUDA checks used by its other consumers.
++    // Keep its C++26 compilation separate from the upstream C++14 sources.
++    println!("cargo:rerun-if-changed=src/loom/cuda.cpp");
++    println!("cargo:rerun-if-changed=src/hmem/cuda.hpp");
++    let mut loom_cuda = cc::Build::new();
++    loom_cuda
++        .cpp(true)
++        .std("c++26")
++        .file(src_dir.join("loom/cuda.cpp"));
++    if !is_rocm {
++        loom_cuda.define("LOOM_MONARCH_CUDA", None);
++        loom_cuda.include(&compute_include_path);
++    }
++    loom_cuda.compile("loom_cuda");
++
+     // Discover source files (dynamically handles hipified vs original names)
+     let header_path = find_header(&source_dir, is_rocm);
+     let c_sources = find_sources(&source_dir, "c", is_rocm);

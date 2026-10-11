@@ -169,7 +169,7 @@ async fn rxm_actor_round_trip() -> Result<()> {
 }
 
 #[timed_test::async_timed_test(timeout_secs = 45)]
-async fn writes_require_target_visibility_acknowledgment() -> Result<()> {
+async fn transfers_require_visibility() -> Result<()> {
     let config = hyperactor_config::global::lock();
     let _enabled = config.override_key(crate::config::RDMA_ALLOW_LOOM, true);
     let _provider = config.override_key(crate::config::RDMA_LOOM_PROVIDER, "sockets".into());
@@ -184,6 +184,16 @@ async fn writes_require_target_visibility_acknowledgment() -> Result<()> {
     unsafe {
         source.local.write_at(0, &pattern)?;
     }
+
+    // An ordinary host backend cannot silently accept remote GPU metadata.
+    let mut device_remote = target.remote.clone();
+    device_remote.backends.loom.as_mut().unwrap().memory = MemorySpace::Cuda(7);
+    let accepted = source.inspect().await?.0;
+    assert!(device_remote
+        .write_from_local(&source.client, source.local.clone(), 10)
+        .await
+        .is_err());
+    assert_eq!(source.inspect().await?, (accepted, 0));
 
     let mut stale = target.remote.clone();
     stale.backends.loom.as_mut().unwrap().visibility.generation += 1;
@@ -236,6 +246,42 @@ async fn writes_require_target_visibility_acknowledgment() -> Result<()> {
     target
         .remote
         .write_from_local(&source.client, source.local.clone(), 10)
+        .await?;
+
+    // Reads must propagate a visibility failure at the initiator after native
+    // completion, before reporting success or releasing the retained lease.
+    let (done, reply) = oneshot::channel();
+    source
+        .backend
+        .commands
+        .send(Command::FailFlush(true, done))
+        .await?;
+    reply.await??;
+    unsafe {
+        source.local.write_at(0, &[0; 128])?;
+    }
+    let accepted = source.inspect().await?.0;
+    assert!(target
+        .remote
+        .read_into_local(&source.client, source.local.clone(), 10)
+        .await
+        .is_err());
+    assert_eq!(source.inspect().await?, (accepted + 1, 0));
+    let mut received = [0; 128];
+    unsafe {
+        source.local.read_at(0, &mut received)?;
+    }
+    assert_eq!(received, pattern);
+    let (done, reply) = oneshot::channel();
+    source
+        .backend
+        .commands
+        .send(Command::FailFlush(false, done))
+        .await?;
+    reply.await??;
+    target
+        .remote
+        .read_into_local(&source.client, source.local.clone(), 10)
         .await?;
 
     source.shutdown().await?;

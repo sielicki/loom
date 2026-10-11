@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 
-//! Opt-in host-memory transport. Native resources never leave the worker.
+//! Opt-in host and CUDA transport. Native resources never leave the worker.
 //!
 //! A timeout or dropped observer does not revoke accepted DMA. The worker
 //! retains its allocation and registration until completion or successful
@@ -8,6 +8,7 @@
 //! Releasing an exported buffer requires remote users to have quiesced first.
 
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
@@ -18,10 +19,10 @@ use hyperactor::{
     RefClient,
 };
 use loom_fabric::{
-    AddressFormat, AddressVector, Capabilities, CompletionQueue, CqBindFlags, Domain, Endpoint,
-    EndpointType, Fabric, FabricAttributes, FabricHints, MemoryRegion, Modes, MrAccess, MrMode,
-    OperationContext, ProgressMode, RemoteMemory, RmaCompletion, RmaOptions, RmaTarget,
-    ThreadingMode, query_fabrics,
+    query_fabrics, AddressFormat, AddressVector, Capabilities, CompletionQueue, CqBindFlags,
+    Domain, Endpoint, EndpointType, Fabric, FabricAttributes, FabricHints, HmemAllocationKind,
+    HmemDevice, MemoryRegion, MemoryRegistration, Modes, MrAccess, MrMode, OperationContext,
+    ProgressMode, RemoteMemory, RmaCompletion, RmaOptions, RmaTarget, ThreadingMode,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
@@ -32,12 +33,15 @@ use crate::device_selection::MemoryLocation;
 use crate::local_memory::KeepaliveLocalMemory;
 use crate::{RdmaOp, RdmaOpType, RdmaTransportLevel};
 
+#[path = "loom_cuda.rs"]
+mod cuda;
+
 const QUEUE_LIMIT: usize = 64;
 const OP_LIMIT: usize = 64;
 const RESOURCE_LIMIT: usize = 1024;
 const PROGRESS_BUDGET: usize = 64;
 const IN_FLIGHT_LIMIT: usize = 256;
-const SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
 
 /// Portable IPv4 endpoint identity, without padding or process-local handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Named)]
@@ -76,7 +80,7 @@ impl Ipv4Address {
     }
 }
 
-/// Versioned host registration metadata. Keys retain all 64 bits.
+/// Versioned registration metadata. Keys retain all 64 bits.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoomRemoteContext {
     schema: u32,
@@ -86,7 +90,14 @@ pub struct LoomRemoteContext {
     addr: u64,
     key: u64,
     length: u64,
+    memory: MemorySpace,
     visibility: RemoteFlush,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum MemorySpace {
+    Host,
+    Cuda(i32),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -213,6 +224,7 @@ impl LoomBackend {
     async fn start(
         provider: String,
         domain: String,
+        enable_cuda: bool,
     ) -> Result<(mpsc::Sender<Command>, LoomControl)> {
         let (commands, incoming) = mpsc::channel(QUEUE_LIMIT);
         let (ready, started) = oneshot::channel();
@@ -220,7 +232,7 @@ impl LoomBackend {
         let (finished, stopped) = oneshot::channel();
         std::thread::Builder::new()
             .name("monarch-loom".into())
-            .spawn(move || match Worker::new(provider, domain) {
+            .spawn(move || match Worker::new(provider, domain, enable_cuda) {
                 Ok(mut worker) => {
                     if ready.send(Ok(())).is_ok() {
                         let result = worker.run(incoming, stopping);
@@ -266,6 +278,7 @@ impl RdmaBackend for LoomBackend {
         let (commands, lifetime) = Self::start(
             hyperactor_config::global::get_cloned(crate::config::RDMA_LOOM_PROVIDER),
             hyperactor_config::global::get_cloned(crate::config::RDMA_LOOM_DOMAIN),
+            hyperactor_config::global::get(crate::config::RDMA_LOOM_CUDA),
         )
         .await?;
         let control = cx.spawn(lifetime).bind();
@@ -344,12 +357,15 @@ impl RdmaBackend for LoomBackend {
 // Drop order is intentional: deregister before releasing the allocation.
 struct Registration {
     region: MemoryRegion,
+    cuda: Option<cuda::Allocation>,
     local: KeepaliveLocalMemory,
 }
 
 impl Registration {
     fn flush(&self) -> Result<()> {
-        // Delivery completion suffices for the current host-only profile.
+        if let Some(memory) = &self.cuda {
+            memory.flush()?;
+        }
         Ok(())
     }
 }
@@ -394,6 +410,7 @@ struct Worker {
     queue: CompletionQueue,
     addresses: AddressVector,
     domain: Domain,
+    cuda: Option<Rc<cuda::Driver>>,
     attributes: FabricAttributes,
     address: Ipv4Address,
     exports: HashMap<usize, Export>,
@@ -411,14 +428,24 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(provider: String, domain_name: String) -> Result<Self> {
-        let requirements = Capabilities::RMA
+    fn new(provider: String, domain_name: String, enable_cuda: bool) -> Result<Self> {
+        let cuda = if enable_cuda {
+            Some(cuda::Driver::new()?)
+        } else {
+            None
+        };
+        let mut requirements = Capabilities::RMA
             | Capabilities::READ
             | Capabilities::WRITE
             | Capabilities::REMOTE_READ
             | Capabilities::REMOTE_WRITE;
         let modes = Modes::CONTEXT | Modes::CONTEXT2;
-        let mr_modes = MrMode::LOCAL | MrMode::VIRT_ADDR | MrMode::ALLOCATED | MrMode::PROVIDER_KEY;
+        let mut mr_modes =
+            MrMode::LOCAL | MrMode::VIRT_ADDR | MrMode::ALLOCATED | MrMode::PROVIDER_KEY;
+        if enable_cuda {
+            requirements |= Capabilities::HMEM;
+            mr_modes |= MrMode::HMEM;
+        }
         let hints = FabricHints {
             provider_name: Some(provider),
             domain_name: Some(domain_name),
@@ -442,7 +469,7 @@ impl Worker {
                         && attributes.capabilities.contains(requirements)
                         && modes.contains(attributes.required_modes)
                         && mr_modes.contains(attributes.memory_region_mode),
-                    "configuration does not satisfy the Loom host profile"
+                    "configuration does not satisfy the Loom transfer profile"
                 );
                 let fabric = Fabric::new(&info)?;
                 let domain = Domain::new(&fabric, &info)?;
@@ -451,6 +478,9 @@ impl Worker {
                 let mut endpoint = Endpoint::new(&domain, &info)?;
                 endpoint.bind_cq(&queue, CqBindFlags::TRANSMIT | CqBindFlags::RECV)?;
                 endpoint.bind_av(&addresses)?;
+                if enable_cuda {
+                    endpoint.set_cuda_api_permitted(false)?;
+                }
                 endpoint.enable()?;
                 let address = Ipv4Address::from_native(&endpoint.name()?)?;
                 Ok(Self {
@@ -458,6 +488,7 @@ impl Worker {
                     queue,
                     addresses,
                     domain,
+                    cuda: cuda.clone(),
                     attributes,
                     address,
                     exports: HashMap::new(),
@@ -479,31 +510,54 @@ impl Worker {
                 Err(error) => failures.push(error),
             }
         }
-        bail!("no compatible Loom host configuration: {failures:?}")
+        bail!("no compatible Loom transfer configuration: {failures:?}")
     }
 
     fn register(&self, local: KeepaliveLocalMemory) -> Result<Registration> {
         ensure!(
-            matches!(local.location(), MemoryLocation::Cpu(_)),
-            "Loom host profile requires CPU memory"
-        );
-        ensure!(
             local.size() != 0
                 && local.size() <= isize::MAX as usize
                 && local.addr().checked_add(local.size()).is_some(),
-            "invalid host buffer range"
+            "invalid buffer range"
         );
-        // SAFETY: the keepalive pins this CPU allocation; Registration drops its
-        // MR first. The RDMA caller supplies the buffer-access exclusion.
+        let access =
+            MrAccess::READ | MrAccess::WRITE | MrAccess::REMOTE_READ | MrAccess::REMOTE_WRITE;
+        let cuda = match local.location() {
+            MemoryLocation::Cpu(_) => None,
+            MemoryLocation::Gpu(device) => {
+                let driver = self
+                    .cuda
+                    .as_ref()
+                    .context("Loom CUDA profile is disabled")?;
+                // SAFETY: the keepalive retains the allocation and its context
+                // until after this registration's CUDA token is dropped.
+                Some(unsafe { driver.inspect(local.addr(), device) }?)
+            }
+        };
+        let attributes = match &cuda {
+            Some(memory) => MemoryRegistration {
+                access,
+                device: HmemDevice::Cuda(memory.device()),
+                allocation: HmemAllocationKind::Device,
+            },
+            None => MemoryRegistration::new(access),
+        };
+        // SAFETY: the keepalive pins the allocation, whose device attributes
+        // were checked above. Registration drops its MR before the allocation.
+        // The RDMA caller supplies producer synchronization and access exclusion.
         let region = unsafe {
-            MemoryRegion::register(
+            MemoryRegion::register_with_options(
                 &self.domain,
                 local.addr() as *mut u8,
                 local.size(),
-                MrAccess::READ | MrAccess::WRITE | MrAccess::REMOTE_READ | MrAccess::REMOTE_WRITE,
+                attributes,
             )
         }?;
-        Ok(Registration { region, local })
+        Ok(Registration {
+            region,
+            cuda,
+            local,
+        })
     }
 
     fn export(
@@ -535,6 +589,12 @@ impl Worker {
             addr: remote.addr,
             key: remote.key,
             length: remote.length as u64,
+            memory: registration
+                .cuda
+                .as_ref()
+                .map_or(MemorySpace::Host, |memory| {
+                    MemorySpace::Cuda(memory.device())
+                }),
             visibility: RemoteFlush {
                 control,
                 address: self.address,
@@ -560,9 +620,13 @@ impl Worker {
             export.generation == generation,
             "stale Loom registration generation"
         );
+        self.flush_registration(&export.registration)
+    }
+
+    fn flush_registration(&self, registration: &Registration) -> Result<()> {
         #[cfg(test)]
         ensure!(!self.fail_flush, "injected Loom visibility failure");
-        export.registration.flush()
+        registration.flush()
     }
 
     fn prepare(&mut self, op: RdmaOp, batch: u64) -> Result<Transfer> {
@@ -576,6 +640,12 @@ impl Worker {
                 && remote.protocol_version == self.attributes.protocol_version,
             "incompatible Loom protocol metadata"
         );
+        if let MemorySpace::Cuda(device) = remote.memory {
+            ensure!(
+                device >= 0 && self.cuda.is_some(),
+                "remote CUDA memory requires the Loom CUDA profile"
+            );
+        }
         ensure!(
             remote.length == op.remote.size as u64,
             "inconsistent remote buffer size"
@@ -698,10 +768,18 @@ impl Worker {
                 break;
             };
             if let Some(transfer) = self.pending.remove(&event.context) {
+                let completed = event.into_result().map(|_| ()).map_err(anyhow::Error::from);
+                // Flush even after observer loss or a failed read completion:
+                // accepted DMA may have modified part of the device allocation.
+                let visible = if transfer.kind == RdmaOpType::ReadIntoLocal {
+                    self.flush_registration(&transfer.registration)
+                } else {
+                    Ok(())
+                };
                 if let Some(batch) = self.batches.iter_mut().find(|b| b.id == transfer.batch) {
                     batch.active -= 1;
-                    if let Err(error) = event.into_result() {
-                        batch.fail(error.into());
+                    if let Err(error) = completed.and(visible) {
+                        batch.fail(error);
                     }
                 }
             } else {
