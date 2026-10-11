@@ -238,8 +238,20 @@ public:
               typename CompletionToken = ::asio::default_completion_token_t<executor_type>>
     auto async_send(const ConstBufferSequence& buffers,
                     CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
+        return async_send_to(
+            buffers, fabric_addrs::unspecified, std::forward<CompletionToken>(token));
+    }
+
+    /// Send to an explicit peer using the registrations carried by the buffers.
+    /// Buffers and registrations remain borrowed through completion.
+    template <typename ConstBufferSequence,
+              typename CompletionToken = ::asio::default_completion_token_t<executor_type>>
+    auto
+    async_send_to(const ConstBufferSequence& buffers,
+                  fabric_addr peer,
+                  CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, buffers](auto handler) {
+            [this, buffers, peer](auto handler) {
                 auto state = operation_state();
                 auto ctx = make_buffered_asio_context<false>(
                     std::move(handler), executor_, &state->endpoint, buffers);
@@ -250,6 +262,7 @@ public:
                 if (result) {
                     const msg::send_message<> message{.iov = ctx->buffers().iov,
                                                       .desc = ctx->buffers().descriptors,
+                                                      .dest_addr = peer,
                                                       .context = ctx->as_fi_context()};
                     result = msg::sendmsg<operation_defaults::inherit_without_more>(
                         state->endpoint, message, msg::send_flag::completion);
@@ -275,8 +288,22 @@ public:
     auto
     async_receive(const MutableBufferSequence& buffers,
                   CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
+        return async_receive_from(
+            buffers, fabric_addrs::unspecified, std::forward<CompletionToken>(token));
+    }
+
+    /// Receive from a specific peer using the registrations carried by the buffers.
+    /// A specific source requires directed-receive support for this message type.
+    /// Use fabric_addrs::unspecified to accept any source.
+    /// Buffers and registrations remain borrowed through completion.
+    template <typename MutableBufferSequence,
+              typename CompletionToken = ::asio::default_completion_token_t<executor_type>>
+    auto async_receive_from(
+        const MutableBufferSequence& buffers,
+        fabric_addr peer,
+        CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, buffers](auto handler) {
+            [this, buffers, peer](auto handler) {
                 auto state = operation_state();
                 auto ctx = make_buffered_asio_context<true>(
                     std::move(handler), executor_, &state->endpoint, buffers);
@@ -286,6 +313,7 @@ public:
                 if (result) {
                     const msg::recv_message<> message{.iov = ctx->buffers().iov,
                                                       .desc = ctx->buffers().descriptors,
+                                                      .src_addr = peer,
                                                       .context = ctx->as_fi_context()};
                     result = msg::recvmsg<operation_defaults::inherit_without_more>(
                         state->endpoint, message, msg::recv_flag::completion);
@@ -311,8 +339,21 @@ public:
         const ConstBufferSequence& buffers,
         std::uint64_t tag,
         CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
+        return async_tagged_send_to(
+            buffers, fabric_addrs::unspecified, tag, std::forward<CompletionToken>(token));
+    }
+
+    /// Send to an explicit peer using the registrations carried by the buffers.
+    /// Buffers and registrations remain borrowed through completion.
+    template <typename ConstBufferSequence,
+              typename CompletionToken = ::asio::default_completion_token_t<executor_type>>
+    auto async_tagged_send_to(
+        const ConstBufferSequence& buffers,
+        fabric_addr peer,
+        std::uint64_t tag,
+        CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, buffers, tag](auto handler) {
+            [this, buffers, peer, tag](auto handler) {
                 auto state = operation_state();
                 auto ctx = make_buffered_asio_context<false>(
                     std::move(handler), executor_, &state->endpoint, buffers);
@@ -323,6 +364,7 @@ public:
                 if (result) {
                     const msg::tagged_send_message<> message{.iov = ctx->buffers().iov,
                                                              .desc = ctx->buffers().descriptors,
+                                                             .dest_addr = peer,
                                                              .tag = tag,
                                                              .context = ctx->as_fi_context()};
                     result = msg::tagged_sendmsg<operation_defaults::inherit_without_more>(
@@ -351,8 +393,24 @@ public:
         std::uint64_t tag,
         std::uint64_t ignore,
         CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
+        return async_tagged_receive_from(
+            buffers, fabric_addrs::unspecified, tag, ignore, std::forward<CompletionToken>(token));
+    }
+
+    /// Receive from a specific peer using the registrations carried by the buffers.
+    /// A specific source requires directed-receive support for this message type.
+    /// Use fabric_addrs::unspecified to accept any source.
+    /// Buffers and registrations remain borrowed through completion.
+    template <typename MutableBufferSequence,
+              typename CompletionToken = ::asio::default_completion_token_t<executor_type>>
+    auto async_tagged_receive_from(
+        const MutableBufferSequence& buffers,
+        fabric_addr peer,
+        std::uint64_t tag,
+        std::uint64_t ignore,
+        CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, buffers, tag, ignore](auto handler) {
+            [this, buffers, peer, tag, ignore](auto handler) {
                 auto state = operation_state();
                 auto ctx = make_buffered_asio_context<true>(
                     std::move(handler), executor_, &state->endpoint, buffers);
@@ -362,6 +420,7 @@ public:
                 if (result) {
                     const msg::tagged_recv_message<> message{.iov = ctx->buffers().iov,
                                                              .desc = ctx->buffers().descriptors,
+                                                             .src_addr = peer,
                                                              .tag = tag,
                                                              .ignore = ignore,
                                                              .context = ctx->as_fi_context()};

@@ -3,11 +3,15 @@
 #include <loom/detail/impl/completion_queue_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 #include <loom/detail/impl/memory_impl.hpp>
+#include <loom/loom.hpp>
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <span>
 #include <string>
+#include <thread>
 
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/bind_executor.hpp>
@@ -22,6 +26,7 @@ struct vector_provider {
     std::size_t remote_length{};
     bool throw_on_submit{};
     fi_addr_t peer{};
+    fi_addr_t expected_message_peer{FI_ADDR_UNSPEC};
     std::uint64_t remote_address{};
     std::uint64_t remote_key{};
     std::vector<void*> descriptors;
@@ -49,7 +54,7 @@ struct vector_provider {
                                 loom::completion_direction direction) -> ssize_t {
         auto& self = *static_cast<vector_provider*>(ep->fid.context);
         self.submission_flags = flags;
-        REQUIRE(msg->addr == FI_ADDR_UNSPEC);
+        REQUIRE(msg->addr == self.expected_message_peer);
         if (msg->desc)
             self.descriptors.assign(msg->desc, msg->desc + msg->iov_count);
         return capture(ep, msg->msg_iov, msg->iov_count, msg->context, direction);
@@ -415,13 +420,15 @@ TEST_CASE("Asio operations register and complete without later submissions",
     REQUIRE(completions == 1);
 }
 
-TEST_CASE("Asio messages preserve registered buffer descriptors", "[asio][endpoint][buffer]") {
+TEST_CASE("Asio messages preserve registered peers and descriptors", "[asio][endpoint][buffer]") {
     const auto receive = GENERATE(false, true);
     const auto tagged = GENERATE(false, true);
     const auto helper = GENERATE(false, true);
     const auto single = GENERATE(false, true);
     const auto first_registered = GENERATE(false, true);
     vector_provider native;
+    native.expected_message_peer = GENERATE(fi_addr_t{19}, FI_ADDR_UNSPEC);
+    const loom::fabric_addr peer{native.expected_message_peer};
     ::asio::io_context ioc;
     loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
     std::array<std::byte, 8> first{}, second{};
@@ -456,25 +463,27 @@ TEST_CASE("Asio messages preserve registered buffer descriptors", "[asio][endpoi
                 if (helper) {
                     if (tagged)
                         loom::asio::initiate_fabric_tagged_recv{ep.native_handle()}(
-                            handler, buffers, 42, 0x80);
+                            handler, buffers, 42, 0x80, peer);
                     else
-                        loom::asio::initiate_fabric_recv{ep.native_handle()}(handler, buffers);
+                        loom::asio::initiate_fabric_recv{ep.native_handle()}(
+                            handler, buffers, peer);
                 } else if (tagged)
-                    ep.async_tagged_receive(buffers, 42, 0x80, handler);
+                    ep.async_tagged_receive_from(buffers, peer, 42, 0x80, handler);
                 else
-                    ep.async_receive(buffers, handler);
+                    ep.async_receive_from(buffers, peer, handler);
                 return;
             }
         }
         if (helper) {
             if (tagged)
-                loom::asio::initiate_fabric_tagged_send{ep.native_handle()}(handler, buffers, 42);
+                loom::asio::initiate_fabric_tagged_send{ep.native_handle()}(
+                    handler, buffers, 42, peer);
             else
-                loom::asio::initiate_fabric_send{ep.native_handle()}(handler, buffers);
+                loom::asio::initiate_fabric_send{ep.native_handle()}(handler, buffers, peer);
         } else if (tagged)
-            ep.async_tagged_send(buffers, 42, handler);
+            ep.async_tagged_send_to(buffers, peer, 42, handler);
         else
-            ep.async_send(buffers, handler);
+            ep.async_send_to(buffers, peer, handler);
     };
     if (receive) {
         if (single)
@@ -586,6 +595,93 @@ TEST_CASE("Asio receives require completion lengths", "[asio][endpoint]") {
     REQUIRE(calls == 1);
     REQUIRE_FALSE(result);
     REQUIRE(bytes == storage.size());
+}
+
+TEST_CASE("Asio messages transfer registered buffers to RDM peers", "[asio][endpoint][loopback]") {
+    using namespace loom;
+    const auto tagged = GENERATE(false, true);
+    const auto source_filter = GENERATE(false, true);
+    fabric_hints hints{};
+    hints.provider_name = "sockets";
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg | capability::tagged | capability::directed_recv;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Sockets provider unavailable");
+    auto fab = fabric::create(*info).value();
+    auto dom = domain::create(fab, *info).value();
+    auto cq = completion_queue::create(dom).value();
+    auto av = address_vector::create(dom).value();
+    std::array<endpoint, 2> endpoints;
+    std::array<fabric_addr, 2> peers;
+    for (std::size_t i = 0; i < endpoints.size(); ++i) {
+        auto ep = endpoint::create(dom, *info).value();
+        REQUIRE(ep.bind_cq(cq, cq_bind::transmit | cq_bind::recv | cq_bind::selective_completion));
+        REQUIRE(ep.bind_av(av));
+        REQUIRE(ep.enable());
+        peers[i] = fabric_addr{av.insert(ep.get_local_address().value()).value().value};
+        endpoints[i] = std::move(ep);
+    }
+    ::asio::io_context ioc;
+    loom::asio::endpoint sender{ioc.get_executor(), std::move(endpoints[0])};
+    loom::asio::endpoint receiver{ioc.get_executor(), std::move(endpoints[1])};
+    std::array<std::byte, 7> outgoing;
+    outgoing.fill(std::byte{0x5a});
+    std::array<std::byte, 16> incoming{};
+    const std::array send_buffers{::asio::buffer(outgoing.data(), 3),
+                                  ::asio::buffer(outgoing.data() + 3, 4)};
+    const std::array recv_buffers{::asio::buffer(incoming.data(), 4),
+                                  ::asio::buffer(incoming.data() + 4, 12)};
+    auto send_mrs =
+        loom::asio::register_buffers(ioc, dom, send_buffers, mr_access_flags::send).value();
+    auto recv_mrs =
+        loom::asio::register_buffers(ioc, dom, recv_buffers, mr_access_flags::recv).value();
+    const std::array sends{send_mrs[0], send_mrs[1]};
+    const std::array recvs{recv_mrs[0], recv_mrs[1]};
+    std::array<int, 2> calls{};
+    std::array<std::error_code, 2> errors{};
+    std::array<std::size_t, 2> sizes{};
+    const auto handler = [&](std::size_t i) {
+        return [&, i](std::error_code error, std::size_t bytes) {
+            ++calls[i];
+            errors[i] = error;
+            sizes[i] = bytes;
+        };
+    };
+    const auto source = source_filter ? peers[0] : fabric_addrs::unspecified;
+    if (tagged) {
+        receiver.async_tagged_receive_from(recvs, source, 42, 0, handler(1));
+        sender.async_tagged_send_to(sends, peers[1], 42, handler(0));
+    } else {
+        receiver.async_receive_from(recvs, source, handler(1));
+        sender.async_send_to(sends, peers[1], handler(0));
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    bool unhandled{};
+    while ((calls[0] == 0 || calls[1] == 0) && std::chrono::steady_clock::now() < deadline) {
+        while (auto event = cq.poll()) {
+            if (!cq.dispatch(*event)) {
+                unhandled = true;
+                break;
+            }
+        }
+        ioc.poll();
+        if (unhandled)
+            break;
+        std::this_thread::yield();
+    }
+    if (calls[0] == 0 || calls[1] == 0 || unhandled) {
+        REQUIRE(sender.native_handle()->close());
+        REQUIRE(receiver.native_handle()->close());
+        FAIL("Asio RDM message did not complete");
+    }
+    REQUIRE(calls == std::array{1, 1});
+    REQUIRE_FALSE(errors[0]);
+    REQUIRE_FALSE(errors[1]);
+    REQUIRE(sizes == std::array{outgoing.size(), outgoing.size()});
+    REQUIRE(std::ranges::equal(outgoing, std::span{incoming}.first(outgoing.size())));
+    REQUIRE(std::ranges::all_of(std::span{incoming}.subspan(outgoing.size()),
+                                [](std::byte value) { return value == std::byte{}; }));
 }
 
 TEST_CASE("Asio receives reject multi-receive defaults", "[asio][endpoint]") {

@@ -934,6 +934,14 @@ An empty descriptor is valid only when the selected memory-registration mode
 allows it. Allocation failures during message preparation report
 `errc::no_memory` through the receiver.
 
+Asio provides `async_send_to(buffers, peer, token)` and
+`async_receive_from(buffers, source, token)`, plus `async_tagged_send_to` and
+`async_tagged_receive_from` with the peer before the tag arguments. These
+preserve the per-buffer descriptors in registered buffer sequences. The
+`initiate_fabric_*` messaging helpers accept an optional peer after their
+existing arguments. The same registration lifetime and source-filter
+requirements apply.
+
 #### RMA Operations with Senders
 
 Use `read_from` and `write_to` for registered buffers and explicit RDM

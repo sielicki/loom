@@ -217,9 +217,12 @@ struct initiate_fabric_send {
      * @tparam ConstBufferSequence The buffer sequence type.
      * @param handler The completion handler.
      * @param buffers The buffers to send.
+     * @param peer Destination peer; unspecified for connected endpoints.
      */
     template <typename Handler, typename ConstBufferSequence>
-    void operator()(Handler&& handler, const ConstBufferSequence& buffers) const {
+    void operator()(Handler&& handler,
+                    const ConstBufferSequence& buffers,
+                    fabric_addr peer = fabric_addrs::unspecified) const {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<false>(
             std::forward<Handler>(handler), executor, ep_, buffers);
@@ -230,6 +233,7 @@ struct initiate_fabric_send {
         if (result) {
             const msg::send_message<> message{.iov = ctx->buffers().iov,
                                               .desc = ctx->buffers().descriptors,
+                                              .dest_addr = peer,
                                               .context = ctx->as_fi_context()};
             result = msg::sendmsg<operation_defaults::inherit_without_more>(
                 *ep_, message, msg::send_flag::completion);
@@ -252,9 +256,12 @@ struct initiate_fabric_recv {
      * @tparam MutableBufferSequence The buffer sequence type.
      * @param handler The completion handler.
      * @param buffers The buffers to receive into.
+     * @param peer Source filter; a specific peer requires directed-receive support.
      */
     template <typename Handler, typename MutableBufferSequence>
-    void operator()(Handler&& handler, const MutableBufferSequence& buffers) const {
+    void operator()(Handler&& handler,
+                    const MutableBufferSequence& buffers,
+                    fabric_addr peer = fabric_addrs::unspecified) const {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<true>(
             std::forward<Handler>(handler), executor, ep_, buffers);
@@ -264,6 +271,7 @@ struct initiate_fabric_recv {
         if (result) {
             const msg::recv_message<> message{.iov = ctx->buffers().iov,
                                               .desc = ctx->buffers().descriptors,
+                                              .src_addr = peer,
                                               .context = ctx->as_fi_context()};
             result = msg::recvmsg<operation_defaults::inherit_without_more>(
                 *ep_, message, msg::recv_flag::completion);
@@ -287,10 +295,13 @@ struct initiate_fabric_tagged_send {
      * @param handler The completion handler.
      * @param buffers The buffers to send.
      * @param tag The message tag.
+     * @param peer Destination peer; unspecified for connected endpoints.
      */
     template <typename Handler, typename ConstBufferSequence>
-    void
-    operator()(Handler&& handler, const ConstBufferSequence& buffers, std::uint64_t tag) const {
+    void operator()(Handler&& handler,
+                    const ConstBufferSequence& buffers,
+                    std::uint64_t tag,
+                    fabric_addr peer = fabric_addrs::unspecified) const {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<false>(
             std::forward<Handler>(handler), executor, ep_, buffers);
@@ -301,6 +312,7 @@ struct initiate_fabric_tagged_send {
         if (result) {
             const msg::tagged_send_message<> message{.iov = ctx->buffers().iov,
                                                      .desc = ctx->buffers().descriptors,
+                                                     .dest_addr = peer,
                                                      .tag = tag,
                                                      .context = ctx->as_fi_context()};
             result = msg::tagged_sendmsg<operation_defaults::inherit_without_more>(
@@ -326,12 +338,14 @@ struct initiate_fabric_tagged_recv {
      * @param buffers The buffers to receive into.
      * @param tag The expected message tag.
      * @param ignore Bits to ignore in tag matching.
+     * @param peer Source filter; requires directed-receive support for tagged messages.
      */
     template <typename Handler, typename MutableBufferSequence>
     void operator()(Handler&& handler,
                     const MutableBufferSequence& buffers,
                     std::uint64_t tag,
-                    std::uint64_t ignore) const {
+                    std::uint64_t ignore,
+                    fabric_addr peer = fabric_addrs::unspecified) const {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<true>(
             std::forward<Handler>(handler), executor, ep_, buffers);
@@ -341,6 +355,7 @@ struct initiate_fabric_tagged_recv {
         if (result) {
             const msg::tagged_recv_message<> message{.iov = ctx->buffers().iov,
                                                      .desc = ctx->buffers().descriptors,
+                                                     .src_addr = peer,
                                                      .tag = tag,
                                                      .ignore = ignore,
                                                      .context = ctx->as_fi_context()};

@@ -16,10 +16,15 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
-TEST_CASE("deferred operations retain their buffer descriptors", "[asio][endpoint]") {
+TEST_CASE("deferred operations retain their buffers and peers", "[asio][endpoint]") {
+    const auto explicit_peer = GENERATE(false, true);
     ::asio::io_context ioc;
-    std::size_t submitted{};
+    struct submission {
+        std::size_t bytes{};
+        fi_addr_t peer{};
+    } submitted;
     fi_ops ops{.size = sizeof(fi_ops),
                .close = [](fid*) { return 0; },
                .bind = [](fid*, fid*, std::uint64_t) { return 0; }};
@@ -29,9 +34,10 @@ TEST_CASE("deferred operations retain their buffer descriptors", "[asio][endpoin
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
         .sendmsg = [](fid_ep* ep, const fi_msg* message, std::uint64_t) -> ssize_t {
-            auto& length = *static_cast<std::size_t*>(ep->fid.context);
+            auto& posted = *static_cast<submission*>(ep->fid.context);
+            posted.peer = message->addr;
             for (std::size_t i = 0; i < message->iov_count; ++i) {
-                length += message->msg_iov[i].iov_len;
+                posted.bytes += message->msg_iov[i].iov_len;
             }
             return -FI_EIO;
         },
@@ -46,8 +52,11 @@ TEST_CASE("deferred operations retain their buffer descriptors", "[asio][endpoin
     loom::asio::endpoint endpoint{ioc.get_executor(), std::move(fabric)};
     std::array<std::byte, 64> storage{};
     std::array<::asio::mutable_buffer, 1> buffers{::asio::buffer(storage)};
-    auto operation = endpoint.async_send(buffers, ::asio::deferred);
+    loom::fabric_addr peer{19};
+    auto operation = explicit_peer ? endpoint.async_send_to(buffers, peer, ::asio::deferred)
+                                   : endpoint.async_send(buffers, ::asio::deferred);
     buffers[0] = {};
+    peer = loom::fabric_addr{41};
     bool completed{};
     std::move(operation)([&](std::error_code error, std::size_t) {
         REQUIRE(error == loom::errc::io_error);
@@ -55,7 +64,8 @@ TEST_CASE("deferred operations retain their buffer descriptors", "[asio][endpoin
     });
     ioc.run();
     REQUIRE(completed);
-    REQUIRE(submitted == storage.size());
+    REQUIRE(submitted.bytes == storage.size());
+    REQUIRE(submitted.peer == (explicit_peer ? 19 : FI_ADDR_UNSPEC));
 }
 
 using namespace std::literals;
