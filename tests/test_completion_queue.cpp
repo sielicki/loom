@@ -85,6 +85,8 @@ constexpr std::array cq_formats{
 struct format_provider {
     fi_cq_format format{};
     bool tagged_supported{true};
+    bool with_sources{};
+    int source_reads{};
     int open_calls{};
     int read_calls{};
     int status{};
@@ -129,12 +131,27 @@ struct format_provider {
         cursor += count;
         return static_cast<ssize_t>(count);
     }
+    auto read_from(void* output, std::size_t count, fi_addr_t* sources) -> ssize_t {
+        ++source_reads;
+        const auto start = cursor;
+        const auto result = read(output, count);
+        for (ssize_t i = 0; i < result; ++i) {
+            const auto index = start + static_cast<std::size_t>(i);
+            sources[i] = index % 2 ? FI_ADDR_NOTAVAIL : static_cast<fi_addr_t>(index);
+        }
+        return result;
+    }
     fi_ops resource_ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_cq cq_ops{
         .size = sizeof(fi_ops_cq),
         .read =
             [](fid_cq* cq, void* output, std::size_t count) {
                 return static_cast<format_provider*>(cq->fid.context)->read(output, count);
+            },
+        .readfrom =
+            [](fid_cq* cq, void* output, std::size_t count, fi_addr_t* sources) {
+                return static_cast<format_provider*>(cq->fid.context)
+                    ->read_from(output, count, sources);
             },
         .readerr = [](fid_cq* cq, fi_cq_err_entry* output, std::uint64_t) -> ssize_t {
             auto& self = *static_cast<format_provider*>(cq->fid.context);
@@ -144,12 +161,18 @@ struct format_provider {
                        .buf = self.buffers.data(),
                        .data = 27,
                        .tag = 31,
-                       .err = FI_ECANCELED};
+                       .err = FI_ECANCELED,
+                       .src_addr = 71};
             return 1;
         },
         .sread =
             [](fid_cq* cq, void* output, std::size_t count, const void*, int) {
                 return static_cast<format_provider*>(cq->fid.context)->read(output, count);
+            },
+        .sreadfrom =
+            [](fid_cq* cq, void* output, std::size_t count, fi_addr_t* sources, const void*, int) {
+                return static_cast<format_provider*>(cq->fid.context)
+                    ->read_from(output, count, sources);
             },
     };
     fid_cq native_cq{.fid = {.context = this, .ops = &resource_ops}, .ops = &cq_ops};
@@ -182,6 +205,9 @@ struct format_provider {
         REQUIRE(event.data == (data ? 100 + index : 0));
         REQUIRE(event.tag == (format == FI_CQ_FORMAT_TAGGED ? 200 + index : 0));
         REQUIRE_FALSE(event.error_info.has_provider_error());
+        REQUIRE(event.source == (with_sources && index % 2 == 0
+                                     ? loom::fabric_addr{static_cast<std::uint64_t>(index)}
+                                     : loom::fabric_addrs::unspecified));
     }
 };
 }  // namespace
@@ -191,8 +217,10 @@ TEST_CASE("completion formats select and decode native single entries",
     const auto [format, native_format] = GENERATE(Catch::Generators::from_range(cq_formats));
     format_provider provider;
     provider.tagged_supported = native_format == FI_CQ_FORMAT_TAGGED;
-    auto created =
-        loom::completion_queue::create(provider.domain, {.wait_obj = true, .format = format});
+    provider.with_sources = GENERATE(false, true);
+    auto created = loom::completion_queue::create(
+        provider.domain,
+        {.wait_obj = true, .format = format, .source_addresses = provider.with_sources});
     REQUIRE(created);
     REQUIRE(provider.format == native_format);
     auto queue = std::move(*created);
@@ -205,12 +233,15 @@ TEST_CASE("completion formats select and decode native single entries",
     const auto read = queue.read();
     REQUIRE(read);
     provider.check(*read, 2);
+    REQUIRE(provider.source_reads == (provider.with_sources ? 3 : 0));
 }
 
 TEST_CASE("completion batches use the selected native stride", "[completion_queue][format]") {
     const auto [format, native_format] = GENERATE(Catch::Generators::from_range(cq_formats));
     format_provider provider;
-    auto queue = loom::completion_queue::create(provider.domain, {.format = format});
+    provider.with_sources = GENERATE(false, true);
+    auto queue = loom::completion_queue::create(
+        provider.domain, {.format = format, .source_addresses = provider.with_sources});
     REQUIRE(queue);
     REQUIRE(provider.format == native_format);
     std::array<loom::completion_event, 72> events{};
@@ -229,6 +260,7 @@ TEST_CASE("completion batches use the selected native stride", "[completion_queu
     REQUIRE(provider.read_calls == 3);
     REQUIRE(queue->poll_batch({}) == 0);
     REQUIRE(provider.read_calls == 3);
+    REQUIRE(provider.source_reads == (provider.with_sources ? 3 : 0));
 }
 
 TEST_CASE("completion error layout is independent of the success format",
@@ -237,8 +269,10 @@ TEST_CASE("completion error layout is independent of the success format",
     const auto operation = GENERATE(0, 1, 2);
     format_provider provider;
     provider.status = -FI_EAVAIL;
-    auto queue =
-        loom::completion_queue::create(provider.domain, {.wait_obj = true, .format = format});
+    provider.with_sources = GENERATE(false, true);
+    auto queue = loom::completion_queue::create(
+        provider.domain,
+        {.wait_obj = true, .format = format, .source_addresses = provider.with_sources});
     REQUIRE(queue);
     REQUIRE(provider.format == native_format);
     loom::completion_event event;
@@ -260,6 +294,41 @@ TEST_CASE("completion error layout is independent of the success format",
     REQUIRE(event.len == 3);
     REQUIRE(event.data == 27);
     REQUIRE(event.tag == 31);
+    REQUIRE(event.source ==
+            (provider.with_sources ? loom::fabric_addr{71} : loom::fabric_addrs::unspecified));
+}
+
+TEST_CASE("source address reads reject absent native operations", "[completion_queue][source]") {
+    const auto method = GENERATE(0, 1, 2);
+    const auto truncated = GENERATE(false, true);
+    format_provider provider;
+    if (truncated) {
+        provider.cq_ops.size = offsetof(fi_ops_cq, readfrom);
+    } else {
+        provider.cq_ops.readfrom = nullptr;
+        provider.cq_ops.sreadfrom = nullptr;
+    }
+    auto queue = loom::completion_queue::create(provider.domain,
+                                                {.wait_obj = true, .source_addresses = true});
+    REQUIRE(queue);
+    if (method == 1) {
+        const auto result = queue->wait();
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() == loom::make_error_code_from_fi_errno(FI_ENOSYS));
+    } else {
+        loom::completion_event event;
+        if (method == 0) {
+            const auto result = queue->poll();
+            REQUIRE(result);
+            event = *result;
+        } else {
+            REQUIRE(queue->poll_batch(std::span{&event, 1}) == 1);
+        }
+        REQUIRE(event.error == loom::make_error_code_from_fi_errno(FI_ENOSYS));
+        REQUIRE(event.source == loom::fabric_addrs::unspecified);
+    }
+    REQUIRE(provider.read_calls == 0);
+    REQUIRE(provider.source_reads == 0);
 }
 
 TEST_CASE("invalid completion formats fail before opening the provider",

@@ -38,17 +38,26 @@ constexpr auto to_fi_cq_format(cq_format format) noexcept -> fi_cq_format {
 }
 
 template <std::size_t Capacity, typename Read>
-auto read_cq_entries(fi_cq_format format, std::span<completion_event> events, Read&& read)
-    -> ssize_t {
+auto read_cq_entries(fi_cq_format format,
+                     std::span<completion_event> events,
+                     bool with_sources,
+                     Read&& read) -> ssize_t {
     const auto read_as = [&]<typename Entry>() -> ssize_t {
         std::array<Entry, Capacity> entries{};
-        const auto result = read(entries.data(), std::min(events.size(), Capacity));
+        std::array<fi_addr_t, Capacity> sources;
+        if (with_sources)
+            sources.fill(FI_ADDR_NOTAVAIL);
+        const auto result = read(entries.data(),
+                                 std::min(events.size(), Capacity),
+                                 with_sources ? sources.data() : nullptr);
         if (result <= 0)
             return result;
         for (std::size_t i = 0; i < static_cast<std::size_t>(result); ++i) {
             const auto& entry = entries[i];
             completion_event event{};
             event.context = context_ptr<void>{entry.op_context};
+            if (with_sources)
+                event.source = fabric_addr{sources[i]};
             if constexpr (requires { entry.flags; }) {
                 event.flags = entry.flags;
                 event.len = entry.len;
@@ -86,6 +95,7 @@ struct completion_queue_impl {
     bool wait_enabled{false};            ///< Whether a native wait object was requested.
     fi_cq_format format{FI_CQ_FORMAT_TAGGED};  ///< Layout used by native reads.
     std::size_t capacity{};                    ///< Requested minimum queue capacity.
+    bool source_addresses{false};              ///< Whether reads capture receive source addresses.
 
     /// @brief Default constructor.
     completion_queue_impl() = default;
@@ -97,9 +107,10 @@ struct completion_queue_impl {
                                    runtime_progress_policy prog = runtime_progress_policy{},
                                    bool can_wait = false,
                                    fi_cq_format entry_format = FI_CQ_FORMAT_TAGGED,
-                                   std::size_t minimum_capacity = 0)
+                                   std::size_t minimum_capacity = 0,
+                                   bool with_sources = false)
         : cq(cq_ptr), progress(prog), wait_enabled(can_wait), format(entry_format),
-          capacity(minimum_capacity) {}
+          capacity(minimum_capacity), source_addresses(with_sources) {}
 
     /// @brief Destructor that closes the libfabric completion queue.
     ~completion_queue_impl() {
@@ -166,14 +177,19 @@ auto completion_queue::create(const domain& dom,
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-            resource, cq, progress, attr.wait_obj, format, attr.size.get());
+            resource, cq, progress, attr.wait_obj, format, attr.size.get(), attr.source_addresses);
         (void)pending.release();
         return completion_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-        default_resource, cq, progress, attr.wait_obj, format, attr.size.get());
+    auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(default_resource,
+                                                                       cq,
+                                                                       progress,
+                                                                       attr.wait_obj,
+                                                                       format,
+                                                                       attr.size.get(),
+                                                                       attr.source_addresses);
     (void)pending.release();
     return completion_queue{std::move(impl)};
 }
@@ -185,7 +201,15 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
 
     completion_event event{};
     const auto ret = detail::read_cq_entries<1>(
-        impl_->format, std::span{&event, 1}, [this](void* entries, std::size_t count) {
+        impl_->format,
+        std::span{&event, 1},
+        impl_->source_addresses,
+        [this](void* entries, std::size_t count, fi_addr_t* sources) -> ssize_t {
+            if (sources) {
+                if (!FI_CHECK_OP(impl_->cq->ops, fi_ops_cq, readfrom))
+                    return -FI_ENOSYS;
+                return ::fi_cq_readfrom(impl_->cq, entries, count, sources);
+            }
             return ::fi_cq_read(impl_->cq, entries, count);
         });
 
@@ -224,7 +248,15 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
 
     completion_event event{};
     const auto ret = detail::read_cq_entries<1>(
-        impl_->format, std::span{&event, 1}, [this, timeout_ms](void* entries, std::size_t count) {
+        impl_->format,
+        std::span{&event, 1},
+        impl_->source_addresses,
+        [this, timeout_ms](void* entries, std::size_t count, fi_addr_t* sources) -> ssize_t {
+            if (sources) {
+                if (!FI_CHECK_OP(impl_->cq->ops, fi_ops_cq, sreadfrom))
+                    return -FI_ENOSYS;
+                return ::fi_cq_sreadfrom(impl_->cq, entries, count, sources, nullptr, timeout_ms);
+            }
             return ::fi_cq_sread(impl_->cq, entries, count, nullptr, timeout_ms);
         });
 
@@ -249,7 +281,15 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
     }
 
     const auto ret = detail::read_cq_entries<64>(
-        impl_->format, events, [this](void* entries, std::size_t count) {
+        impl_->format,
+        events,
+        impl_->source_addresses,
+        [this](void* entries, std::size_t count, fi_addr_t* sources) -> ssize_t {
+            if (sources) {
+                if (!FI_CHECK_OP(impl_->cq->ops, fi_ops_cq, readfrom))
+                    return -FI_ENOSYS;
+                return ::fi_cq_readfrom(impl_->cq, entries, count, sources);
+            }
             return ::fi_cq_read(impl_->cq, entries, count);
         });
 
@@ -289,6 +329,8 @@ auto completion_queue::read_error(int status) const -> result<completion_event> 
     event.tag = entry.tag;
     event.data = entry.data;
     event.error_info = {entry.prov_errno, entry.err_data, entry.err_data_size};
+    if (impl_->source_addresses)
+        event.source = fabric_addr{entry.src_addr};
     return event;
 }
 

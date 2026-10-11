@@ -69,14 +69,19 @@ auto completion_queue::create(const domain& dom,
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-            resource, cq, progress, attr.wait_obj, format, attr.size.get());
+            resource, cq, progress, attr.wait_obj, format, attr.size.get(), attr.source_addresses);
         (void)pending.release();
         return completion_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-        default_resource, cq, progress, attr.wait_obj, format, attr.size.get());
+    auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(default_resource,
+                                                                       cq,
+                                                                       progress,
+                                                                       attr.wait_obj,
+                                                                       format,
+                                                                       attr.size.get(),
+                                                                       attr.source_addresses);
     (void)pending.release();
     return completion_queue{std::move(impl)};
 }
@@ -88,7 +93,15 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
 
     completion_event event{};
     const auto ret = detail::read_cq_entries<1>(
-        impl_->format, std::span{&event, 1}, [this](void* entries, std::size_t count) {
+        impl_->format,
+        std::span{&event, 1},
+        impl_->source_addresses,
+        [this](void* entries, std::size_t count, fi_addr_t* sources) -> ssize_t {
+            if (sources) {
+                if (!FI_CHECK_OP(impl_->cq->ops, fi_ops_cq, readfrom))
+                    return -FI_ENOSYS;
+                return ::fi_cq_readfrom(impl_->cq, entries, count, sources);
+            }
             return ::fi_cq_read(impl_->cq, entries, count);
         });
 
@@ -127,7 +140,15 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
 
     completion_event event{};
     const auto ret = detail::read_cq_entries<1>(
-        impl_->format, std::span{&event, 1}, [this, timeout_ms](void* entries, std::size_t count) {
+        impl_->format,
+        std::span{&event, 1},
+        impl_->source_addresses,
+        [this, timeout_ms](void* entries, std::size_t count, fi_addr_t* sources) -> ssize_t {
+            if (sources) {
+                if (!FI_CHECK_OP(impl_->cq->ops, fi_ops_cq, sreadfrom))
+                    return -FI_ENOSYS;
+                return ::fi_cq_sreadfrom(impl_->cq, entries, count, sources, nullptr, timeout_ms);
+            }
             return ::fi_cq_sread(impl_->cq, entries, count, nullptr, timeout_ms);
         });
 
@@ -152,7 +173,15 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
     }
 
     const auto ret = detail::read_cq_entries<64>(
-        impl_->format, events, [this](void* entries, std::size_t count) {
+        impl_->format,
+        events,
+        impl_->source_addresses,
+        [this](void* entries, std::size_t count, fi_addr_t* sources) -> ssize_t {
+            if (sources) {
+                if (!FI_CHECK_OP(impl_->cq->ops, fi_ops_cq, readfrom))
+                    return -FI_ENOSYS;
+                return ::fi_cq_readfrom(impl_->cq, entries, count, sources);
+            }
             return ::fi_cq_read(impl_->cq, entries, count);
         });
 
@@ -192,6 +221,8 @@ auto completion_queue::read_error(int status) const -> result<completion_event> 
     event.tag = entry.tag;
     event.data = entry.data;
     event.error_info = {entry.prov_errno, entry.err_data, entry.err_data_size};
+    if (impl_->source_addresses)
+        event.source = fabric_addr{entry.src_addr};
     return event;
 }
 

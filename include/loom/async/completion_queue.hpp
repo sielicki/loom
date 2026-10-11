@@ -72,6 +72,8 @@ struct completion_event : event_base<completion_event> {
     std::uint64_t data{0};             ///< Immediate data if present
     cq_error_info error_info{};        ///< Extended error information
     void* buffer{nullptr};             ///< Received message location, including multi-receive
+    fabric_addr source{
+        fabric_addrs::unspecified};  ///< Receive source, when requested and available
 
     /**
      * @brief Returns the error code from this completion.
@@ -114,6 +116,9 @@ struct completion_queue_attr {
     std::uint64_t flags{0};   ///< Creation flags
     bool wait_obj{false};     ///< Enable blocking wait support
     cq_format format{cq_format::tagged};  ///< Native completion entry layout
+    /// Use native source-address reads. Bound endpoints must negotiate FI_SOURCE
+    /// to report peer addresses; unavailable addresses remain unspecified.
+    bool source_addresses{false};
 };
 
 /**
