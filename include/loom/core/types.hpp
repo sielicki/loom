@@ -361,7 +361,7 @@ inline constexpr caps multi_recv{0x800ULL};
 inline constexpr caps remote_comm{0x1000ULL};
 inline constexpr caps fence{0x2000ULL};
 inline constexpr caps local_comm{0x4000ULL};
-inline constexpr caps msg_prefix{0x8000ULL};
+inline constexpr caps named_rx_ctx{0x8000ULL};
 inline constexpr caps hmem{0x10000ULL};
 inline constexpr caps trigger{0x20000ULL};
 }  // namespace capability

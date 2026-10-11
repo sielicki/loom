@@ -71,8 +71,8 @@ namespace loom::detail {
         fi_caps |= FI_FENCE;
     if (c.has(capability::local_comm))
         fi_caps |= FI_LOCAL_COMM;
-    if (c.has(capability::msg_prefix))
-        fi_caps |= FI_MSG_PREFIX;
+    if (c.has(capability::named_rx_ctx))
+        fi_caps |= FI_NAMED_RX_CTX;
 
     return fi_caps;
 }
@@ -119,8 +119,8 @@ namespace loom::detail {
         result |= capability::fence;
     if (fi_caps & FI_LOCAL_COMM)
         result |= capability::local_comm;
-    if (fi_caps & FI_MSG_PREFIX)
-        result |= capability::msg_prefix;
+    if (fi_caps & FI_NAMED_RX_CTX)
+        result |= capability::named_rx_ctx;
 
     return result;
 }

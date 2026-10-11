@@ -171,3 +171,19 @@ TEST_CASE("missing domain metadata does not imply fabric concurrency guarantees"
     CHECK(attributes->control_progress == loom::progress_mode::unspecified);
     CHECK(attributes->data_progress == loom::progress_mode::unspecified);
 }
+
+TEST_CASE("named receive contexts and message prefixes use independent namespaces",
+          "[fabric][attributes][capabilities]") {
+    const auto requirements = GENERATE(0, 1, 2, 3);
+    fi_info native{};
+    native.caps = FI_MSG | (requirements & 1 ? FI_NAMED_RX_CTX : 0);
+    native.mode = requirements & 2 ? FI_MSG_PREFIX : 0;
+    const auto info = wrap(native);
+    const auto expected_caps =
+        loom::capability::msg | (requirements & 1 ? loom::capability::named_rx_ctx : loom::caps{});
+    const auto expected_mode = requirements & 2 ? loom::mode_bits::msg_prefix : loom::mode{};
+    CHECK(info.get_caps() == expected_caps);
+    CHECK(info.get_mode() == expected_mode);
+    CHECK(loom::detail::to_fi_caps(info.get_caps()) == native.caps);
+    CHECK(loom::detail::to_fi_mode(info.get_mode()) == native.mode);
+}
