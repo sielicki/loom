@@ -69,14 +69,14 @@ auto completion_queue::create(const domain& dom,
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-            resource, cq, progress, attr.wait_obj, format);
+            resource, cq, progress, attr.wait_obj, format, attr.size.get());
         (void)pending.release();
         return completion_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-        default_resource, cq, progress, attr.wait_obj, format);
+        default_resource, cq, progress, attr.wait_obj, format, attr.size.get());
     (void)pending.release();
     return completion_queue{std::move(impl)};
 }
@@ -208,7 +208,7 @@ auto completion_queue::capacity() const noexcept -> std::size_t {
         return 0;
     }
 
-    return 1024;
+    return impl_->capacity;
 }
 
 auto completion_queue::pending() const noexcept -> std::size_t {

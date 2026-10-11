@@ -98,14 +98,17 @@ struct event_queue_impl {
     ::fid_eq* eq{nullptr};                ///< Underlying libfabric event queue handle.
     std::vector<std::byte> event_buffer;  ///< Buffer for reading events.
     bool wait_enabled{false};             ///< Whether a native wait object was requested.
+    std::size_t capacity{};               ///< Requested minimum queue capacity.
 
     /// @brief Default constructor with pre-allocated event buffer.
     event_queue_impl() : event_buffer(1024) {}
 
     /// @brief Constructs event_queue_impl with a libfabric event queue handle.
     /// @param eq_ptr The libfabric event queue pointer.
-    explicit event_queue_impl(::fid_eq* eq_ptr, bool can_wait = false)
-        : eq(eq_ptr), event_buffer(1024), wait_enabled(can_wait) {}
+    explicit event_queue_impl(::fid_eq* eq_ptr,
+                              bool can_wait = false,
+                              std::size_t minimum_capacity = 0)
+        : eq(eq_ptr), event_buffer(1024), wait_enabled(can_wait), capacity(minimum_capacity) {}
 
     /// @brief Destructor that closes the libfabric event queue.
     ~event_queue_impl() {
@@ -164,14 +167,15 @@ auto event_queue::create(const fabric& fab, const event_queue_attr& attr, memory
     detail::unique_fid<::fid_eq> pending{eq};
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::event_queue_impl>(resource, eq, attr.wait_obj);
+        auto impl = detail::make_pmr_unique<detail::event_queue_impl>(
+            resource, eq, attr.wait_obj, attr.size.get());
         (void)pending.release();
         return event_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::event_queue_impl>(default_resource, eq, attr.wait_obj);
+    auto impl = detail::make_pmr_unique<detail::event_queue_impl>(
+        default_resource, eq, attr.wait_obj, attr.size.get());
     (void)pending.release();
     return event_queue{std::move(impl)};
 }
@@ -306,7 +310,7 @@ auto event_queue::capacity() const noexcept -> std::size_t {
     if (!impl_ || !impl_->eq) {
         return 0;
     }
-    return 128;
+    return impl_->capacity;
 }
 
 auto event_queue::ack(const fabric_event&) -> void_result {

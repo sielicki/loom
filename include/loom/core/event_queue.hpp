@@ -80,7 +80,7 @@ struct fabric_event : event_base<fabric_event> {
  * @brief Attributes for configuring an event queue.
  */
 struct event_queue_attr {
-    queue_size size{128UL};             ///< Queue capacity
+    queue_size size{128UL};             ///< Minimum queue capacity
     std::uint64_t flags{0};             ///< Configuration flags
     bool wait_obj{false};               ///< Enable wait object support
     std::uint64_t signaling_vector{0};  ///< Signaling vector for interrupts
@@ -147,6 +147,7 @@ public:
 
     [[nodiscard]] auto event_to_string(const fabric_event& event) const -> std::string;
 
+    /// Minimum capacity requested at creation; zero if unknown or provider-selected.
     [[nodiscard]] auto capacity() const noexcept -> std::size_t;
 
     auto ack(const fabric_event& event) -> void_result;

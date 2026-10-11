@@ -182,6 +182,7 @@ public:
     [[nodiscard("read result must be checked for errors")]]
     auto read() const -> result<completion_event>;
 
+    /// Minimum capacity requested at creation; zero if unknown or provider-selected.
     [[nodiscard]] auto capacity() const noexcept -> std::size_t;
 
     [[nodiscard]] auto pending() const noexcept -> std::size_t;

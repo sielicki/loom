@@ -57,14 +57,15 @@ auto event_queue::create(const fabric& fab, const event_queue_attr& attr, memory
     detail::unique_fid<::fid_eq> pending{eq};
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::event_queue_impl>(resource, eq, attr.wait_obj);
+        auto impl = detail::make_pmr_unique<detail::event_queue_impl>(
+            resource, eq, attr.wait_obj, attr.size.get());
         (void)pending.release();
         return event_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::event_queue_impl>(default_resource, eq, attr.wait_obj);
+    auto impl = detail::make_pmr_unique<detail::event_queue_impl>(
+        default_resource, eq, attr.wait_obj, attr.size.get());
     (void)pending.release();
     return event_queue{std::move(impl)};
 }
@@ -199,7 +200,7 @@ auto event_queue::capacity() const noexcept -> std::size_t {
     if (!impl_ || !impl_->eq) {
         return 0;
     }
-    return 128;
+    return impl_->capacity;
 }
 
 auto event_queue::ack(const fabric_event&) -> void_result {

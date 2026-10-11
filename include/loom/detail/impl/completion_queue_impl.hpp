@@ -85,6 +85,7 @@ struct completion_queue_impl {
     runtime_progress_policy progress{};  ///< Progress policy for the completion queue.
     bool wait_enabled{false};            ///< Whether a native wait object was requested.
     fi_cq_format format{FI_CQ_FORMAT_TAGGED};  ///< Layout used by native reads.
+    std::size_t capacity{};                    ///< Requested minimum queue capacity.
 
     /// @brief Default constructor.
     completion_queue_impl() = default;
@@ -95,8 +96,10 @@ struct completion_queue_impl {
     explicit completion_queue_impl(::fid_cq* cq_ptr,
                                    runtime_progress_policy prog = runtime_progress_policy{},
                                    bool can_wait = false,
-                                   fi_cq_format entry_format = FI_CQ_FORMAT_TAGGED)
-        : cq(cq_ptr), progress(prog), wait_enabled(can_wait), format(entry_format) {}
+                                   fi_cq_format entry_format = FI_CQ_FORMAT_TAGGED,
+                                   std::size_t minimum_capacity = 0)
+        : cq(cq_ptr), progress(prog), wait_enabled(can_wait), format(entry_format),
+          capacity(minimum_capacity) {}
 
     /// @brief Destructor that closes the libfabric completion queue.
     ~completion_queue_impl() {
@@ -163,14 +166,14 @@ auto completion_queue::create(const domain& dom,
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-            resource, cq, progress, attr.wait_obj, format);
+            resource, cq, progress, attr.wait_obj, format, attr.size.get());
         (void)pending.release();
         return completion_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-        default_resource, cq, progress, attr.wait_obj, format);
+        default_resource, cq, progress, attr.wait_obj, format, attr.size.get());
     (void)pending.release();
     return completion_queue{std::move(impl)};
 }
@@ -302,7 +305,7 @@ auto completion_queue::capacity() const noexcept -> std::size_t {
         return 0;
     }
 
-    return 1024;
+    return impl_->capacity;
 }
 
 auto completion_queue::pending() const noexcept -> std::size_t {

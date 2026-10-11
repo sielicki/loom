@@ -20,6 +20,7 @@ struct queue_provider {
     int error_reads{};
     std::uint32_t native_event{FI_CONNECTED};
     fi_wait_obj requested_wait{};
+    std::size_t requested_capacity{};
     bool short_entry{};
     fi_info* accepted_info{};
     int freed_infos{};
@@ -110,6 +111,7 @@ struct queue_provider {
             [](fid_domain* dom, fi_cq_attr* attr, fid_cq** result, void*) {
                 auto& self = *static_cast<queue_provider*>(dom->fid.context);
                 self.requested_wait = attr->wait_obj;
+                self.requested_capacity = attr->size;
                 *result = &self.native_cq;
                 return 0;
             },
@@ -127,6 +129,7 @@ struct queue_provider {
             [](fid_fabric* fab, fi_eq_attr* attr, fid_eq** result, void*) {
                 auto& self = *static_cast<queue_provider*>(fab->fid.context);
                 self.requested_wait = attr->wait_obj;
+                self.requested_capacity = attr->size;
                 *result = &self.native_eq;
                 return 0;
             },
@@ -185,6 +188,31 @@ TEST_CASE("queue waits require a configured wait object", "[queue][wait]") {
     });
     REQUIRE(provider.requested_wait == FI_WAIT_NONE);
     REQUIRE(provider.calls == 0);
+}
+
+TEST_CASE("queues report their configured minimum capacity after moves", "[queue][capacity]") {
+    const auto completion = GENERATE(false, true);
+    const auto capacity =
+        GENERATE(std::size_t{0}, std::size_t{1}, std::size_t{17}, std::size_t{4096});
+    queue_provider provider;
+    const auto check = [&](auto& queue) {
+        REQUIRE(provider.requested_capacity == capacity);
+        CHECK(queue.capacity() == capacity);
+        auto moved = std::move(queue);
+        CHECK(moved.capacity() == capacity);
+        REQUIRE(queue.capacity() == 0);
+    };
+    if (completion) {
+        auto created =
+            loom::completion_queue::create(provider.domain, {.size = loom::queue_size{capacity}});
+        REQUIRE(created);
+        check(*created);
+    } else {
+        auto created =
+            loom::event_queue::create(provider.fabric, {.size = loom::queue_size{capacity}});
+        REQUIRE(created);
+        check(*created);
+    }
 }
 
 TEST_CASE("queue waits preserve valid timeouts after moving", "[queue][wait]") {
