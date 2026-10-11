@@ -29,6 +29,18 @@ target_compile_options(nixl-cuda-policy-check PRIVATE -Wall -Wextra -Wpedantic -
 target_include_directories(nixl-cuda-policy-check PRIVATE "${CUDA_DRIVER_INCLUDE_DIR}")
 target_link_libraries(nixl-cuda-policy-check PRIVATE ${CMAKE_DL_LIBS})
 
+add_executable(nixl-loom-cuda-workload gpu-workload.cpp)
+target_compile_features(nixl-loom-cuda-workload PRIVATE cxx_std_26)
+target_compile_options(nixl-loom-cuda-workload PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_include_directories(nixl-loom-cuda-workload PRIVATE ../hmem "${CUDA_DRIVER_INCLUDE_DIR}")
+target_link_libraries(nixl-loom-cuda-workload PRIVATE PkgConfig::NIXL Threads::Threads ${CMAKE_DL_LIBS})
+
+find_program(CUDA_PTXAS ptxas REQUIRED)
+add_custom_command(OUTPUT visibility.cubin
+    COMMAND "${CUDA_PTXAS}" -arch=sm_70 "${CMAKE_CURRENT_SOURCE_DIR}/../hmem/visibility.ptx" -o visibility.cubin
+    DEPENDS ../hmem/visibility.ptx VERBATIM)
+add_custom_target(nixl-cuda-kernel-check ALL DEPENDS visibility.cubin)
+
 enable_testing()
 add_test(NAME nixl_cuda_policy COMMAND nixl-cuda-policy-check)
 foreach(provider IN ITEMS sockets "tcp;ofi_rxm")
@@ -46,4 +58,5 @@ foreach(provider IN ITEMS sockets "tcp;ofi_rxm")
 endforeach()
 
 install(TARGETS nixl_loom LIBRARY DESTINATION lib/nixl)
-install(TARGETS nixl-loom-workload RUNTIME DESTINATION bin)
+install(TARGETS nixl-loom-workload nixl-loom-cuda-workload RUNTIME DESTINATION bin)
+install(FILES ../hmem/visibility.ptx DESTINATION share/nixl-loom)

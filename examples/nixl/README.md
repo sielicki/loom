@@ -135,10 +135,34 @@ synchronizing a whole device. Applications must finish producing source data
 before posting; allocations and contexts must outlive all operations, and
 remote registrations must remain valid through acknowledgement.
 
+An installed hardware workload exercises the actual NIXL agent API:
+
+```sh
+nix build .#nixl-loom
+# Arguments: PTX path, source GPU, destination GPU, provider, domain.
+timeout 180 ./result/bin/nixl-loom-cuda-workload \
+  ./result/share/nixl-loom/visibility.ptx 0 0 'verbs;ofi_rxm' mlx5_0
+```
+
+Select the provider, domain and CUDA ordinals for the runner. The two ordinals
+may differ. The workload uses two agents with registered `VRAM_SEG` buffers
+and 257 segments covering a 1 MiB subrange. It repeats prepared reads and
+writes, and checks writes both with and without notifications. This crosses
+multiple visibility-acknowledgement packets.
+
+A GPU verifier starts before each transfer is posted. Once the request or
+notification reports completion, the host releases the verifier through
+mapped memory and waits for its result without submitting or synchronizing
+CUDA work. The GPU checks every payload word and both guard regions. The
+verifier and CUDA setup are shared with the NCCL workload. A missing driver,
+unsupported configuration, mismatched data or timeout fails the test; none
+is treated as a passing skip. The build assembles the PTX to validate syntax.
+
 All seven automated checks pass on software providers and with address,
 undefined-behavior and leak sanitizers. They test the wire protocol using
 host memory and CUDA policy using an injected API. **Actual CUDA RMA and
-GPU visibility have not been validated on hardware.** A NIXL workload with
-an already running GPU verifier, multiple devices, multiple processes,
-and injected driver/provider failures remains required. Multiple rails,
-bounded failure recovery, and allocation-free progress are also open.
+GPU visibility have not been validated on hardware.** The hardware workload
+exits with a missing-driver error on the current AMD/WSL host. Acceptance
+on GPU hardware, separate processes, and injected driver/provider failures
+remain required. Multiple rails, bounded failure recovery, and
+allocation-free progress are also open.
