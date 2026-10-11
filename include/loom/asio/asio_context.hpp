@@ -226,6 +226,19 @@ public:
         endpoint_state_ = std::move(state);
     }
 
+    /// Register before native submission; the queue must outlive accepted work.
+    /// Rejection or context destruction removes the registration automatically.
+    [[nodiscard]] auto bind_completion(endpoint& ep, completion_direction direction) noexcept
+        -> void_result {
+        return registration_.bind(
+            ep, direction, context_ptr<void>{as_fi_context()}, this, complete_registered);
+    }
+
+    [[nodiscard]] auto bind_completion(completion_queue& queue) noexcept -> void_result {
+        return registration_.bind(
+            queue, context_ptr<void>{as_fi_context()}, this, complete_registered);
+    }
+
 protected:
     [[nodiscard]] auto completion_size(const completion_event& event) const noexcept
         -> std::size_t {
@@ -233,8 +246,13 @@ protected:
     }
 
 private:
+    static void complete_registered(void* object, const completion_event& event) {
+        static_cast<asio_context_erased*>(object)->complete(event);
+    }
+
     std::optional<std::size_t> transfer_size_;
     std::shared_ptr<detail::endpoint_state> endpoint_state_;
+    completion_registration registration_;
 };
 
 /**

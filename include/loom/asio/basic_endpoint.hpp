@@ -74,6 +74,10 @@ template <typename BufferSequence>
  * with Asio's completion token model, supporting callbacks, coroutines,
  * futures, and other Asio-compatible completion mechanisms.
  * Per-operation cancellation supports Asio's terminal guarantee.
+ * Bind the native endpoint to the appropriate TX/RX completion queues before
+ * initiating operations. Those queues must outlive accepted work. Completion
+ * events can be delivered through completion_queue::dispatch from a manual
+ * progress loop; registration is removed before invoking the handler.
  *
  * @tparam Executor The executor type, defaults to any_io_executor.
  */
@@ -241,8 +245,11 @@ public:
                 ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
-                auto result = state->endpoint.sendv(ctx->buffers().iov,
-                                                    context_ptr<void>{ctx->as_fi_context()});
+                auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
+                if (result) {
+                    result = state->endpoint.sendv(ctx->buffers().iov,
+                                                   context_ptr<void>{ctx->as_fi_context()});
+                }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
@@ -271,8 +278,11 @@ public:
                     std::move(handler), executor_, &state->endpoint, buffers);
                 ctx->retain_endpoint(state);
 
-                auto result = state->endpoint.recvv(ctx->buffers().iov,
-                                                    context_ptr<void>{ctx->as_fi_context()});
+                auto result = ctx->bind_completion(state->endpoint, completion_direction::receive);
+                if (result) {
+                    result = state->endpoint.recvv(ctx->buffers().iov,
+                                                   context_ptr<void>{ctx->as_fi_context()});
+                }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
@@ -302,12 +312,15 @@ public:
                 ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
-                auto result = loom::tagged_sendv(state->endpoint,
-                                                 ctx->buffers().iov,
-                                                 ctx->buffers().descriptors,
-                                                 fabric_addrs::unspecified,
-                                                 tag,
-                                                 ctx->as_fi_context());
+                auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
+                if (result) {
+                    result = loom::tagged_sendv(state->endpoint,
+                                                ctx->buffers().iov,
+                                                ctx->buffers().descriptors,
+                                                fabric_addrs::unspecified,
+                                                tag,
+                                                ctx->as_fi_context());
+                }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
@@ -338,13 +351,16 @@ public:
                     std::move(handler), executor_, &state->endpoint, buffers);
                 ctx->retain_endpoint(state);
 
-                auto result = loom::tagged_recvv(state->endpoint,
-                                                 ctx->buffers().iov,
-                                                 ctx->buffers().descriptors,
-                                                 fabric_addrs::unspecified,
-                                                 tag,
-                                                 ignore,
-                                                 ctx->as_fi_context());
+                auto result = ctx->bind_completion(state->endpoint, completion_direction::receive);
+                if (result) {
+                    result = loom::tagged_recvv(state->endpoint,
+                                                ctx->buffers().iov,
+                                                ctx->buffers().descriptors,
+                                                fabric_addrs::unspecified,
+                                                tag,
+                                                ignore,
+                                                ctx->as_fi_context());
+                }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
@@ -389,12 +405,15 @@ public:
 
                 const std::array remote_iov{
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-                auto result = rma::writev_to(state->endpoint,
-                                             ctx->buffers().iov,
-                                             ctx->buffers().descriptors,
-                                             peer,
-                                             remote_iov,
-                                             ctx->as_fi_context());
+                auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
+                if (result) {
+                    result = rma::writev_to(state->endpoint,
+                                            ctx->buffers().iov,
+                                            ctx->buffers().descriptors,
+                                            peer,
+                                            remote_iov,
+                                            ctx->as_fi_context());
+                }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
@@ -455,12 +474,15 @@ public:
 
                 const std::array remote_iov{
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-                auto result = rma::readv_to(state->endpoint,
-                                            ctx->buffers().iov,
-                                            ctx->buffers().descriptors,
-                                            peer,
-                                            remote_iov,
-                                            ctx->as_fi_context());
+                auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
+                if (result) {
+                    result = rma::readv_to(state->endpoint,
+                                           ctx->buffers().iov,
+                                           ctx->buffers().descriptors,
+                                           peer,
+                                           remote_iov,
+                                           ctx->as_fi_context());
+                }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);

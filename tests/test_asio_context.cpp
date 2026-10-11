@@ -5,6 +5,7 @@
  */
 
 #include <loom/asio.hpp>
+#include <loom/detail/impl/completion_queue_impl.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -306,4 +307,31 @@ TEST_CASE("dispatch_asio_completion with error event", "[asio][context]") {
 
     REQUIRE(handler_called.load(std::memory_order_acquire));
     REQUIRE(received_ec == std::make_error_code(std::errc::connection_refused));
+}
+
+TEST_CASE("registered Asio contexts detach before inline handlers throw", "[asio][context]") {
+    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fid_cq handle{.fid = {.ops = &ops}};
+    loom::completion_queue queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+        loom::get_default_resource(), &handle)};
+    ::asio::io_context ioc;
+    struct handler_error {};
+    int completions{};
+    auto* ctx = loom::asio::make_asio_context(
+        [&](std::error_code error, std::size_t bytes) {
+            REQUIRE_FALSE(error);
+            REQUIRE(bytes == 7);
+            ++completions;
+            throw handler_error{};
+        },
+        ioc.get_executor());
+    REQUIRE(ctx->bind_completion(queue));
+    loom::completion_event event;
+    event.context = loom::context_ptr<void>{ctx->as_fi_context()};
+    event.bytes_transferred = 7;
+    ::asio::post(ioc, [&] { REQUIRE(queue.dispatch(event)); });
+    REQUIRE_THROWS_AS(ioc.run(), handler_error);
+    REQUIRE(completions == 1);
+    REQUIRE_FALSE(queue.dispatch(event));
+    REQUIRE(ioc.run() == 0);
 }

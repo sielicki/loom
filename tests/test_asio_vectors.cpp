@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/asio.hpp>
+#include <loom/detail/impl/completion_queue_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 #include <loom/detail/impl/memory_impl.hpp>
 
@@ -17,6 +18,7 @@ namespace {
 struct vector_provider {
     std::span<const iovec> buffers;
     void* context{};
+    void* attempted_context{};
     std::size_t remote_length{};
     bool throw_on_submit{};
     fi_addr_t peer{};
@@ -34,26 +36,49 @@ struct vector_provider {
         self.peer = msg->addr;
         if (msg->desc)
             self.descriptors.assign(msg->desc, msg->desc + msg->iov_count);
-        return self.submission_status ? self.submission_status
-                                      : capture(ep, msg->msg_iov, msg->iov_count, msg->context);
+        return capture(ep, msg->msg_iov, msg->iov_count, msg->context);
     }
 
-    static auto capture(fid_ep* ep, const iovec* iov, std::size_t count, void* context) -> ssize_t {
+    static auto capture(fid_ep* ep,
+                        const iovec* iov,
+                        std::size_t count,
+                        void* context,
+                        loom::completion_direction direction = loom::completion_direction::transmit)
+        -> ssize_t {
         auto& self = *static_cast<vector_provider*>(ep->fid.context);
+        self.attempted_context = context;
+        loom::completion_registration duplicate;
+        auto registered =
+            duplicate.bind(direction == loom::completion_direction::receive ? self.rx : self.tx,
+                           loom::context_ptr<void>{context},
+                           &self,
+                           [](void*, const loom::completion_event&) {});
+        REQUIRE_FALSE(registered);
+        REQUIRE(registered.error() == loom::errc::address_in_use);
         if (self.throw_on_submit) {
             throw std::bad_alloc{};
+        }
+        if (self.submission_status) {
+            return self.submission_status;
         }
         self.buffers = {iov, count};
         self.context = context;
         return 0;
     }
 
-    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops ops{.size = sizeof(fi_ops),
+               .close = [](fid*) { return 0; },
+               .bind = [](fid*, fid*, std::uint64_t) { return 0; }};
+    fid_cq tx_handle{.fid = {.ops = &ops}}, rx_handle{.fid = {.ops = &ops}};
+    loom::completion_queue tx{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+        loom::get_default_resource(), &tx_handle)};
+    loom::completion_queue rx{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+        loom::get_default_resource(), &rx_handle)};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
         .recvv =
             [](fid_ep* ep, const iovec* iov, void**, std::size_t count, fi_addr_t, void* context) {
-                return capture(ep, iov, count, context);
+                return capture(ep, iov, count, context, loom::completion_direction::receive);
             },
         .sendv =
             [](fid_ep* ep, const iovec* iov, void**, std::size_t count, fi_addr_t, void* context) {
@@ -73,7 +98,7 @@ struct vector_provider {
                void* context) {
                 REQUIRE(tag == 42);
                 REQUIRE(ignore == 0x80);
-                return capture(ep, iov, count, context);
+                return capture(ep, iov, count, context, loom::completion_direction::receive);
             },
         .sendv =
             [](fid_ep* ep,
@@ -97,12 +122,18 @@ struct vector_provider {
     fid_ep handle{
         .fid = {.context = this, .ops = &ops}, .msg = &messages, .rma = &rma, .tagged = &tags};
 
-    auto endpoint() -> loom::endpoint {
-        return loom::endpoint{
+    auto endpoint(loom::cq_bind_flags bindings = loom::cq_bind::transmit | loom::cq_bind::recv)
+        -> loom::endpoint {
+        auto ep = loom::endpoint{
             loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
                                                                        &handle,
                                                                        loom::endpoint_types::msg,
                                                                        loom::address_format::inet)};
+        if (bindings.has(loom::cq_bind::transmit))
+            REQUIRE(ep.bind_cq(tx, loom::cq_bind::transmit));
+        if (bindings.has(loom::cq_bind::recv))
+            REQUIRE(ep.bind_cq(rx, loom::cq_bind::recv));
+        return ep;
     }
 };
 }  // namespace
@@ -161,7 +192,10 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
         REQUIRE(native.buffers[0].iov_base == storage.data());
         REQUIRE(native.buffers[1].iov_base == storage.data() + 3);
         loom::completion_event event;
-        loom::asio::dispatch_asio_completion(native.context, event);
+        event.context = loom::context_ptr<void>{native.context};
+        REQUIRE_FALSE(native.rx.dispatch(event));
+        REQUIRE(native.tx.dispatch(event));
+        REQUIRE_FALSE(native.tx.dispatch(event));
     } else {
         REQUIRE(native.context == nullptr);
     }
@@ -169,25 +203,35 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     REQUIRE(completed == 1);
 }
 
-TEST_CASE("Asio operations retain and submit every buffer", "[asio][endpoint]") {
+TEST_CASE("Asio operations register their buffer sequences before submission", "[asio][endpoint]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5);
     const auto initiation_helper = GENERATE(false, true);
-    CAPTURE(operation, initiation_helper);
+    const auto bound = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
+    const bool receive = operation == 1 || operation == 3;
+    CAPTURE(operation, initiation_helper, bound, status);
     vector_provider native;
+    native.submission_status = status;
     ::asio::io_context ioc;
-    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    loom::asio::endpoint ep{ioc.get_executor(),
+                            native.endpoint(bound ? loom::cq_bind::transmit | loom::cq_bind::recv
+                                            : receive ? loom::cq_bind::transmit
+                                                      : loom::cq_bind::recv)};
     loom::memory_region mr;
     const loom::remote_memory remote{0x1000, 1, 4096};
     std::array<char, 2> first{'a', 'b'};
     std::array<char, 4> second{'c', 'd', 'e', 'f'};
     std::array<::asio::mutable_buffer, 2> buffers{::asio::buffer(first), ::asio::buffer(second)};
     std::array<::asio::const_buffer, 2> const_buffers{buffers[0], buffers[1]};
-    bool completed{};
+    int completions{};
+    const auto expected = !bound   ? loom::make_error_code(loom::errc::invalid_argument)
+                          : status ? loom::make_error_code_from_fi_errno(-status)
+                                   : std::error_code{};
     auto handler = ::asio::bind_executor(ioc.get_executor(),
                                          [&](std::error_code error, std::size_t transferred) {
-                                             REQUIRE_FALSE(error);
-                                             REQUIRE(transferred == 6);
-                                             completed = true;
+                                             REQUIRE(error == expected);
+                                             REQUIRE(transferred == (expected ? 0 : 6));
+                                             ++completions;
                                          });
     if (initiation_helper) {
         switch (operation) {
@@ -237,7 +281,18 @@ TEST_CASE("Asio operations retain and submit every buffer", "[asio][endpoint]") 
     }
     buffers = {};
     const_buffers = {};
-    REQUIRE_FALSE(completed);
+    REQUIRE(completions == 0);
+    if (expected) {
+        REQUIRE(native.context == nullptr);
+        REQUIRE((native.attempted_context != nullptr) == bound);
+        loom::completion_event event;
+        event.context = loom::context_ptr<void>{native.attempted_context};
+        REQUIRE_FALSE(native.tx.dispatch(event));
+        REQUIRE_FALSE(native.rx.dispatch(event));
+        ioc.run();
+        REQUIRE(completions == 1);
+        return;
+    }
     REQUIRE(native.context != nullptr);
     REQUIRE(native.buffers.size() == 2);
     std::string sent;
@@ -257,9 +312,18 @@ TEST_CASE("Asio operations retain and submit every buffer", "[asio][endpoint]") 
     }
     loom::completion_event event;
     event.bytes_transferred = operation == 1 || operation == 3 ? 6 : 0;
-    loom::asio::dispatch_asio_completion(native.context, event);
+    event.context = loom::context_ptr<void>{native.context};
+    auto& queue = receive ? native.rx : native.tx;
+    auto& other = receive ? native.tx : native.rx;
+    // The provider owns every scratch slot; routing must not inspect them.
+    auto& scratch = *static_cast<fi_context2*>(native.context);
+    for (auto& slot : scratch.internal)
+        slot = &scratch;
+    REQUIRE_FALSE(other.dispatch(event));
+    REQUIRE(queue.dispatch(event));
+    REQUIRE_FALSE(queue.dispatch(event));
     ioc.run();
-    REQUIRE(completed);
+    REQUIRE(completions == 1);
 }
 
 TEST_CASE("Asio initiation exceptions release the pending context", "[asio][endpoint]") {
@@ -275,5 +339,25 @@ TEST_CASE("Asio initiation exceptions release the pending context", "[asio][endp
         });
     REQUIRE_THROWS_AS(ep.async_send(::asio::buffer(storage), handler), std::bad_alloc);
     REQUIRE_FALSE(cancellation.slot().has_handler());
+    REQUIRE(native.attempted_context != nullptr);
+    loom::completion_event event;
+    event.context = loom::context_ptr<void>{native.attempted_context};
+    REQUIRE_FALSE(native.tx.dispatch(event));
     REQUIRE(ioc.run() == 0);
+}
+
+TEST_CASE("Asio initiation rejects missing native endpoints asynchronously", "[asio][endpoint]") {
+    ::asio::io_context ioc;
+    std::array<std::byte, 1> storage{};
+    int completions{};
+    auto handler =
+        ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
+            REQUIRE(error == loom::errc::invalid_argument);
+            REQUIRE(bytes == 0);
+            ++completions;
+        });
+    loom::asio::initiate_fabric_send{nullptr}(handler, ::asio::buffer(storage));
+    REQUIRE(completions == 0);
+    ioc.run();
+    REQUIRE(completions == 1);
 }

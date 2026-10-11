@@ -225,7 +225,11 @@ struct initiate_fabric_send {
             std::forward<Handler>(handler), executor, ep_, buffers);
         ctx->set_transfer_size(ctx->buffers().bytes);
 
-        auto result = ep_->sendv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+        auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
+                          : make_error_result<void>(errc::invalid_argument);
+        if (result) {
+            result = ep_->sendv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+        }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
@@ -251,7 +255,11 @@ struct initiate_fabric_recv {
         auto ctx = make_buffered_asio_context<true>(
             std::forward<Handler>(handler), executor, ep_, buffers);
 
-        auto result = ep_->recvv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+        auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::receive)
+                          : make_error_result<void>(errc::invalid_argument);
+        if (result) {
+            result = ep_->recvv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+        }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
@@ -280,12 +288,16 @@ struct initiate_fabric_tagged_send {
             std::forward<Handler>(handler), executor, ep_, buffers);
         ctx->set_transfer_size(ctx->buffers().bytes);
 
-        auto result = loom::tagged_sendv(*ep_,
-                                         ctx->buffers().iov,
-                                         ctx->buffers().descriptors,
-                                         fabric_addrs::unspecified,
-                                         tag,
-                                         ctx->as_fi_context());
+        auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
+                          : make_error_result<void>(errc::invalid_argument);
+        if (result) {
+            result = loom::tagged_sendv(*ep_,
+                                        ctx->buffers().iov,
+                                        ctx->buffers().descriptors,
+                                        fabric_addrs::unspecified,
+                                        tag,
+                                        ctx->as_fi_context());
+        }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
@@ -316,13 +328,17 @@ struct initiate_fabric_tagged_recv {
         auto ctx = make_buffered_asio_context<true>(
             std::forward<Handler>(handler), executor, ep_, buffers);
 
-        auto result = loom::tagged_recvv(*ep_,
-                                         ctx->buffers().iov,
-                                         ctx->buffers().descriptors,
-                                         fabric_addrs::unspecified,
-                                         tag,
-                                         ignore,
-                                         ctx->as_fi_context());
+        auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::receive)
+                          : make_error_result<void>(errc::invalid_argument);
+        if (result) {
+            result = loom::tagged_recvv(*ep_,
+                                        ctx->buffers().iov,
+                                        ctx->buffers().descriptors,
+                                        fabric_addrs::unspecified,
+                                        tag,
+                                        ignore,
+                                        ctx->as_fi_context());
+        }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
@@ -362,12 +378,16 @@ struct initiate_fabric_write {
         }
 
         const std::array remote_iov{rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-        auto result = rma::writev_to(*ep_,
-                                     ctx->buffers().iov,
-                                     ctx->buffers().descriptors,
-                                     peer,
-                                     remote_iov,
-                                     ctx->as_fi_context());
+        auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
+                          : make_error_result<void>(errc::invalid_argument);
+        if (result) {
+            result = rma::writev_to(*ep_,
+                                    ctx->buffers().iov,
+                                    ctx->buffers().descriptors,
+                                    peer,
+                                    remote_iov,
+                                    ctx->as_fi_context());
+        }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
@@ -407,12 +427,16 @@ struct initiate_fabric_read {
         }
 
         const std::array remote_iov{rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-        auto result = rma::readv_to(*ep_,
-                                    ctx->buffers().iov,
-                                    ctx->buffers().descriptors,
-                                    peer,
-                                    remote_iov,
-                                    ctx->as_fi_context());
+        auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
+                          : make_error_result<void>(errc::invalid_argument);
+        if (result) {
+            result = rma::readv_to(*ep_,
+                                   ctx->buffers().iov,
+                                   ctx->buffers().descriptors,
+                                   peer,
+                                   remote_iov,
+                                   ctx->as_fi_context());
+        }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
 };

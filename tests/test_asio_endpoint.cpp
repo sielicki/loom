@@ -5,6 +5,7 @@
  */
 
 #include <loom/asio.hpp>
+#include <loom/detail/impl/completion_queue_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 #include <loom/loom.hpp>
 
@@ -19,7 +20,12 @@
 TEST_CASE("deferred operations retain their buffer descriptors", "[asio][endpoint]") {
     ::asio::io_context ioc;
     std::size_t submitted{};
-    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops ops{.size = sizeof(fi_ops),
+               .close = [](fid*) { return 0; },
+               .bind = [](fid*, fid*, std::uint64_t) { return 0; }};
+    fid_cq cq_handle{.fid = {.ops = &ops}};
+    loom::completion_queue cq{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+        loom::get_default_resource(), &cq_handle)};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
         .sendv = [](fid_ep* ep, const iovec* iov, void**, std::size_t count, fi_addr_t, void*)
@@ -37,6 +43,7 @@ TEST_CASE("deferred operations retain their buffer descriptors", "[asio][endpoin
         &native,
         loom::endpoint_types::rdm,
         loom::address_format::unspecified)};
+    REQUIRE(fabric.bind_cq(cq, loom::cq_bind::transmit));
     loom::asio::endpoint endpoint{ioc.get_executor(), std::move(fabric)};
     std::array<std::byte, 64> storage{};
     std::array<::asio::mutable_buffer, 1> buffers{::asio::buffer(storage)};

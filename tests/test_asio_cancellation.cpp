@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/asio/basic_endpoint.hpp>
+#include <loom/detail/impl/completion_queue_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 
 #include <array>
@@ -27,7 +28,12 @@ struct cancellation_provider {
                 self.closed_while_pending = !self.pending.empty();
                 return self.closed_while_pending ? -FI_EBUSY : 0;
             },
+        .bind = [](fid*, fid*, std::uint64_t) { return 0; },
     };
+    fi_ops cq_ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fid_cq cq_handle{.fid = {.ops = &cq_ops}};
+    loom::completion_queue queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+        loom::get_default_resource(), &cq_handle)};
     fi_ops_ep endpoint_ops{
         .size = sizeof(fi_ops_ep),
         .cancel = [](fid* handle, void* context) -> ssize_t {
@@ -51,18 +57,21 @@ struct cancellation_provider {
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .ops = &endpoint_ops, .msg = &messages};
 
     auto endpoint() -> loom::endpoint {
-        return loom::endpoint{
+        auto ep = loom::endpoint{
             loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
                                                                        &handle,
                                                                        loom::endpoint_types::msg,
                                                                        loom::address_format::inet)};
+        REQUIRE(ep.bind_cq(queue, loom::cq_bind::recv));
+        return ep;
     }
 
     void complete(void* context, std::error_code error = {}) {
         std::erase(pending, context);
         loom::completion_event event;
         event.error = error;
-        loom::asio::dispatch_asio_completion(context, event);
+        event.context = loom::context_ptr<void>{context};
+        REQUIRE(queue.dispatch(event));
     }
 
     void complete_all() {
