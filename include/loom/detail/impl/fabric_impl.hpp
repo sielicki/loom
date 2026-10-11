@@ -105,14 +105,18 @@ auto fabric_info::get_fabric_attr() const -> std::optional<fabric_attributes> {
     }
 
     auto* attr = impl_->info->fabric_attr;
+    const auto* domain_attr = impl_->info->domain_attr;
 
     return fabric_attributes{
         .name = attr->name ? std::string_view{attr->name} : std::string_view{},
         .provider_name = attr->prov_name ? std::string_view{attr->prov_name} : std::string_view{},
         .provider_version = fabric_version{attr->prov_version},
-        .threading = threading_mode::safe,
-        .control_progress = progress_mode::manual,
-        .data_progress = progress_mode::manual,
+        .threading = domain_attr ? detail::from_fi_threading(domain_attr->threading)
+                                 : threading_mode::unspecified,
+        .control_progress = domain_attr ? detail::from_fi_progress(domain_attr->control_progress)
+                                        : progress_mode::unspecified,
+        .data_progress = domain_attr ? detail::from_fi_progress(domain_attr->data_progress)
+                                     : progress_mode::unspecified,
     };
 }
 

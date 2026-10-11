@@ -125,3 +125,49 @@ TEST_CASE("native progress modes round trip without changing manual requirements
     REQUIRE(policy.requires_manual_data_progress() == manual);
     REQUIRE(policy.supports_blocking_wait() == (native == FI_PROGRESS_AUTO));
 }
+
+TEST_CASE("fabric attributes report the selected domain's concurrency requirements",
+          "[fabric][attributes][progress]") {
+    const auto profile = GENERATE(0, 1, 2);
+    fi_domain_attr domain{};
+    domain.threading = profile == 0   ? FI_THREAD_DOMAIN
+                       : profile == 1 ? FI_THREAD_COMPLETION
+                                      : FI_THREAD_SAFE;
+    domain.control_progress = profile == 0   ? FI_PROGRESS_CONTROL_UNIFIED
+                              : profile == 1 ? FI_PROGRESS_MANUAL
+                                             : FI_PROGRESS_AUTO;
+    domain.data_progress = profile == 2 ? FI_PROGRESS_AUTO : FI_PROGRESS_MANUAL;
+    char name[] = "test_fabric";
+    char provider[] = "test_provider";
+    fi_fabric_attr fabric{};
+    fabric.name = name;
+    fabric.prov_name = provider;
+    fabric.prov_version = 42;
+    fi_info native{};
+    native.fabric_attr = &fabric;
+    native.domain_attr = &domain;
+    const auto info = wrap(native);
+    const auto attributes = info.get_fabric_attr();
+    const auto selected_domain = info.get_domain_attr();
+    REQUIRE(attributes);
+    REQUIRE(selected_domain);
+    CHECK(attributes->threading == selected_domain->threading);
+    CHECK(attributes->control_progress == selected_domain->control_progress);
+    CHECK(attributes->data_progress == selected_domain->data_progress);
+    REQUIRE(attributes->name == "test_fabric");
+    REQUIRE(attributes->provider_name == "test_provider");
+    REQUIRE(attributes->provider_version == loom::fabric_version{42U});
+}
+
+TEST_CASE("missing domain metadata does not imply fabric concurrency guarantees",
+          "[fabric][attributes][progress]") {
+    fi_fabric_attr fabric{};
+    fi_info native{};
+    native.fabric_attr = &fabric;
+    const auto info = wrap(native);
+    const auto attributes = info.get_fabric_attr();
+    REQUIRE(attributes);
+    CHECK(attributes->threading == loom::threading_mode::unspecified);
+    CHECK(attributes->control_progress == loom::progress_mode::unspecified);
+    CHECK(attributes->data_progress == loom::progress_mode::unspecified);
+}

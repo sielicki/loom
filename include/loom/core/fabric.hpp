@@ -41,6 +41,9 @@ struct fabric_impl;
 /**
  * @struct fabric_attributes
  * @brief Attributes describing a fabric instance.
+ *
+ * Threading and progress describe the domain in the same discovery entry.
+ * They are unspecified when that entry has no domain attributes.
  */
 struct fabric_attributes {
     std::string_view name;                                       ///< Fabric name
