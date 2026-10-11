@@ -231,7 +231,7 @@ struct initiate_fabric_send {
             const msg::send_message<> message{.iov = ctx->buffers().iov,
                                               .desc = ctx->buffers().descriptors,
                                               .context = ctx->as_fi_context()};
-            result = msg::sendmsg<operation_defaults::inherit>(
+            result = msg::sendmsg<operation_defaults::inherit_without_more>(
                 *ep_, message, msg::send_flag::completion);
         }
         finish_asio_submission(std::move(ctx), std::move(result));
@@ -265,7 +265,7 @@ struct initiate_fabric_recv {
             const msg::recv_message<> message{.iov = ctx->buffers().iov,
                                               .desc = ctx->buffers().descriptors,
                                               .context = ctx->as_fi_context()};
-            result = msg::recvmsg<operation_defaults::inherit>(
+            result = msg::recvmsg<operation_defaults::inherit_without_more>(
                 *ep_, message, msg::recv_flag::completion);
         }
         finish_asio_submission(std::move(ctx), std::move(result));
@@ -303,7 +303,7 @@ struct initiate_fabric_tagged_send {
                                                      .desc = ctx->buffers().descriptors,
                                                      .tag = tag,
                                                      .context = ctx->as_fi_context()};
-            result = msg::tagged_sendmsg<operation_defaults::inherit>(
+            result = msg::tagged_sendmsg<operation_defaults::inherit_without_more>(
                 *ep_, message, msg::send_flag::completion);
         }
         finish_asio_submission(std::move(ctx), std::move(result));
@@ -344,7 +344,7 @@ struct initiate_fabric_tagged_recv {
                                                      .tag = tag,
                                                      .ignore = ignore,
                                                      .context = ctx->as_fi_context()};
-            result = msg::tagged_recvmsg<operation_defaults::inherit>(
+            result = msg::tagged_recvmsg<operation_defaults::inherit_without_more>(
                 *ep_, message, msg::recv_flag::completion);
         }
         finish_asio_submission(std::move(ctx), std::move(result));
@@ -389,13 +389,14 @@ struct initiate_fabric_write {
         auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
-            result = rma::writev_to<operation_defaults::inherit>(*ep_,
-                                                                 ctx->buffers().iov,
-                                                                 ctx->buffers().descriptors,
-                                                                 peer,
-                                                                 remote_iov,
-                                                                 op_flag::completion,
-                                                                 ctx->as_fi_context());
+            result =
+                rma::writev_to<operation_defaults::inherit_without_more>(*ep_,
+                                                                         ctx->buffers().iov,
+                                                                         ctx->buffers().descriptors,
+                                                                         peer,
+                                                                         remote_iov,
+                                                                         op_flag::completion,
+                                                                         ctx->as_fi_context());
         }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
@@ -439,13 +440,14 @@ struct initiate_fabric_read {
         auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
-            result = rma::readv_to<operation_defaults::inherit>(*ep_,
-                                                                ctx->buffers().iov,
-                                                                ctx->buffers().descriptors,
-                                                                peer,
-                                                                remote_iov,
-                                                                op_flag::completion,
-                                                                ctx->as_fi_context());
+            result =
+                rma::readv_to<operation_defaults::inherit_without_more>(*ep_,
+                                                                        ctx->buffers().iov,
+                                                                        ctx->buffers().descriptors,
+                                                                        peer,
+                                                                        remote_iov,
+                                                                        op_flag::completion,
+                                                                        ctx->as_fi_context());
         }
         finish_asio_submission(std::move(ctx), std::move(result));
     }

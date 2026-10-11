@@ -208,8 +208,8 @@ public:
         }
         const iovec buffer{const_cast<std::byte*>(buffer_.data()), buffer_.size()};
         const msg::send_message<> message{.iov = {&buffer, 1}, .context = this->as_fi_context()};
-        auto result =
-            msg::sendmsg<operation_defaults::inherit>(*ep_, message, msg::send_flag::completion);
+        auto result = msg::sendmsg<operation_defaults::inherit_without_more>(
+            *ep_, message, msg::send_flag::completion);
         if (!result) {
             this->complete_error(result.error());
         }
@@ -264,8 +264,8 @@ public:
         }
         const iovec buffer{buffer_.data(), buffer_.size()};
         const msg::recv_message<> message{.iov = {&buffer, 1}, .context = this->as_fi_context()};
-        auto result =
-            msg::recvmsg<operation_defaults::inherit>(*ep_, message, msg::recv_flag::completion);
+        auto result = msg::recvmsg<operation_defaults::inherit_without_more>(
+            *ep_, message, msg::recv_flag::completion);
         if (!result) {
             this->complete_error(result.error());
         }
@@ -307,7 +307,7 @@ public:
         const iovec buffer{const_cast<std::byte*>(buffer_.data()), buffer_.size()};
         const msg::tagged_send_message<> message{
             .iov = {&buffer, 1}, .tag = tag_, .context = this->as_fi_context()};
-        auto result = msg::tagged_sendmsg<operation_defaults::inherit>(
+        auto result = msg::tagged_sendmsg<operation_defaults::inherit_without_more>(
             *ep_, message, msg::send_flag::completion);
         if (!result) {
             this->complete_error(result.error());
@@ -362,7 +362,7 @@ public:
         const iovec buffer{buffer_.data(), buffer_.size()};
         const msg::tagged_recv_message<> message{
             .iov = {&buffer, 1}, .tag = tag_, .ignore = ignore_, .context = this->as_fi_context()};
-        auto result = msg::tagged_recvmsg<operation_defaults::inherit>(
+        auto result = msg::tagged_recvmsg<operation_defaults::inherit_without_more>(
             *ep_, message, msg::recv_flag::completion);
         if (!result) {
             this->complete_error(result.error());
@@ -425,7 +425,7 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result = rma::read_to<operation_defaults::inherit>(
+        auto result = rma::read_to<operation_defaults::inherit_without_more>(
             *ep_, buffer_, descriptor_, peer_, remote_, op_flag::completion, this->as_fi_context());
         if (!result) {
             this->complete_error(result.error());
@@ -491,7 +491,7 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result = rma::write_to<operation_defaults::inherit>(
+        auto result = rma::write_to<operation_defaults::inherit_without_more>(
             *ep_, buffer_, descriptor_, peer_, remote_, op_flag::completion, this->as_fi_context());
         if (!result) {
             this->complete_error(result.error());

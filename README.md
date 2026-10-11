@@ -937,7 +937,8 @@ for each IOV and preserve multiple remote segments.
 The Asio and sender messaging and RMA paths explicitly request a CQ
 completion, including when the endpoint uses selective completion. They
 extend the endpoint's creation flags for the operation's direction,
-preserving configured fence and delivery requirements.
+preserving configured fence and delivery requirements while clearing inherited
+`FI_MORE`. Each operation can complete without a later submission to end a batch.
 Configure those defaults before creating the endpoint or scalable context;
 subsequent raw `FI_SETOPSFLAG` changes are not tracked by Loom.
 

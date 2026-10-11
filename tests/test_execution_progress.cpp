@@ -51,6 +51,7 @@ struct provider {
     };
     std::vector<pending_atomic> atomic_pending;
     std::vector<void*> pending;
+    std::vector<void*> deferred;
     bool fail{};
     bool selective_completion{};
     std::uint64_t submitted_flags{};
@@ -230,7 +231,8 @@ struct provider {
         loom::get_default_resource(), &cq_handle)};
     loom::endpoint ep;
 
-    explicit provider(std::uint64_t receive_defaults = FI_MORE)
+    explicit provider(std::uint64_t receive_defaults = FI_MORE,
+                      std::uint64_t transmit_defaults = FI_FENCE)
         : ep{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
               loom::get_default_resource(),
               &ep_handle,
@@ -239,7 +241,7 @@ struct provider {
               0UZ,
               0UZ,
               loom::caps{},
-              FI_FENCE,
+              transmit_defaults,
               receive_defaults)} {}
 
     auto post(void* ctx, std::uint64_t flags = 0) -> ssize_t {
@@ -248,8 +250,14 @@ struct provider {
         // Exercise the provider's right to use all FI_CONTEXT2 storage.
         std::ranges::fill(static_cast<fi_context2*>(ctx)->internal, nullptr);
         if (!selective_completion || (flags & FI_COMPLETION))
-            pending.push_back(ctx);
+            deferred.push_back(ctx);
+        if (!(flags & FI_MORE))
+            flush();
         return 0;
+    }
+    void flush() {
+        pending.insert(pending.end(), deferred.begin(), deferred.end());
+        deferred.clear();
     }
     auto post_message(const auto& message, std::uint64_t flags) -> ssize_t {
         submitted_flags = flags;
@@ -353,7 +361,7 @@ TEST_CASE("message senders request selective completions", "[execution][progress
     auto run = [&](auto sender) {
         auto operation = loom::execution::connect(std::move(sender), receiver{&state});
         loom::execution::start(operation);
-        CHECK(native.submitted_flags == (FI_COMPLETION | (receive ? FI_MORE : FI_FENCE)));
+        CHECK(native.submitted_flags == (FI_COMPLETION | (receive ? 0 : FI_FENCE)));
         if (status) {
             REQUIRE(state.calls == 1);
             REQUIRE(state.error == loom::make_error_code_from_fi_errno(-status));
@@ -422,6 +430,77 @@ TEST_CASE("receive senders require completion lengths", "[execution][progress][m
     REQUIRE(native.cq.dispatch(sent));
     REQUIRE(state.calls == 1);
     REQUIRE_FALSE(state.error);
+}
+
+TEST_CASE("senders complete without a later batch submission", "[execution][progress][batch]") {
+    provider native{FI_MORE, FI_MORE | FI_FENCE | FI_DELIVERY_COMPLETE};
+    native.selective_completion = true;
+    std::array<std::byte, 16> storage{};
+    completion_state state;
+    auto run = [&](auto sender, bool receive = false) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        REQUIRE(state.calls == 0);
+        CHECK(native.submitted_flags ==
+              (FI_COMPLETION | (receive ? 0 : FI_FENCE | FI_DELIVERY_COMPLETE)));
+        CHECK(loom::execution::poll_completions(native.cq).value().completed == 1);
+        CHECK(state.calls == 1);
+        // Retire a deferred pre-fix operation before its storage goes away.
+        if (!native.deferred.empty()) {
+            native.flush();
+            REQUIRE(loom::execution::poll_completions(native.cq).value().completed == 1);
+        }
+        REQUIRE(state.calls == 1);
+        REQUIRE_FALSE(state.error);
+        REQUIRE(native.pending.empty());
+        REQUIRE(native.deferred.empty());
+    };
+    const auto messages = loom::async(native.ep);
+    const auto rma = loom::rma_async(native.ep);
+    SECTION("send") {
+        run(messages.send(storage, &native.cq));
+    }
+    SECTION("receive") {
+        run(messages.recv(storage, &native.cq), true);
+    }
+    SECTION("tagged send") {
+        run(messages.tagged_send(storage, 42, &native.cq));
+    }
+    SECTION("tagged receive") {
+        run(messages.tagged_recv(storage, 42, 0x80, &native.cq), true);
+    }
+    SECTION("read") {
+        run(rma.read(storage, loom::rma_addr{0x1000}, loom::mr_key{1}, &native.cq));
+    }
+    SECTION("write") {
+        run(rma.write(storage, loom::rma_addr{0x1000}, loom::mr_key{1}, &native.cq));
+    }
+    SECTION("fetch add") {
+        run(rma.fetch_add<std::uint64_t>(
+            loom::rma_addr{0x1000}, 1, loom::mr_key{1}, nullptr, &native.cq));
+    }
+    SECTION("compare swap") {
+        run(rma.compare_swap<std::uint64_t>(
+            loom::rma_addr{0x1000}, 42, 43, loom::mr_key{1}, nullptr, &native.cq));
+    }
+}
+
+TEST_CASE("core messages retain explicit batching", "[execution][progress][batch]") {
+    provider native{0, FI_MORE};
+    std::array<std::byte, 16> storage{};
+    std::array<fi_context2, 2> contexts{};
+    const iovec buffer{storage.data(), storage.size()};
+    loom::msg::send_message<> message{.iov = {&buffer, 1}, .context = &contexts[0]};
+    REQUIRE(loom::msg::sendmsg<loom::operation_defaults::inherit>(
+        native.ep, message, loom::msg::send_flag::completion));
+    REQUIRE_FALSE(native.cq.poll());
+    REQUIRE(native.deferred.size() == 1);
+    message.context = &contexts[1];
+    REQUIRE(loom::msg::sendmsg(native.ep, message, loom::msg::send_flag::completion));
+    REQUIRE(native.deferred.empty());
+    REQUIRE(native.cq.poll().value().context.get() == &contexts[0]);
+    REQUIRE(native.cq.poll().value().context.get() == &contexts[1]);
+    REQUIRE(native.pending.empty());
 }
 
 TEST_CASE("receive senders reject multi-receive defaults", "[execution][progress][message]") {

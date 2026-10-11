@@ -27,6 +27,8 @@ struct vector_provider {
     std::vector<void*> descriptors;
     int submission_status{};
     std::uint64_t submission_flags{};
+    bool completion_pending{};
+    loom::completion_direction completion_direction{};
 
     static auto capture_rma(fid_ep* ep, const fi_msg_rma* msg, std::uint64_t flags) -> ssize_t {
         auto& self = *static_cast<vector_provider*>(ep->fid.context);
@@ -77,13 +79,29 @@ struct vector_provider {
         }
         self.buffers = {iov, count};
         self.context = context;
+        self.completion_pending = true;
+        self.completion_direction = direction;
         return 0;
     }
 
     fi_ops ops{.size = sizeof(fi_ops),
                .close = [](fid*) { return 0; },
                .bind = [](fid*, fid*, std::uint64_t) { return 0; }};
-    fid_cq tx_handle{.fid = {.ops = &ops}}, rx_handle{.fid = {.ops = &ops}};
+    fi_ops_cq completions{
+        .size = sizeof(fi_ops_cq),
+        .read = [](fid_cq* cq, void* output, std::size_t) -> ssize_t {
+            auto& self = *static_cast<vector_provider*>(cq->fid.context);
+            const auto receive = self.completion_direction == loom::completion_direction::receive;
+            if (!self.completion_pending || (self.submission_flags & FI_MORE) ||
+                cq != (receive ? &self.rx_handle : &self.tx_handle))
+                return -FI_EAGAIN;
+            self.completion_pending = false;
+            *static_cast<fi_cq_tagged_entry*>(output) = {.op_context = self.context, .len = 6};
+            return 1;
+        },
+    };
+    fid_cq tx_handle{.fid = {.context = this, .ops = &ops}, .ops = &completions},
+        rx_handle{.fid = {.context = this, .ops = &ops}, .ops = &completions};
     loom::completion_queue tx{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
         loom::get_default_resource(), &tx_handle)};
     loom::completion_queue rx{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
@@ -158,7 +176,8 @@ struct vector_provider {
         .fid = {.context = this, .ops = &ops}, .msg = &messages, .rma = &rma, .tagged = &tags};
 
     auto endpoint(loom::cq_bind_flags bindings = loom::cq_bind::transmit | loom::cq_bind::recv,
-                  std::uint64_t receive_defaults = FI_MORE) -> loom::endpoint {
+                  std::uint64_t receive_defaults = FI_MORE,
+                  std::uint64_t transmit_defaults = FI_FENCE) -> loom::endpoint {
         auto ep = loom::endpoint{
             loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
                                                                        &handle,
@@ -167,7 +186,7 @@ struct vector_provider {
                                                                        0UZ,
                                                                        0UZ,
                                                                        loom::caps{},
-                                                                       FI_FENCE,
+                                                                       transmit_defaults,
                                                                        receive_defaults)};
         if (bindings.has(loom::cq_bind::transmit))
             REQUIRE(ep.bind_cq(tx, loom::cq_bind::transmit));
@@ -257,7 +276,8 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     REQUIRE(completed == 1);
 }
 
-TEST_CASE("Asio operations register their buffer sequences before submission", "[asio][endpoint]") {
+TEST_CASE("Asio operations register and complete without later submissions",
+          "[asio][endpoint][batch]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5);
     const auto initiation_helper = GENERATE(false, true);
     const auto bound = GENERATE(false, true);
@@ -270,7 +290,9 @@ TEST_CASE("Asio operations register their buffer sequences before submission", "
     loom::asio::endpoint ep{ioc.get_executor(),
                             native.endpoint(bound ? loom::cq_bind::transmit | loom::cq_bind::recv
                                             : receive ? loom::cq_bind::transmit
-                                                      : loom::cq_bind::recv)};
+                                                      : loom::cq_bind::recv,
+                                            FI_MORE,
+                                            FI_MORE | FI_FENCE | FI_DELIVERY_COMPLETE)};
     loom::memory_region mr;
     const loom::remote_memory remote{0x1000, 1, 4096};
     std::array<char, 2> first{'a', 'b'};
@@ -336,8 +358,11 @@ TEST_CASE("Asio operations register their buffer sequences before submission", "
     buffers = {};
     const_buffers = {};
     REQUIRE(completions == 0);
+    if (bound) {
+        CHECK(native.submission_flags ==
+              (FI_COMPLETION | (receive ? 0 : FI_FENCE | FI_DELIVERY_COMPLETE)));
+    }
     if (bound && operation < 4) {
-        CHECK(native.submission_flags == (FI_COMPLETION | (receive ? FI_MORE : FI_FENCE)));
         CHECK(native.descriptors.empty());
     }
     if (expected) {
@@ -368,11 +393,17 @@ TEST_CASE("Asio operations register their buffer sequences before submission", "
     if (operation >= 4) {
         REQUIRE(native.remote_length == 6);
     }
-    loom::completion_event event;
-    event.bytes_transferred = operation == 1 || operation == 3 ? 6 : 0;
-    event.context = loom::context_ptr<void>{native.context};
     auto& queue = receive ? native.rx : native.tx;
     auto& other = receive ? native.tx : native.rx;
+    auto completion = queue.poll();
+    CHECK(completion.has_value());
+    // Flush deferred pre-fix work before releasing the operation storage.
+    if (!completion) {
+        native.submission_flags &= ~FI_MORE;
+        completion = queue.poll();
+        REQUIRE(completion);
+    }
+    const auto& event = *completion;
     // The provider owns every scratch slot; routing must not inspect them.
     auto& scratch = *static_cast<fi_context2*>(native.context);
     for (auto& slot : scratch.internal)
