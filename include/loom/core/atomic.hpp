@@ -5,6 +5,7 @@
 
 #include <concepts>
 #include <span>
+#include <type_traits>
 
 #include "loom/core/concepts/strong_types.hpp"
 #include "loom/core/endpoint.hpp"
@@ -90,54 +91,57 @@ struct int128_type {};
 struct uint128_type {};
 #endif
 
+namespace detail {
+template <typename T>
+struct datatype_traits {};
+
+template <>
+struct datatype_traits<std::int8_t> : std::integral_constant<datatype, datatype::int8> {};
+template <>
+struct datatype_traits<std::uint8_t> : std::integral_constant<datatype, datatype::uint8> {};
+template <>
+struct datatype_traits<std::int16_t> : std::integral_constant<datatype, datatype::int16> {};
+template <>
+struct datatype_traits<std::uint16_t> : std::integral_constant<datatype, datatype::uint16> {};
+template <>
+struct datatype_traits<std::int32_t> : std::integral_constant<datatype, datatype::int32> {};
+template <>
+struct datatype_traits<std::uint32_t> : std::integral_constant<datatype, datatype::uint32> {};
+template <>
+struct datatype_traits<std::int64_t> : std::integral_constant<datatype, datatype::int64> {};
+template <>
+struct datatype_traits<std::uint64_t> : std::integral_constant<datatype, datatype::uint64> {};
+template <>
+struct datatype_traits<float> : std::integral_constant<datatype, datatype::float32> {};
+template <>
+struct datatype_traits<double> : std::integral_constant<datatype, datatype::double64> {};
+template <>
+struct datatype_traits<long double> : std::integral_constant<datatype, datatype::long_double> {};
+#if LOOM_HAS_INT128
+template <>
+struct datatype_traits<int128_type> : std::integral_constant<datatype, datatype::int128> {};
+template <>
+struct datatype_traits<uint128_type> : std::integral_constant<datatype, datatype::uint128> {};
+#endif
+}  // namespace detail
+
 /**
  * @concept atomic_type
- * @brief Concept for types that support atomic operations.
+ * @brief Unqualified value types with an atomic datatype mapping.
+ * Provider support for each operation, datatype, and count still requires a query.
  * @tparam T The type to check.
  */
 template <typename T>
-concept atomic_type =
-#if LOOM_HAS_INT128
-    std::is_arithmetic_v<T> || std::is_same_v<T, int128_type> || std::is_same_v<T, uint128_type>;
-#else
-    std::is_arithmetic_v<T>;
-#endif
+concept atomic_type = requires { detail::datatype_traits<T>::value; };
 
 /**
  * @brief Gets the datatype enum for an atomic type.
  * @tparam T The C++ type to map to a datatype.
  * @return The corresponding datatype value.
  */
-template <typename T>
-consteval auto get_datatype() -> datatype {
-    if constexpr (std::is_same_v<T, std::int8_t>)
-        return datatype::int8;
-    else if constexpr (std::is_same_v<T, std::uint8_t>)
-        return datatype::uint8;
-    else if constexpr (std::is_same_v<T, std::int16_t>)
-        return datatype::int16;
-    else if constexpr (std::is_same_v<T, std::uint16_t>)
-        return datatype::uint16;
-    else if constexpr (std::is_same_v<T, std::int32_t>)
-        return datatype::int32;
-    else if constexpr (std::is_same_v<T, std::uint32_t>)
-        return datatype::uint32;
-    else if constexpr (std::is_same_v<T, std::int64_t>)
-        return datatype::int64;
-    else if constexpr (std::is_same_v<T, std::uint64_t>)
-        return datatype::uint64;
-    else if constexpr (std::is_same_v<T, float>)
-        return datatype::float32;
-    else if constexpr (std::is_same_v<T, double>)
-        return datatype::double64;
-#if LOOM_HAS_INT128
-    else if constexpr (std::is_same_v<T, int128_type>)
-        return datatype::int128;
-    else if constexpr (std::is_same_v<T, uint128_type>)
-        return datatype::uint128;
-#endif
-    else
-        static_assert(sizeof(T) == 0, "Unsupported atomic datatype");
+template <atomic_type T>
+consteval auto get_datatype() noexcept -> datatype {
+    return detail::datatype_traits<T>::value;
 }
 
 /**

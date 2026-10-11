@@ -12,6 +12,16 @@
 using namespace loom;
 
 namespace {
+template <typename T>
+concept mapped_atomic = requires { atomic::get_datatype<T>(); };
+
+template <typename T>
+concept typed_atomic = requires(endpoint& ep, const T& input, T* output, remote_memory remote) {
+    atomic::add_to<T>(ep, input, nullptr, fabric_addr{1}, remote);
+    atomic::fetch_add_to<T>(ep, input, output, nullptr, nullptr, fabric_addr{1}, remote);
+    atomic::cas_to<T>(ep, input, input, output, nullptr, nullptr, nullptr, fabric_addr{1}, remote);
+};
+
 struct atomic_provider {
     std::uint64_t remote_value{42};
     const void* operand{};
@@ -155,6 +165,28 @@ TEST_CASE("atomic_type concept", "[atomic]") {
     static_assert(atomic::atomic_type<uint64_t>);
     static_assert(atomic::atomic_type<float>);
     static_assert(atomic::atomic_type<double>);
+    static_assert(atomic::atomic_type<long double>);
+
+    static_assert(!atomic::atomic_type<bool>);
+    static_assert(!atomic::atomic_type<char>);
+    static_assert(!atomic::atomic_type<wchar_t>);
+    static_assert(!atomic::atomic_type<char8_t>);
+    static_assert(!atomic::atomic_type<char16_t>);
+    static_assert(!atomic::atomic_type<char32_t>);
+    static_assert(!atomic::atomic_type<const std::uint64_t>);
+    static_assert(!atomic::atomic_type<volatile std::uint64_t>);
+    static_assert(!atomic::atomic_type<std::uint64_t&>);
+    static_assert(!mapped_atomic<bool>);
+    static_assert(!mapped_atomic<char>);
+    static_assert(!mapped_atomic<const std::uint64_t>);
+    static_assert(!mapped_atomic<volatile std::uint64_t>);
+    static_assert(!mapped_atomic<void>);
+    static_assert(!typed_atomic<bool>);
+    static_assert(!typed_atomic<char>);
+    static_assert(!typed_atomic<const std::uint64_t>);
+    static_assert(!typed_atomic<volatile std::uint64_t>);
+    static_assert(typed_atomic<std::uint64_t>);
+    static_assert(typed_atomic<long double>);
 
     static_assert(!atomic::atomic_type<void*>);
     static_assert(!atomic::atomic_type<std::string>);
@@ -232,6 +264,13 @@ TEST_CASE("get_datatype consteval", "[atomic]") {
 
     static_assert(atomic::get_datatype<float>() == atomic::datatype::float32);
     static_assert(atomic::get_datatype<double>() == atomic::datatype::double64);
+    static_assert(atomic::get_datatype<long double>() == atomic::datatype::long_double);
+#if LOOM_HAS_INT128
+    static_assert(atomic::atomic_type<atomic::int128_type>);
+    static_assert(atomic::atomic_type<atomic::uint128_type>);
+    static_assert(atomic::get_datatype<atomic::int128_type>() == atomic::datatype::int128);
+    static_assert(atomic::get_datatype<atomic::uint128_type>() == atomic::datatype::uint128);
+#endif
 }
 
 TEST_CASE("atomic operation enums", "[atomic]") {

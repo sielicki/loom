@@ -30,32 +30,8 @@ struct element_description {
 template <typename T>
 struct element_traits {};
 
-template <>
-struct element_traits<std::int8_t> : element_description<std::int8_t, atomic::datatype::int8> {};
-template <>
-struct element_traits<std::uint8_t> : element_description<std::uint8_t, atomic::datatype::uint8> {};
-template <>
-struct element_traits<std::int16_t> : element_description<std::int16_t, atomic::datatype::int16> {};
-template <>
-struct element_traits<std::uint16_t>
-    : element_description<std::uint16_t, atomic::datatype::uint16> {};
-template <>
-struct element_traits<std::int32_t> : element_description<std::int32_t, atomic::datatype::int32> {};
-template <>
-struct element_traits<std::uint32_t>
-    : element_description<std::uint32_t, atomic::datatype::uint32> {};
-template <>
-struct element_traits<std::int64_t> : element_description<std::int64_t, atomic::datatype::int64> {};
-template <>
-struct element_traits<std::uint64_t>
-    : element_description<std::uint64_t, atomic::datatype::uint64> {};
-template <>
-struct element_traits<float> : element_description<float, atomic::datatype::float32> {};
-template <>
-struct element_traits<double> : element_description<double, atomic::datatype::double64> {};
-template <>
-struct element_traits<long double>
-    : element_description<long double, atomic::datatype::long_double> {};
+template <atomic::atomic_type T>
+struct element_traits<T> : element_description<T, atomic::get_datatype<T>()> {};
 template <>
 struct element_traits<std::complex<float>>
     : element_description<std::complex<float>, atomic::datatype::float_complex> {};
@@ -65,14 +41,6 @@ struct element_traits<std::complex<double>>
 template <>
 struct element_traits<std::complex<long double>>
     : element_description<std::complex<long double>, atomic::datatype::long_double_complex> {};
-#if LOOM_HAS_INT128
-template <>
-struct element_traits<atomic::int128_type>
-    : element_description<atomic::int128_type, atomic::datatype::int128> {};
-template <>
-struct element_traits<atomic::uint128_type>
-    : element_description<atomic::uint128_type, atomic::datatype::uint128> {};
-#endif
 
 constexpr auto describe_element(atomic::datatype type) noexcept -> std::optional<element_layout> {
     switch (type) {

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -26,6 +27,7 @@ struct atomic_peer_provider {
     void* context{};
     std::size_t count{};
     fi_op operation{};
+    fi_datatype datatype{FI_UINT64};
 
     static auto record(fid_ep* ep,
                        const void* input,
@@ -45,7 +47,7 @@ struct atomic_peer_provider {
         ++self.calls;
         REQUIRE(address == 24);
         REQUIRE(key == 0x123456789abcdef0ULL);
-        REQUIRE(datatype == FI_UINT64);
+        REQUIRE(datatype == self.datatype);
         self.peer = peer;
         self.input = input;
         self.comparison = comparison;
@@ -216,8 +218,10 @@ struct atomic_peer_provider {
 };
 }  // namespace
 
-TEST_CASE("atomic peer submissions preserve registrations and deferred operands",
-          "[atomic][peer]") {
+TEMPLATE_TEST_CASE("atomic peer submissions preserve registrations and deferred operands",
+                   "[atomic][peer]",
+                   std::uint64_t,
+                   long double) {
     using namespace loom;
     const auto kind = GENERATE(0, 1, 2, 3);
     const auto typed = GENERATE(false, true);
@@ -225,7 +229,12 @@ TEST_CASE("atomic peer submissions preserve registrations and deferred operands"
     const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
     atomic_peer_provider provider;
     provider.status = status;
-    std::array<std::uint64_t, 2> operand{3, 4}, comparison{42, 43}, result{};
+    provider.datatype = std::same_as<TestType, long double> ? FI_LONG_DOUBLE : FI_UINT64;
+    constexpr auto datatype = std::same_as<TestType, long double> ? atomic::datatype::long_double
+                                                                  : atomic::datatype::uint64;
+    std::array<TestType, 2> operand{3, 4}, comparison{42, 43}, result{};
+    const auto& input = operand[0];
+    const auto& expected = comparison[0];
     fid_mr operand_handle{.fid = {.ops = &provider.lifetime}, .mem_desc = &operand_handle};
     fid_mr compare_handle{.fid = {.ops = &provider.lifetime}, .mem_desc = &compare_handle};
     fid_mr result_handle{.fid = {.ops = &provider.lifetime}, .mem_desc = &result_handle};
@@ -242,20 +251,20 @@ TEST_CASE("atomic peer submissions preserve registrations and deferred operands"
     auto submitted = [&]() -> loom::result<void> {
         switch (kind) {
             case 0:
-                return typed ? atomic::add_to(
-                                   provider.ep, operand[0], &operand_mr, peer, remote, &context)
-                             : atomic::execute_to(provider.ep,
-                                                  atomic::operation::sum,
-                                                  atomic::datatype::uint64,
-                                                  operand.data(),
-                                                  count,
-                                                  &operand_mr,
-                                                  peer,
-                                                  remote,
-                                                  &context);
+                return typed
+                           ? atomic::add_to(provider.ep, input, &operand_mr, peer, remote, &context)
+                           : atomic::execute_to(provider.ep,
+                                                atomic::operation::sum,
+                                                datatype,
+                                                operand.data(),
+                                                count,
+                                                &operand_mr,
+                                                peer,
+                                                remote,
+                                                &context);
             case 1:
                 return typed ? atomic::fetch_add_to(provider.ep,
-                                                    operand[0],
+                                                    input,
                                                     result.data(),
                                                     &operand_mr,
                                                     &result_mr,
@@ -264,7 +273,7 @@ TEST_CASE("atomic peer submissions preserve registrations and deferred operands"
                                                     &context)
                              : atomic::fetch_to(provider.ep,
                                                 atomic::operation::sum,
-                                                atomic::datatype::uint64,
+                                                datatype,
                                                 operand.data(),
                                                 result.data(),
                                                 count,
@@ -275,8 +284,8 @@ TEST_CASE("atomic peer submissions preserve registrations and deferred operands"
                                                 &context);
             case 2:
                 return typed ? atomic::cas_to(provider.ep,
-                                              comparison[0],
-                                              operand[0],
+                                              expected,
+                                              input,
                                               result.data(),
                                               &compare_mr,
                                               &operand_mr,
@@ -285,7 +294,7 @@ TEST_CASE("atomic peer submissions preserve registrations and deferred operands"
                                               remote,
                                               &context)
                              : atomic::compare_swap_to(provider.ep,
-                                                       atomic::datatype::uint64,
+                                                       datatype,
                                                        comparison.data(),
                                                        operand.data(),
                                                        result.data(),
@@ -299,7 +308,7 @@ TEST_CASE("atomic peer submissions preserve registrations and deferred operands"
             default:
                 return atomic::inject_to(provider.ep,
                                          atomic::operation::sum,
-                                         atomic::datatype::uint64,
+                                         datatype,
                                          operand.data(),
                                          count,
                                          peer,
@@ -322,11 +331,11 @@ TEST_CASE("atomic peer submissions preserve registrations and deferred operands"
     REQUIRE(provider.operation == (kind == 2 ? FI_CSWAP : FI_SUM));
     if (status == 0 && (kind == 1 || kind == 2)) {
         // The provider first touches borrowed operands after the wrapper returns.
-        auto* output = static_cast<std::uint64_t*>(provider.output);
-        const auto* input = static_cast<const std::uint64_t*>(provider.input);
+        auto* output = static_cast<TestType*>(provider.output);
+        const auto* input = static_cast<const TestType*>(provider.input);
         for (std::size_t i = 0; i < count; ++i) {
             if (kind == 2)
-                REQUIRE(static_cast<const std::uint64_t*>(provider.comparison)[i] == 42 + i);
+                REQUIRE(static_cast<const TestType*>(provider.comparison)[i] == 42 + i);
             output[i] = input[i] + 42;
             REQUIRE(result[i] == 45 + i);
         }
