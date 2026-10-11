@@ -35,7 +35,7 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = [ autoconf automake libtool perl flex python3 pkg-config ];
   buildInputs = [ hwloc libevent pmix prrte zlib libfabric ] ++ lib.optional (loomBridge != null) loomBridge;
-  patches = [ ./ofi-string-ownership.patch ./smsc-selection-ownership.patch ] ++ lib.optional (loomBridge != null) ./loom-backend.patch;
+  patches = [ ./ofi-string-ownership.patch ./smsc-selection-ownership.patch ./mca-registration-ownership.patch ] ++ lib.optional (loomBridge != null) ./loom-backend.patch;
 
   postPatch = ''
     patchShebangs .
@@ -82,6 +82,14 @@ stdenv.mkDerivation {
       -o test-smsc-select
     ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
       UBSAN_OPTIONS=halt_on_error=1 timeout 30 ./test-smsc-select
+
+    "$CC" -std=c11 -D_GNU_SOURCE -g -O1 -Wall -Wextra -Werror \
+      -fsanitize=address,undefined -fno-omit-frame-pointer \
+      -I. -Iopal/include -Iompi/include ${./test-mca-registration.c} \
+      -Lopal/.libs -Wl,-rpath,"$PWD/opal/.libs" -lopen-pal -pthread \
+      -o test-mca-registration
+    ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+      UBSAN_OPTIONS=halt_on_error=1 timeout 30 ./test-mca-registration
   '';
 
   postInstall = ''

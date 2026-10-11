@@ -1,0 +1,33 @@
+--- a/opal/mca/base/mca_base_var.c
++++ b/opal/mca/base/mca_base_var.c
+@@ -1520,13 +1520,24 @@
+     var->mbv_enumerator = enumerator;
+
+     if (!original) {
++        /* Existing storage already holds an owned value. Copy a new binding
++         * before retiring the old value, as the new default may alias it. */
++        if ((MCA_BASE_VAR_TYPE_STRING == type || MCA_BASE_VAR_TYPE_VERSION_STRING == type)
++            && var->mbv_storage != storage) {
++            char *value = ((char **) storage)[0];
++            if (NULL != value) {
++                value = strdup(value);
++                if (NULL == value) {
++                    return OPAL_ERR_OUT_OF_RESOURCE;
++                }
++            }
++            if (NULL != var->mbv_storage) {
++                free(var->mbv_storage->stringval);
++                var->mbv_storage->stringval = NULL;
++            }
++            ((char **) storage)[0] = value;
++        }
+         var->mbv_storage = storage;
+-
+-        /* make a copy of the default string value */
+-        if ((MCA_BASE_VAR_TYPE_STRING == type || MCA_BASE_VAR_TYPE_VERSION_STRING == type)
+-            && NULL != ((char **) storage)[0]) {
+-            ((char **) storage)[0] = strdup(((char **) storage)[0]);
+-        }
+     } else {
+         /* synonym variable */
+         opal_value_array_append_item(&original->mbv_synonyms, &var_index);
