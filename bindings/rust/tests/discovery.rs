@@ -93,6 +93,23 @@ fn domain_filters_and_registration_facts_reach_rust() {
     let attributes = entry.attributes().unwrap();
     let fabric = Fabric::new(entry).unwrap();
     let domain = Domain::new(&fabric, entry).unwrap();
+    let mut endpoint = Endpoint::new(&domain, entry).unwrap();
+    // Sockets does not implement the CUDA policy option. A successful no-op
+    // would incorrectly authorize a direct GPU transfer profile.
+    for permitted in [false, true] {
+        assert!(matches!(
+            endpoint.set_cuda_api_permitted(permitted),
+            Err(Error::Cxx(_))
+        ));
+    }
+    let queue = CompletionQueue::with_options(&domain, 16, false).unwrap();
+    let addresses = AddressVector::new(&domain).unwrap();
+    endpoint
+        .bind_cq(&queue, CqBindFlags::TRANSMIT | CqBindFlags::RECV)
+        .unwrap();
+    endpoint.bind_av(&addresses).unwrap();
+    endpoint.enable().unwrap();
+    assert!(!endpoint.name().unwrap().is_empty());
     let mut buffer = [0_u8; 128];
     // Registration is dropped before the buffer, with no accepted operations.
     let registration = unsafe {

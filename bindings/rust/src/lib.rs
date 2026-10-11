@@ -641,6 +641,18 @@ impl Endpoint {
         Ok(Self { inner, _domain: domain.clone(), bound_queues: Vec::new(), bound_vectors: Vec::new() })
     }
 
+    /// Permit or forbid the provider from calling CUDA APIs during transfers.
+    /// Set this before enabling the endpoint. Consumers that require direct
+    /// device transfers must check that disabling CUDA API use succeeds; a
+    /// rejected option does not establish that contract. This does not prevent
+    /// the application from using CUDA for registration or visibility.
+    pub fn set_cuda_api_permitted(&mut self, permitted: bool) -> Result<()> {
+        Ok(ffi::ffi::endpoint_set_cuda_api_permitted(
+            self.inner.pin_mut(),
+            permitted,
+        )?)
+    }
+
     /// Enable the endpoint for communication.
     ///
     /// The endpoint must be bound to completion queues and address vectors

@@ -163,6 +163,12 @@ registration clones and accepted operations. Registration does not synchronize
 device producers, establish completion visibility, or enable endpoint-bound
 registrations. Those obligations remain with the consumer.
 
+Consumers that require transfers without provider CUDA API calls can set
+`Endpoint::set_cuda_api_permitted(false)` before enabling the endpoint.
+An unsupported or rejected option is an error and must prevent selecting
+that transfer profile. Application registration and visibility operations
+may still call CUDA APIs.
+
 Each operation checks that the local registration belongs to the endpoint's
 domain and covers the submitted range, and that the remote view is large
 enough. `RmaOptions` selects local, transmit, or delivery completion and

@@ -272,6 +272,8 @@ auto register_memory_with_options(const DomainHandle& dom,
 /// Enable an endpoint
 void endpoint_enable(EndpointHandle& ep);
 
+void endpoint_set_cuda_api_permitted(EndpointHandle& ep, bool permitted);
+
 /// Return the native close status, retaining endpoint ownership on failure.
 auto endpoint_close(EndpointHandle& ep) noexcept -> std::int32_t;
 

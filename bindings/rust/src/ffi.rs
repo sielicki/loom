@@ -365,6 +365,12 @@ pub mod ffi {
         /// Enable an endpoint.
         fn endpoint_enable(ep: Pin<&mut EndpointHandle>) -> Result<()>;
 
+        /// Configure whether the provider may call CUDA APIs during transfers.
+        fn endpoint_set_cuda_api_permitted(
+            ep: Pin<&mut EndpointHandle>,
+            permitted: bool,
+        ) -> Result<()>;
+
         /// Zero on close success; native negative status on failure.
         fn endpoint_close(ep: Pin<&mut EndpointHandle>) -> i32;
 

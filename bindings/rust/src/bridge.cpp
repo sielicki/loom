@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "loom-fabric/src/ffi.rs.h"
+#include "loom/core/endpoint_options.hpp"
 #include "loom/core/rma.hpp"
 #include "loom/detail/conversions.hpp"
 
@@ -272,6 +273,10 @@ auto register_memory_with_options(const DomainHandle& dom,
 
 void endpoint_enable(EndpointHandle& ep) {
     unwrap_void_or_throw(ep.get().enable());
+}
+
+void endpoint_set_cuda_api_permitted(EndpointHandle& ep, bool permitted) {
+    unwrap_void_or_throw(loom::set_cuda_api_permitted(ep.get(), permitted));
 }
 
 auto endpoint_close(EndpointHandle& ep) noexcept -> std::int32_t {
