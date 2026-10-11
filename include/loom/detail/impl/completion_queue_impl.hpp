@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <list>
 #include <mutex>
 #include <ranges>
 #include <system_error>
@@ -99,6 +100,11 @@ struct completion_queue_impl {
     std::size_t capacity{};                    ///< Requested minimum queue capacity.
     bool source_addresses{false};              ///< Whether reads capture receive source addresses.
     std::size_t max_error_data{};              ///< Negotiated diagnostic buffer size.
+    // Serialize native consumption with preserved events. Nonblocking readers
+    // only try this lock, including while another thread waits natively.
+    std::timed_mutex read_mutex;
+    std::pmr::list<completion_event> preserved;
+    std::pmr::list<completion_event> spare;
     std::mutex registrations_mutex;
     const completion_queue* wrapper{};
     completion_registration* registrations{};
@@ -115,9 +121,19 @@ struct completion_queue_impl {
                                    bool can_wait = false,
                                    fi_cq_format entry_format = FI_CQ_FORMAT_TAGGED,
                                    std::size_t minimum_capacity = 0,
-                                   bool with_sources = false)
+                                   bool with_sources = false,
+                                   memory_resource* resource = get_default_resource())
         : cq(cq_ptr), progress(prog), wait_enabled(can_wait), format(entry_format),
-          capacity(minimum_capacity), source_addresses(with_sources) {}
+          capacity(minimum_capacity), source_addresses(with_sources), preserved(resource),
+          spare(resource) {}
+
+    auto take_preserved() -> std::optional<completion_event> {
+        if (preserved.empty())
+            return std::nullopt;
+        auto event = std::move(preserved.front());
+        preserved.pop_front();
+        return event;
+    }
 
     /// @brief Destructor that closes the libfabric completion queue.
     ~completion_queue_impl() {
@@ -325,8 +341,14 @@ auto completion_queue::create(const domain& dom,
     auto progress = dom.progress_policy();
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-            resource, cq, progress, attr.wait_obj, format, attr.size.get(), attr.source_addresses);
+        auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(resource,
+                                                                           cq,
+                                                                           progress,
+                                                                           attr.wait_obj,
+                                                                           format,
+                                                                           attr.size.get(),
+                                                                           attr.source_addresses,
+                                                                           resource);
         impl->max_error_data = dom.impl_->max_error_data;
         (void)pending.release();
         return completion_queue{std::move(impl)};
@@ -339,17 +361,32 @@ auto completion_queue::create(const domain& dom,
                                                                        attr.wait_obj,
                                                                        format,
                                                                        attr.size.get(),
-                                                                       attr.source_addresses);
+                                                                       attr.source_addresses,
+                                                                       default_resource);
     impl->max_error_data = dom.impl_->max_error_data;
     (void)pending.release();
     return completion_queue{std::move(impl)};
 }
 
 auto completion_queue::poll() const -> std::optional<completion_event> {
-    if (!impl_ || !impl_->cq) {
+    if (!impl_ || !impl_->cq)
         return std::nullopt;
-    }
+    const std::unique_lock lock{impl_->read_mutex, std::try_to_lock};
+    if (!lock)
+        return std::nullopt;
+    if (auto event = impl_->take_preserved())
+        return event;
+    auto result = read_native();
+    if (result)
+        return std::move(*result);
+    if (result.error() == errc::again)
+        return std::nullopt;
+    completion_event event{};
+    event.error = result.error();
+    return event;
+}
 
+auto completion_queue::read_native() const -> result<completion_event> {
     completion_event event{};
     const auto ret = detail::read_cq_entries<1>(
         impl_->format,
@@ -363,24 +400,38 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
             }
             return ::fi_cq_read(impl_->cq, entries, count);
         });
+    if (ret == 0 || ret == -FI_EAGAIN)
+        return make_error_result<completion_event>(errc::again);
+    if (ret < 0)
+        return read_error(static_cast<int>(-ret));
+    return event;
+}
 
-    if (ret == -FI_EAGAIN) {
-        return std::nullopt;
-    }
-
-    if (ret < 0) {
-        const auto error = read_error(static_cast<int>(-ret));
-        event = error.value_or(completion_event{});
-        if (!error)
-            event.error = error.error();
+auto completion_queue::read_for(context_ptr<void> context) const -> result<completion_event> {
+    if (!impl_ || !impl_->cq || !context)
+        return make_error_result<completion_event>(errc::invalid_argument);
+    const std::unique_lock lock{impl_->read_mutex, std::try_to_lock};
+    if (!lock)
+        return make_error_result<completion_event>(errc::again);
+    const auto found =
+        std::ranges::find(impl_->preserved, context.get(), [](const completion_event& event) {
+            return event.context.get();
+        });
+    if (found != impl_->preserved.end()) {
+        auto event = std::move(*found);
+        impl_->preserved.erase(found);
         return event;
     }
-
-    if (ret == 0) {
-        return std::nullopt;
-    }
-
-    return event;
+    // Reserve a node before consumption. Retain the spare across empty reads
+    // so waiting for one operation does not allocate on every poll.
+    if (impl_->spare.empty())
+        impl_->spare.emplace_back();
+    auto event = read_native();
+    if (!event || event->context.get() == context.get())
+        return event;
+    impl_->spare.front() = std::move(*event);
+    impl_->preserved.splice(impl_->preserved.end(), impl_->spare);
+    return make_error_result<completion_event>(errc::again);
 }
 
 auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) const
@@ -396,6 +447,21 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
         }
         timeout_ms = static_cast<int>(timeout->count());
     }
+
+    std::unique_lock lock{impl_->read_mutex, std::defer_lock};
+    if (timeout_ms < 0) {
+        lock.lock();
+    } else {
+        const auto deadline = std::chrono::steady_clock::now() + *timeout;
+        if (!lock.try_lock_until(deadline))
+            return make_error_result<completion_event>(errc::again);
+        const auto remaining = std::max(std::chrono::milliseconds{0},
+                                        std::chrono::ceil<std::chrono::milliseconds>(
+                                            deadline - std::chrono::steady_clock::now()));
+        timeout_ms = static_cast<int>(remaining.count());
+    }
+    if (auto event = impl_->take_preserved())
+        return std::move(*event);
 
     completion_event event{};
     const auto ret = detail::read_cq_entries<1>(
@@ -429,6 +495,20 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
 auto completion_queue::poll_batch(std::span<completion_event> events) const -> std::size_t {
     if (!impl_ || !impl_->cq || events.empty()) {
         return 0;
+    }
+
+    const std::unique_lock lock{impl_->read_mutex, std::try_to_lock};
+    if (!lock)
+        return 0;
+    if (!impl_->preserved.empty()) {
+        std::size_t count{};
+        while (count < std::min(events.size(), 64UZ)) {
+            auto event = impl_->take_preserved();
+            if (!event)
+                break;
+            events[count++] = std::move(*event);
+        }
+        return count;
     }
 
     const auto ret = detail::read_cq_entries<64>(
@@ -543,6 +623,9 @@ auto completion_queue::progress() const noexcept -> void_result {
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    const std::unique_lock lock{impl_->read_mutex, std::try_to_lock};
+    if (!lock)
+        return make_error_result<void>(errc::again);
     const auto status = ::fi_cq_read(impl_->cq, nullptr, 0);
     if (status < 0 && status != -FI_EAGAIN) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
@@ -581,6 +664,9 @@ auto completion_queue::try_wait(const fabric& parent) const -> result<bool> {
     if (!impl_ || !impl_->cq || !parent) {
         return make_error_result<bool>(errc::invalid_argument);
     }
+    const std::unique_lock lock{impl_->read_mutex, std::try_to_lock};
+    if (!lock || !impl_->preserved.empty())
+        return false;
     auto* fabric_ptr = static_cast<::fid_fabric*>(parent.internal_ptr());
     auto* descriptor = &impl_->cq->fid;
     const int ret = ::fi_trywait(fabric_ptr, &descriptor, 1);

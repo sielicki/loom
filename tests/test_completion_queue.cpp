@@ -4,6 +4,8 @@
 #include <loom/detail/impl/fabric_impl.hpp>
 
 #include <array>
+#include <atomic>
+#include <thread>
 #include <utility>
 
 #include <catch2/catch_test_macros.hpp>
@@ -239,6 +241,88 @@ TEST_CASE("completion formats select and decode native single entries",
     REQUIRE(read);
     provider.check(*read, 2);
     REQUIRE(provider.source_reads == (provider.with_sources ? 3 : 0));
+}
+
+TEST_CASE("selective reads preserve other completions in order", "[completion_queue][selective]") {
+    const auto [format, native_format] = GENERATE(Catch::Generators::from_range(cq_formats));
+    format_provider provider;
+    provider.with_sources = GENERATE(false, true);
+    auto created = loom::completion_queue::create(
+        provider.domain,
+        {.wait_obj = true, .format = format, .source_addresses = provider.with_sources});
+    REQUIRE(created);
+    auto& queue = *created;
+    const loom::context_ptr<void> target{&provider.contexts[5]};
+    for (int i = 0; i != 5; ++i) {
+        auto event = queue.read_for(target);
+        REQUIRE_FALSE(event);
+        REQUIRE(event.error() == loom::errc::again);
+    }
+    const auto selected = queue.read_for(target);
+    REQUIRE(selected);
+    provider.check(*selected, 5);
+    const auto reads = provider.read_calls;
+    // Select an entry already preserved without consuming another native one.
+    const auto earlier = queue.read_for(loom::context_ptr<void>{&provider.contexts[2]});
+    REQUIRE(earlier);
+    provider.check(*earlier, 2);
+    REQUIRE(provider.read_calls == reads);
+    auto moved = std::move(queue);
+    provider.check(moved.poll().value(), 0);
+    provider.check(moved.wait(std::chrono::milliseconds{0}).value(), 1);
+    std::array<loom::completion_event, 70> batch;
+    REQUIRE(moved.poll_batch(batch) == 2);
+    provider.check(batch[0], 3);
+    provider.check(batch[1], 4);
+    REQUIRE(provider.read_calls == reads);
+    provider.check(moved.read().value(), 6);
+    REQUIRE(moved.read_for({}).error() == loom::errc::invalid_argument);
+    REQUIRE(queue.read_for(target).error() == loom::errc::invalid_argument);
+}
+
+TEST_CASE("selective reads do not block behind a native waiter", "[completion_queue][selective]") {
+    struct provider {
+        std::atomic<bool> entered{}, release{};
+        int reads{};
+        int context{};
+        fi_ops resource_ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+        fi_ops_cq cq_ops{
+            .size = sizeof(fi_ops_cq),
+            .read = [](fid_cq* cq, void*, std::size_t) -> ssize_t {
+                ++static_cast<provider*>(cq->fid.context)->reads;
+                return -FI_EAGAIN;
+            },
+            .sread = [](fid_cq* cq, void* output, std::size_t, const void*, int) -> ssize_t {
+                auto& self = *static_cast<provider*>(cq->fid.context);
+                self.entered.store(true);
+                self.entered.notify_one();
+                self.release.wait(false);
+                *static_cast<fi_cq_tagged_entry*>(output) = {.op_context = &self.context, .len = 7};
+                return 1;
+            },
+        };
+        fid_cq handle{.fid = {.context = this, .ops = &resource_ops}, .ops = &cq_ops};
+    } native;
+    loom::completion_queue queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+        loom::get_default_resource(), &native.handle, loom::runtime_progress_policy{}, true)};
+    std::optional<loom::completion_event> completed;
+    std::jthread waiter{[&] { completed = queue.wait().value(); }};
+    native.entered.wait(false);
+    const auto selected = queue.read_for(loom::context_ptr<void>{&native.context});
+    CHECK(!selected);
+    CHECK(selected.error() == loom::errc::again);
+    CHECK_FALSE(queue.poll());
+    std::array<loom::completion_event, 2> batch;
+    CHECK(queue.poll_batch(batch) == 0);
+    CHECK(queue.progress().error() == loom::errc::again);
+    CHECK(queue.wait(std::chrono::milliseconds{0}).error() == loom::errc::again);
+    CHECK(native.reads == 0);
+    native.release.store(true);
+    native.release.notify_one();
+    waiter.join();
+    REQUIRE(completed);
+    REQUIRE(completed->context.get() == &native.context);
+    REQUIRE(completed->bytes_transferred == 7);
 }
 
 TEST_CASE("completion batches use the selected native stride", "[completion_queue][format]") {

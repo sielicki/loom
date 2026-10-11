@@ -228,3 +228,30 @@ TEST_CASE("failed completion error reads release diagnostic storage",
             (status == -FI_EINVAL ? loom::errc::invalid_argument : loom::errc::again));
     REQUIRE(resource.live == before);
 }
+
+TEST_CASE("selective reads retain foreign error diagnostics", "[completion_queue][diagnostic]") {
+    const auto method = GENERATE(0, 1, 2, 3);
+    diagnostic_resource resource;
+    diagnostic_provider provider;
+    provider.data.resize(7, std::byte{0x63});
+    const auto expected = provider.data;
+    auto domain = provider.open_domain();
+    auto queue = loom::completion_queue::create(domain, {.wait_obj = true}, &resource).value();
+    int target{};
+    resource.fail = true;
+    REQUIRE_THROWS_AS(queue.read_for(loom::context_ptr<void>{&target}), std::bad_alloc);
+    REQUIRE(provider.error_reads == 0);
+    resource.fail = false;
+    REQUIRE(queue.read_for(loom::context_ptr<void>{&target}).error() == loom::errc::again);
+    REQUIRE(provider.error_reads == 1);
+    // Reading again invalidates the provider's previous diagnostic storage.
+    REQUIRE(queue.read_for(loom::context_ptr<void>{&target}).error() == loom::errc::again);
+    auto event = read_diagnostic(queue, method);
+    REQUIRE(event.context.get() == &provider.ready);
+    REQUIRE(event.error == loom::errc::io_error);
+    REQUIRE(event.error_info.prov_errno == 37);
+    queue = {};
+    REQUIRE(std::ranges::equal(bytes(event), expected));
+    event = {};
+    REQUIRE(resource.live == 0);
+}

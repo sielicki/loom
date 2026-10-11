@@ -265,6 +265,13 @@ public:
     [[nodiscard("read result must be checked for errors")]]
     auto read() const -> result<completion_event>;
 
+    /// Read at most one native entry for this context, preserving other events
+    /// for subsequent reads. Returns again if another context was preserved,
+    /// the queue is empty, or another reader owns the native queue. Does not
+    /// dispatch callbacks. A null context is invalid. Metadata allocation may
+    /// throw before consuming the next native entry.
+    [[nodiscard]] auto read_for(context_ptr<void> context) const -> result<completion_event>;
+
     /// Native entry layout; unspecified for an empty queue.
     [[nodiscard]] auto format() const noexcept -> cq_format;
 
@@ -302,6 +309,7 @@ public:
     [[nodiscard]] auto impl_valid() const noexcept -> bool;
 
 private:
+    [[nodiscard]] auto read_native() const -> result<completion_event>;
     [[nodiscard]] auto read_error(int status) const -> result<completion_event>;
     impl_ptr impl_;
     friend class endpoint;
