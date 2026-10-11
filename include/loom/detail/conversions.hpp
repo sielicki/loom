@@ -73,6 +73,32 @@ namespace loom::detail {
         fi_caps |= FI_LOCAL_COMM;
     if (c.has(capability::named_rx_ctx))
         fi_caps |= FI_NAMED_RX_CTX;
+    if (c.has(capability::multicast))
+        fi_caps |= FI_MULTICAST;
+    if (c.has(capability::av_user_id))
+        fi_caps |= FI_AV_USER_ID;
+    if (c.has(capability::peer))
+        fi_caps |= FI_PEER;
+    if (c.has(capability::xpu))
+        fi_caps |= FI_XPU;
+    if (c.has(capability::tagged_directed_recv))
+        fi_caps |= FI_TAGGED_DIRECTED_RECV;
+    if (c.has(capability::tagged_multi_recv))
+        fi_caps |= FI_TAGGED_MULTI_RECV;
+    if (c.has(capability::exact_directed_recv))
+        fi_caps |= FI_EXACT_DIRECTED_RECV;
+    if (c.has(capability::rma_pmem))
+        fi_caps |= FI_RMA_PMEM;
+    if (c.has(capability::source_err))
+        fi_caps |= FI_SOURCE_ERR;
+    if (c.has(capability::shared_av))
+        fi_caps |= FI_SHARED_AV;
+    if (c.has(capability::rma_event))
+        fi_caps |= FI_RMA_EVENT;
+    if (c.has(capability::source))
+        fi_caps |= FI_SOURCE;
+    if (c.has(capability::directed_recv))
+        fi_caps |= FI_DIRECTED_RECV;
 
     return fi_caps;
 }
@@ -121,6 +147,32 @@ namespace loom::detail {
         result |= capability::local_comm;
     if (fi_caps & FI_NAMED_RX_CTX)
         result |= capability::named_rx_ctx;
+    if (fi_caps & FI_MULTICAST)
+        result |= capability::multicast;
+    if (fi_caps & FI_AV_USER_ID)
+        result |= capability::av_user_id;
+    if (fi_caps & FI_PEER)
+        result |= capability::peer;
+    if (fi_caps & FI_XPU)
+        result |= capability::xpu;
+    if (fi_caps & FI_TAGGED_DIRECTED_RECV)
+        result |= capability::tagged_directed_recv;
+    if (fi_caps & FI_TAGGED_MULTI_RECV)
+        result |= capability::tagged_multi_recv;
+    if (fi_caps & FI_EXACT_DIRECTED_RECV)
+        result |= capability::exact_directed_recv;
+    if (fi_caps & FI_RMA_PMEM)
+        result |= capability::rma_pmem;
+    if (fi_caps & FI_SOURCE_ERR)
+        result |= capability::source_err;
+    if (fi_caps & FI_SHARED_AV)
+        result |= capability::shared_av;
+    if (fi_caps & FI_RMA_EVENT)
+        result |= capability::rma_event;
+    if (fi_caps & FI_SOURCE)
+        result |= capability::source;
+    if (fi_caps & FI_DIRECTED_RECV)
+        result |= capability::directed_recv;
 
     return result;
 }

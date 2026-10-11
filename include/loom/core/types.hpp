@@ -364,6 +364,19 @@ inline constexpr caps local_comm{0x4000ULL};
 inline constexpr caps named_rx_ctx{0x8000ULL};
 inline constexpr caps hmem{0x10000ULL};
 inline constexpr caps trigger{0x20000ULL};
+inline constexpr caps multicast{0x40000ULL};
+inline constexpr caps av_user_id{0x80000ULL};
+inline constexpr caps peer{0x100000ULL};
+inline constexpr caps xpu{0x200000ULL};
+inline constexpr caps tagged_directed_recv{0x400000ULL};
+inline constexpr caps tagged_multi_recv{0x800000ULL};
+inline constexpr caps exact_directed_recv{0x1000000ULL};
+inline constexpr caps rma_pmem{0x2000000ULL};
+inline constexpr caps source_err{0x4000000ULL};
+inline constexpr caps shared_av{0x8000000ULL};
+inline constexpr caps rma_event{0x10000000ULL};
+inline constexpr caps source{0x20000000ULL};
+inline constexpr caps directed_recv{0x40000000ULL};
 }  // namespace capability
 
 /**

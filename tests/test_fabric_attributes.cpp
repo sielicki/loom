@@ -4,6 +4,8 @@
 #include <loom/detail/conversions.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
+#include <utility>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -186,4 +188,31 @@ TEST_CASE("named receive contexts and message prefixes use independent namespace
     CHECK(info.get_mode() == expected_mode);
     CHECK(loom::detail::to_fi_caps(info.get_caps()) == native.caps);
     CHECK(loom::detail::to_fi_mode(info.get_mode()) == native.mode);
+}
+
+TEST_CASE("negotiated capability flags survive conversion independently",
+          "[fabric][attributes][capabilities]") {
+    const auto [requested, extra] = GENERATE(
+        std::pair{loom::capability::multicast, std::uint64_t{FI_MULTICAST}},
+        std::pair{loom::capability::av_user_id, std::uint64_t{FI_AV_USER_ID}},
+        std::pair{loom::capability::peer, std::uint64_t{FI_PEER}},
+        std::pair{loom::capability::xpu, std::uint64_t{FI_XPU}},
+        std::pair{loom::capability::tagged_directed_recv, std::uint64_t{FI_TAGGED_DIRECTED_RECV}},
+        std::pair{loom::capability::tagged_multi_recv, std::uint64_t{FI_TAGGED_MULTI_RECV}},
+        std::pair{loom::capability::exact_directed_recv, std::uint64_t{FI_EXACT_DIRECTED_RECV}},
+        std::pair{loom::capability::rma_pmem, std::uint64_t{FI_RMA_PMEM}},
+        std::pair{loom::capability::source_err, std::uint64_t{FI_SOURCE_ERR}},
+        std::pair{loom::capability::shared_av, std::uint64_t{FI_SHARED_AV}},
+        std::pair{loom::capability::rma_event, std::uint64_t{FI_RMA_EVENT}},
+        std::pair{loom::capability::source, std::uint64_t{FI_SOURCE}},
+        std::pair{loom::capability::directed_recv, std::uint64_t{FI_DIRECTED_RECV}});
+    const auto base =
+        GENERATE(std::uint64_t{0},
+                 std::uint64_t{FI_MSG | FI_TAGGED | FI_SEND | FI_RECV},
+                 std::uint64_t{FI_RMA | FI_ATOMIC | FI_REMOTE_READ | FI_REMOTE_WRITE});
+    fi_info native{};
+    native.caps = base | extra;
+    const auto info = wrap(native);
+    CHECK(info.get_caps() == (loom::detail::from_fi_caps(base) | requested));
+    CHECK(loom::detail::to_fi_caps(info.get_caps()) == native.caps);
 }
