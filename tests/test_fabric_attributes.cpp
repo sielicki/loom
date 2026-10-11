@@ -288,3 +288,24 @@ TEST_CASE("legacy registration hints cannot combine with other modes",
     REQUIRE_FALSE(result);
     CHECK(result.error() == loom::errc::invalid_argument);
 }
+
+TEST_CASE("negotiated memory registration requirements survive discovery",
+          "[fabric][attributes][mr_mode]") {
+    const auto [flag, required] =
+        GENERATE(std::pair{loom::mr_mode_flags::mmu_notify, FI_MR_MMU_NOTIFY},
+                 std::pair{loom::mr_mode_flags::rma_event, FI_MR_RMA_EVENT},
+                 std::pair{loom::mr_mode_flags::xpu_desc, FI_MR_XPU_DESC});
+    const auto base = GENERATE(0,
+                               FI_MR_LOCAL | FI_MR_VIRT_ADDR | FI_MR_PROV_KEY,
+                               FI_MR_MMU_NOTIFY | FI_MR_RMA_EVENT | FI_MR_XPU_DESC);
+    fi_domain_attr domain{};
+    domain.mr_mode = required | base;
+    fi_info native{};
+    native.domain_attr = &domain;
+    const auto info = wrap(native);
+    const auto attributes = info.get_domain_attr();
+    REQUIRE(attributes);
+    CHECK(attributes->memory_region_mode.has(flag));
+    CHECK(loom::detail::to_fi_mr_mode(flag) == required);
+    CHECK(loom::detail::to_fi_mr_mode(attributes->memory_region_mode) == domain.mr_mode);
+}

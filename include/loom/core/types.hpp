@@ -558,6 +558,9 @@ inline constexpr mr_mode endpoint{1ULL << 7};
 inline constexpr mr_mode collective{1ULL << 8};
 /// Legacy basic registration; must be used alone, as must scalable.
 inline constexpr mr_mode basic{1ULL << 9};
+inline constexpr mr_mode mmu_notify{1ULL << 10};  ///< Refresh page mappings before use.
+inline constexpr mr_mode rma_event{1ULL << 11};   ///< Enable regions after counter binding.
+inline constexpr mr_mode xpu_desc{1ULL << 12};    ///< Obtain a descriptor for device-side access.
 }  // namespace mr_mode_flags
 
 /**

@@ -555,6 +555,12 @@ namespace loom::detail {
         fi_mode |= FI_MR_ENDPOINT;
     if (mode.has(mr_mode_flags::collective))
         fi_mode |= FI_MR_COLLECTIVE;
+    if (mode.has(mr_mode_flags::mmu_notify))
+        fi_mode |= FI_MR_MMU_NOTIFY;
+    if (mode.has(mr_mode_flags::rma_event))
+        fi_mode |= FI_MR_RMA_EVENT;
+    if (mode.has(mr_mode_flags::xpu_desc))
+        fi_mode |= FI_MR_XPU_DESC;
 
     return fi_mode;
 }
@@ -587,6 +593,12 @@ namespace loom::detail {
         result |= mr_mode_flags::endpoint;
     if (fi_mode & FI_MR_COLLECTIVE)
         result |= mr_mode_flags::collective;
+    if (fi_mode & FI_MR_MMU_NOTIFY)
+        result |= mr_mode_flags::mmu_notify;
+    if (fi_mode & FI_MR_RMA_EVENT)
+        result |= mr_mode_flags::rma_event;
+    if (fi_mode & FI_MR_XPU_DESC)
+        result |= mr_mode_flags::xpu_desc;
 
     return result;
 }
