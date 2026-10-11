@@ -116,7 +116,47 @@ struct message_provider {
 };
 
 struct context : loom::triggered_context<context> {};
+
+enum class unavailable_operation { endpoint, table, entry, layout };
 }  // namespace
+
+TEST_CASE("message APIs reject unavailable native operations", "[message][submission]") {
+    const auto tagged = GENERATE(false, true);
+    const auto receive = GENERATE(false, true);
+    const auto unavailable = GENERATE(unavailable_operation::endpoint,
+                                      unavailable_operation::table,
+                                      unavailable_operation::entry,
+                                      unavailable_operation::layout);
+    message_provider native;
+    auto ep = native.endpoint();
+    switch (unavailable) {
+        case unavailable_operation::endpoint:
+            ep = {};
+            break;
+        case unavailable_operation::table:
+            native.handle.msg = nullptr;
+            native.handle.tagged = nullptr;
+            break;
+        case unavailable_operation::entry:
+            native.messages = {.size = sizeof(fi_ops_msg)};
+            native.tags = {.size = sizeof(fi_ops_tagged)};
+            break;
+        case unavailable_operation::layout:
+            native.messages.size = sizeof(std::size_t);
+            native.tags.size = sizeof(std::size_t);
+            break;
+    }
+    using namespace loom;
+    const auto result = tagged ? (receive ? msg::tagged_recvmsg(ep, msg::tagged_recv_message<>{})
+                                          : msg::tagged_sendmsg(ep, msg::tagged_send_message<>{}))
+                               : (receive ? msg::recvmsg(ep, msg::recv_message<>{})
+                                          : msg::sendmsg(ep, msg::send_message<>{}));
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == (unavailable == unavailable_operation::endpoint
+                                   ? errc::invalid_argument
+                                   : errc::not_supported));
+    REQUIRE(native.calls == 0);
+}
 
 TEST_CASE("deferred operations reject mismatched descriptor counts", "[message][trigger]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5);

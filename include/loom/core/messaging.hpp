@@ -207,6 +207,10 @@ template <context_like Ctx>
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, sendmsg)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+
     if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -243,6 +247,10 @@ template <context_like Ctx>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, recvmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
@@ -283,6 +291,10 @@ template <context_like Ctx>
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, sendmsg)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+
     if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -321,6 +333,10 @@ template <context_like Ctx>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, recvmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
