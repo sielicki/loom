@@ -89,6 +89,9 @@ auto read(endpoint& ep,
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, read)) {
+        return make_error_result<void>(errc::not_supported);
+    }
     auto* desc = local_mr.descriptor().raw();
 
     auto ret = ::fi_read(fid_ep,
@@ -207,6 +210,9 @@ auto write(endpoint& ep,
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, write)) {
+        return make_error_result<void>(errc::not_supported);
     }
     auto* desc = local_mr.descriptor().raw();
 
@@ -338,6 +344,9 @@ auto write_data(endpoint& ep,
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, writedata)) {
+        return make_error_result<void>(errc::not_supported);
     }
     auto* desc = local_mr.descriptor().raw();
 

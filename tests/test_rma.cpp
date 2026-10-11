@@ -106,7 +106,7 @@ struct rma_provider {
 };
 }  // namespace
 
-TEST_CASE("explicit-peer RMA rejects unavailable native operations", "[rma]") {
+TEST_CASE("RMA rejects unavailable native operations", "[rma]") {
     const auto missing = GENERATE(0, 1, 2, 3);
     rma_provider native;
     auto ep = native.endpoint();
@@ -119,11 +119,17 @@ TEST_CASE("explicit-peer RMA rejects unavailable native operations", "[rma]") {
     else
         native.rma_ops.size = sizeof(std::size_t);
     std::array<std::byte, 8> buffer{};
+    memory_region memory;
     const remote_memory remote{0, 1, buffer.size()};
     const fabric_addr peer{19};
     const std::array iov{iovec{buffer.data(), buffer.size()}};
     const std::array remote_iov{rma::rma_iov{remote}};
     const std::array results{
+        rma::read(ep, buffer, memory, remote),
+        rma::write(ep, buffer, memory, remote),
+        rma::write_data(ep, buffer, memory, remote, 7),
+        rma::inject_write(ep, buffer, remote),
+        rma::inject_write_data(ep, buffer, remote, 7),
         rma::read_to(ep, buffer, mr_descriptor{}, peer, remote),
         rma::write_to(ep, buffer, mr_descriptor{}, peer, remote),
         rma::readv_to(ep, iov, {}, peer, remote_iov),

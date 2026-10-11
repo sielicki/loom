@@ -254,14 +254,43 @@ TEST_CASE("deferred work validates optional completion counters", "[trigger]") {
     }
 }
 
-TEST_CASE("triggered submissions reject empty counter handles", "[trigger]") {
+TEST_CASE("triggered submissions reject unavailable resources", "[trigger]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5);
-    CAPTURE(operation);
+    enum class unavailable { counter, endpoint, table, entry, layout };
+    const auto missing = GENERATE(unavailable::counter,
+                                  unavailable::endpoint,
+                                  unavailable::table,
+                                  unavailable::entry,
+                                  unavailable::layout);
+    CAPTURE(operation, missing);
     trigger_provider native;
     loom::counter empty;
+    switch (missing) {
+        case unavailable::counter:
+            break;
+        case unavailable::endpoint:
+            native.endpoint = {};
+            break;
+        case unavailable::table:
+            native.endpoint_handle.msg = nullptr;
+            native.endpoint_handle.tagged = nullptr;
+            native.endpoint_handle.rma = nullptr;
+            break;
+        case unavailable::entry:
+            native.messages = {.size = sizeof(fi_ops_msg)};
+            native.tags = {.size = sizeof(fi_ops_tagged)};
+            native.rma = {.size = sizeof(fi_ops_rma)};
+            break;
+        case unavailable::layout:
+            native.messages.size = sizeof(std::size_t);
+            native.tags.size = sizeof(std::size_t);
+            native.rma.size = sizeof(std::size_t);
+            break;
+    }
     trigger_context context;
     context.set_threshold_trigger(&native.counter_handle, 99);
-    const loom::trigger::threshold_condition condition{&empty, 7};
+    const loom::trigger::threshold_condition condition{
+        missing == unavailable::counter ? &empty : &native.counter, 7};
     const auto result = [&]() -> loom::void_result {
         using namespace loom;
         memory_region memory;
@@ -291,7 +320,9 @@ TEST_CASE("triggered submissions reject empty counter handles", "[trigger]") {
         }
     }();
     REQUIRE_FALSE(result);
-    REQUIRE(result.error() == loom::errc::invalid_argument);
+    REQUIRE(result.error() == (missing == unavailable::counter || missing == unavailable::endpoint
+                                   ? loom::errc::invalid_argument
+                                   : loom::errc::not_supported));
     REQUIRE(native.submissions == 0);
     REQUIRE(context.trig_ctx.trigger.threshold.cntr == &native.counter_handle);
     REQUIRE(context.trig_ctx.trigger.threshold.threshold == 99);

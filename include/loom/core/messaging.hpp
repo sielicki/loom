@@ -445,6 +445,9 @@ send_to(endpoint& ep, std::span<const std::byte> data, fabric_addr dest_addr, Ct
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, send)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     auto ret =
         ::fi_send(fid_ep, data.data(), data.size(), nullptr, dest_addr.get(), to_raw_context(ctx));
@@ -471,6 +474,9 @@ recv_from(endpoint& ep, std::span<std::byte> buffer, fabric_addr src_addr, Ctx c
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, recv)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     auto ret = ::fi_recv(
@@ -502,6 +508,9 @@ template <context_like Ctx = void*>
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, senddata)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     auto ret = ::fi_senddata(fid_ep,
                              data.data(),
@@ -531,6 +540,9 @@ template <context_like Ctx = void*>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, recvmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ::iovec iov{};
@@ -585,6 +597,9 @@ template <contiguous_byte_range Buf, context_like Ctx = void*>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, sendmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ::iovec iov{};
@@ -648,6 +663,9 @@ template <contiguous_byte_range Buf, context_like Ctx = void*>
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, send)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     void* raw_desc = desc ? desc.raw() : nullptr;
     auto ret = ::fi_tsend(
@@ -685,6 +703,9 @@ template <mutable_byte_range Buf, context_like Ctx = void*>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, recvmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ::iovec iov{};
@@ -741,6 +762,9 @@ template <mutable_byte_range Buf, context_like Ctx = void*>
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, recv)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     void* raw_desc = desc ? desc.raw() : nullptr;
     auto ret = ::fi_trecv(fid_ep,
@@ -777,6 +801,9 @@ send(endpoint& ep, Buf&& data, fabric_addr dest, mr_descriptor desc, op_flags fl
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, sendmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ::iovec iov{};
@@ -834,6 +861,9 @@ send(endpoint& ep, Buf&& data, fabric_addr dest, mr_descriptor desc = {}, Ctx ct
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, send)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     void* raw_desc = desc ? desc.raw() : nullptr;
     auto ret = ::fi_send(
@@ -864,6 +894,9 @@ recv(endpoint& ep, Buf&& buffer, fabric_addr src, mr_descriptor desc, op_flags f
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, recvmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ::iovec iov{};
@@ -912,6 +945,9 @@ recv(endpoint& ep, Buf&& buffer, fabric_addr src, mr_descriptor desc = {}, Ctx c
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, recv)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     void* raw_desc = desc ? desc.raw() : nullptr;
     auto ret = ::fi_recv(
@@ -943,6 +979,9 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, sendv)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
@@ -990,6 +1029,9 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, recvv)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
     if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
@@ -1029,6 +1071,9 @@ sendv(endpoint& ep, Iov&& iov, Desc&& descriptors, fabric_addr dest, Ctx ctx = {
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, sendv)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
     if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
@@ -1066,6 +1111,9 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, recvv)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
@@ -1109,6 +1157,9 @@ template <contiguous_byte_range Buf, context_like Ctx = void*>
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, senddata)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     void* raw_desc = desc ? desc.raw() : nullptr;
     auto ret = ::fi_senddata(fid_ep,
@@ -1149,6 +1200,9 @@ template <contiguous_byte_range Buf, context_like Ctx = void*>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, senddata)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     void* raw_desc = desc ? desc.raw() : nullptr;

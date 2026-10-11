@@ -18,6 +18,9 @@ auto inject_write(endpoint& ep, std::span<const std::byte> data, remote_memory r
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, inject)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     auto ret =
         fi_inject_write(fid_ep, data.data(), data.size(), FI_ADDR_UNSPEC, remote.addr, remote.key);
@@ -36,6 +39,9 @@ auto inject_write_data(endpoint& ep,
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, injectdata)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     auto ret = fi_inject_writedata(

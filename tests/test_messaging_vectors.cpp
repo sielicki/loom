@@ -146,8 +146,6 @@ enum class unavailable_operation { endpoint, table, entry, layout };
 }  // namespace
 
 TEST_CASE("message APIs reject unavailable native operations", "[message][submission]") {
-    const auto tagged = GENERATE(false, true);
-    const auto receive = GENERATE(false, true);
     const auto unavailable = GENERATE(unavailable_operation::endpoint,
                                       unavailable_operation::table,
                                       unavailable_operation::entry,
@@ -172,15 +170,64 @@ TEST_CASE("message APIs reject unavailable native operations", "[message][submis
             break;
     }
     using namespace loom;
-    const auto result = tagged ? (receive ? msg::tagged_recvmsg(ep, msg::tagged_recv_message<>{})
-                                          : msg::tagged_sendmsg(ep, msg::tagged_send_message<>{}))
-                               : (receive ? msg::recvmsg(ep, msg::recv_message<>{})
-                                          : msg::sendmsg(ep, msg::send_message<>{}));
-    REQUIRE_FALSE(result);
-    REQUIRE(result.error() == (unavailable == unavailable_operation::endpoint
-                                   ? errc::invalid_argument
-                                   : errc::not_supported));
+    std::array<std::byte, 8> bytes{};
+    const fabric_addr peer{19};
+    const std::array iov{iovec{bytes.data(), bytes.size()}};
+    const std::array<mr_descriptor, 0> descriptors{};
+    const std::array results{
+        msg::sendmsg(ep, msg::send_message<>{}),
+        msg::recvmsg(ep, msg::recv_message<>{}),
+        msg::tagged_sendmsg(ep, msg::tagged_send_message<>{}),
+        msg::tagged_recvmsg(ep, msg::tagged_recv_message<>{}),
+        msg::send_to(ep, bytes, peer),
+        msg::recv_from(ep, bytes, peer),
+        msg::send_data_to(ep, bytes, 7, peer),
+        msg::post_multi_recv(ep, bytes),
+        loom::send(ep, bytes, peer),
+        loom::send(ep, bytes, peer, mr_descriptor{}, op_flag::completion),
+        loom::recv(ep, bytes, peer),
+        loom::recv(ep, bytes, peer, mr_descriptor{}, op_flag::completion),
+        tagged_send(ep, bytes, peer, 42),
+        tagged_send(ep, bytes, peer, 42, mr_descriptor{}, op_flag::completion),
+        tagged_recv(ep, bytes, peer, 42),
+        tagged_recv(ep, bytes, peer, 42, 0, mr_descriptor{}, op_flag::completion),
+        sendv(ep, iov, descriptors, peer),
+        recvv(ep, iov, descriptors, peer),
+        tagged_sendv(ep, iov, descriptors, peer, 42),
+        tagged_recvv(ep, iov, descriptors, peer, 42),
+        send_data(ep, bytes, peer, 7),
+        tagged_send_data(ep, bytes, peer, 42, 7),
+    };
+    for (const auto& result : results) {
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() == (unavailable == unavailable_operation::endpoint
+                                       ? errc::invalid_argument
+                                       : errc::not_supported));
+    }
     REQUIRE(native.calls == 0);
+}
+
+TEST_CASE("UDP rejects unsupported tagged vector submissions", "[message][integration]") {
+    using namespace loom;
+    fabric_hints hints{};
+    hints.provider_name = "udp";
+    hints.ep_type = endpoint_types::dgram;
+    hints.capabilities = capability::msg;
+    auto info = query_fabric(hints);
+    if (!info) {
+        SKIP("UDP provider unavailable");
+    }
+    auto fabric = fabric::create(*info).value();
+    auto domain = domain::create(fabric, *info).value();
+    auto ep = endpoint::create(domain, *info).value();
+    std::array<std::byte, 8> bytes{};
+    const std::array iov{iovec{bytes.data(), bytes.size()}};
+    const std::array<mr_descriptor, 0> descriptors{};
+    CHECK(ep.tagged_send(bytes, 42).error() == errc::not_supported);
+    CHECK(tagged_sendv(ep, iov, descriptors, fabric_addrs::unspecified, 42).error() ==
+          errc::not_supported);
+    CHECK(tagged_recvv(ep, iov, descriptors, fabric_addrs::unspecified, 42).error() ==
+          errc::not_supported);
 }
 
 TEST_CASE("deferred operations reject mismatched descriptor counts", "[message][trigger]") {

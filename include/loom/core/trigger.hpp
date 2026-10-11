@@ -268,6 +268,9 @@ template <structured_triggered_context Ctx>
     if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, sendmsg)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
@@ -311,6 +314,9 @@ template <structured_triggered_context Ctx>
     if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(fid_ep->msg, fi_ops_msg, recvmsg)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
@@ -353,6 +359,9 @@ template <structured_triggered_context Ctx>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, sendmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
@@ -398,6 +407,9 @@ template <structured_triggered_context Ctx>
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr || m.context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, recvmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
@@ -447,6 +459,9 @@ template <structured_triggered_context Ctx>
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr || context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, readmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
@@ -502,6 +517,9 @@ template <structured_triggered_context Ctx>
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr || context == nullptr || trigger.cntr == nullptr || !*trigger.cntr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, writemsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
