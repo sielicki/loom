@@ -4,8 +4,10 @@
 #include <rdma/fi_collective.h>
 
 #include <cstddef>
+#include <optional>
 #include <span>
 
+#include "loom/core/address_vector.hpp"
 #include "loom/core/atomic.hpp"
 #include "loom/core/concepts/strong_types.hpp"
 #include "loom/core/crtp/fabric_object_base.hpp"
@@ -120,6 +122,16 @@ constexpr auto to_fi_datatype(atomic::datatype dt) noexcept -> ::fi_datatype {
 
 }  // namespace detail
 
+/// Options for constructing a collective membership set and joining it.
+struct group_attr {
+    std::span<const std::byte> communication_key{};  ///< Provider-specific membership key; copied.
+    std::uint64_t set_flags{};                       ///< Native AV-set creation flags.
+    std::uint64_t join_flags{};                      ///< Native collective join flags.
+    /// Defaults to the new set's address. Use fabric_addrs::unspecified for
+    /// application-managed membership, or an existing group's address for a subgroup.
+    std::optional<fabric_addr> parent_address{};
+};
+
 /**
  * @class group
  * @brief A collective communication group.
@@ -153,24 +165,25 @@ public:
      */
     ~group();
 
-    /**
-     * @brief Joins an endpoint to a collective group.
-     * @tparam Ctx The context type (must satisfy context_like).
-     * @param ep The endpoint to join.
-     * @param coll_addr The collective address for the group.
-     * @param context Optional operation context.
-     * @return The group or error result.
-     */
+    /// Creates an owned AV set from ordered members and initiates an asynchronous join.
+    /// The endpoint must be bound to this AV and an EQ. Every participant must
+    /// supply matching membership and observe FI_JOIN_COMPLETE before transfers.
+    /// The AV, endpoint, and context must outlive the join and subsequent group
+    /// operations. Keep the group alive until these operations finish; it may be moved.
     template <context_like Ctx = void*>
-    [[nodiscard]] static auto join(endpoint& ep, fabric_addr coll_addr, Ctx context = {})
-        -> result<group>;
+    [[nodiscard]] static auto join(endpoint& ep,
+                                   address_vector& av,
+                                   std::span<const av_handle> members,
+                                   const group_attr& attr = {},
+                                   Ctx context = {}) -> result<group>;
 
-    /// Gets the fabric address of this group
+    /// Gets the joined group's address after FI_JOIN_COMPLETE. Before completion,
+    /// the provider may not have supplied a group handle or a usable address.
     [[nodiscard]] auto address() const noexcept -> fabric_addr;
 
     /// Gets the internal pointer for fabric object interface
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;
-    /// Checks if the group is valid
+    /// Reports an accepted join, including one whose completion is still pending.
     [[nodiscard]] auto impl_valid() const noexcept -> bool;
 
 private:
@@ -178,37 +191,26 @@ private:
     struct impl;
     std::unique_ptr<impl> impl_;
 
-    /**
-     * @brief Factory function for creating group implementation.
-     * @param ep The endpoint.
-     * @param coll_addr The collective address.
-     * @param context The operation context.
-     * @return The group or error result.
-     */
-    friend auto create_group_impl(endpoint& ep, fabric_addr coll_addr, void* context)
-        -> result<group>;
+    friend auto create_group_impl(endpoint& ep,
+                                  address_vector& av,
+                                  std::span<const av_handle> members,
+                                  const group_attr& attr,
+                                  void* context) -> result<group>;
 };
 
-/**
- * @brief Creates a group implementation (internal).
- * @param ep The endpoint.
- * @param coll_addr The collective address.
- * @param context The operation context.
- * @return The group or error result.
- */
-auto create_group_impl(endpoint& ep, fabric_addr coll_addr, void* context) -> result<group>;
+auto create_group_impl(endpoint& ep,
+                       address_vector& av,
+                       std::span<const av_handle> members,
+                       const group_attr& attr,
+                       void* context) -> result<group>;
 
-/**
- * @brief Joins an endpoint to a collective group.
- * @tparam Ctx The context type.
- * @param ep The endpoint.
- * @param coll_addr The collective address.
- * @param context The operation context.
- * @return The group or error result.
- */
 template <context_like Ctx>
-auto group::join(endpoint& ep, fabric_addr coll_addr, Ctx context) -> result<group> {
-    return create_group_impl(ep, coll_addr, to_raw_context(context));
+auto group::join(endpoint& ep,
+                 address_vector& av,
+                 std::span<const av_handle> members,
+                 const group_attr& attr,
+                 Ctx context) -> result<group> {
+    return create_group_impl(ep, av, members, attr, to_raw_context(context));
 }
 
 /**

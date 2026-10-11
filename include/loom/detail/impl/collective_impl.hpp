@@ -4,17 +4,22 @@
 #include <rdma/fabric.h>
 #include <rdma/fi_collective.h>
 
+#include <vector>
+
 #include "loom/core/collective.hpp"
 #include "loom/core/domain.hpp"
 #include "loom/core/endpoint.hpp"
 #include "loom/core/error.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom::collective {
 
 /// @brief Internal implementation of the collective group.
 struct group::impl {
-    fabric_addr coll_addr{fabric_addrs::unspecified};  ///< Collective address for the group.
-    fid_mc* mc_group{nullptr};                         ///< Multicast group handle.
+    std::vector<std::byte> communication_key;
+    loom::detail::unique_fid<fid_av_set> members;
+    // Providers may retain this output address until the join completes.
+    fid_mc* mc_group{nullptr};
 
     /// @brief Destructor that closes the multicast group.
     ~impl() {
@@ -37,29 +42,85 @@ auto group::operator=(group&&) noexcept -> group& = default;
 group::~group() = default;
 
 auto group::impl_valid() const noexcept -> bool {
-    return impl_ && impl_->coll_addr != fabric_addrs::unspecified;
+    return impl_ != nullptr;
 }
 
 auto group::address() const noexcept -> fabric_addr {
-    return impl_ ? impl_->coll_addr : fabric_addrs::unspecified;
+    return impl_ && impl_->mc_group ? fabric_addr{::fi_mc_addr(impl_->mc_group)}
+                                    : fabric_addrs::unspecified;
 }
 
 auto group::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->mc_group : nullptr;
 }
 
-auto create_group_impl(endpoint& ep, fabric_addr coll_addr, void* context) -> result<group> {
+auto create_group_impl(endpoint& ep,
+                       address_vector& av,
+                       std::span<const av_handle> members,
+                       const group_attr& attr,
+                       void* context) -> result<group> {
+    if (!ep || !av) {
+        return make_error_result<group>(errc::invalid_argument);
+    }
+    for (const auto member : members) {
+        if (!member.valid()) {
+            return make_error_result<group>(errc::invalid_argument);
+        }
+    }
+    auto* native_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* native_av = static_cast<::fid_av*>(av.internal_ptr());
+    if (!native_ep->cm || !FI_CHECK_OP(native_ep->cm, fi_ops_cm, join) || !native_av->ops ||
+        !FI_CHECK_OP(native_av->ops, fi_ops_av, av_set)) {
+        return make_error_result_from_fi_errno<group>(FI_ENOSYS);
+    }
+
     auto impl = std::make_unique<group::impl>();
-    impl->coll_addr = coll_addr;
-
-    auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-
-    auto ret = fi_join_collective(fid_ep, coll_addr.get(), nullptr, 0, &impl->mc_group, context);
-
+    if (!attr.communication_key.empty()) {
+        impl->communication_key.assign(attr.communication_key.begin(),
+                                       attr.communication_key.end());
+    }
+    ::fi_av_set_attr set_attr{};
+    set_attr.count = members.size();
+    set_attr.start_addr = FI_ADDR_NOTAVAIL;
+    set_attr.end_addr = FI_ADDR_NOTAVAIL;
+    set_attr.comm_key_size = impl->communication_key.size();
+    set_attr.comm_key = impl->communication_key.empty()
+                            ? nullptr
+                            : reinterpret_cast<std::uint8_t*>(impl->communication_key.data());
+    set_attr.flags = attr.set_flags;
+    ::fid_av_set* set = nullptr;
+    auto ret = ::fi_av_set(native_av, &set_attr, &set, nullptr);
     if (ret != 0) {
         return make_error_result_from_fi_errno<group>(-ret);
     }
+    impl->members.reset(set);
+    if (!set || !set->ops) {
+        return make_error_result_from_fi_errno<group>(FI_EIO);
+    }
+    for (const auto member : members) {
+        if (!FI_CHECK_OP(set->ops, fi_ops_av_set, insert)) {
+            return make_error_result_from_fi_errno<group>(FI_ENOSYS);
+        }
+        ret = ::fi_av_set_insert(set, member.value);
+        if (ret != 0) {
+            return make_error_result_from_fi_errno<group>(-ret);
+        }
+    }
 
+    auto parent = attr.parent_address.value_or(fabric_addrs::unspecified).get();
+    if (!attr.parent_address) {
+        if (!FI_CHECK_OP(set->ops, fi_ops_av_set, addr)) {
+            return make_error_result_from_fi_errno<group>(FI_ENOSYS);
+        }
+        ret = ::fi_av_set_addr(set, &parent);
+        if (ret != 0) {
+            return make_error_result_from_fi_errno<group>(-ret);
+        }
+    }
+    ret = ::fi_join_collective(native_ep, parent, set, attr.join_flags, &impl->mc_group, context);
+    if (ret != 0) {
+        return make_error_result_from_fi_errno<group>(-ret);
+    }
     group grp;
     grp.impl_ = std::move(impl);
     return grp;
