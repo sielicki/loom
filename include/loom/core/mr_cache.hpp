@@ -44,6 +44,7 @@ struct mr_cache_entry_base {
     std::size_t length{0};                 ///< Length of registered region
     mr_access access{};                    ///< Access flags for the region
     bool host_memory{true};                ///< Eligible for ordinary host lookup
+    bool invalidated{false};               ///< Retained only for existing handles
     std::atomic<std::size_t> refcount{0};  ///< Reference count
     std::optional<memory_region> mr{};     ///< Cached memory region
 
@@ -295,10 +296,7 @@ private:
      */
     void release() noexcept {
         if (entry_) {
-            auto prev = entry_->refcount.fetch_sub(1, std::memory_order_acq_rel);
-            if (prev == 1 && cache_) {
-                cache_->notify_entry_released(entry_);
-            }
+            cache_->release_entry(entry_);
         }
         cache_ = nullptr;
         entry_ = nullptr;
@@ -506,6 +504,9 @@ public:
 
     /**
      * @brief Invalidates cache entries overlapping a memory range.
+     * Further lookups cannot reuse these entries. Existing handles retain their
+     * registrations until the last handle is released; the backing memory must
+     * remain valid until then. Statistics include these retained registrations.
      * @param addr Start address.
      * @param length Length of the range.
      */
@@ -518,6 +519,7 @@ public:
         while (it != entries_.end()) {
             auto& entry = *it->second;
             if (entry.overlaps(uaddr, length)) {
+                entry.invalidated = true;
                 if (entry.refcount.load(std::memory_order_acquire) == 0) {
                     stats_.total_registered_bytes -= entry.length;
                     --stats_.current_entries;
@@ -601,7 +603,8 @@ private:
              it != entries_.rend();
              ++it) {
             auto& entry = *it->second;
-            if (entry.host_memory && entry.contains(addr, length) && entry.access.has(access)) {
+            if (!entry.invalidated && entry.host_memory && entry.contains(addr, length) &&
+                entry.access.has(access)) {
                 return it->second.get();
             }
         }
@@ -610,10 +613,27 @@ private:
     }
 
     /**
-     * @brief Callback when an entry's reference count reaches zero.
+     * @brief Releases a handle and retires an invalidated entry's last reference.
      * @param entry The released entry.
      */
-    void notify_entry_released([[maybe_unused]] detail::mr_cache_entry_base* entry) noexcept {}
+    void release_entry(detail::mr_cache_entry_base* entry) noexcept {
+        // Hold the lock before dropping the reference: eviction must not destroy
+        // the entry between the decrement and the invalidation check.
+        std::unique_lock lock(mutex_);
+        if (entry->refcount.fetch_sub(1, std::memory_order_acq_rel) != 1 || !entry->invalidated)
+            return;
+
+        const auto [first, last] = entries_.equal_range(entry->base_addr);
+        for (auto it = first; it != last; ++it) {
+            if (it->second.get() == entry) {
+                stats_.total_registered_bytes -= entry->length;
+                --stats_.current_entries;
+                ++stats_.evictions;
+                entries_.erase(it);
+                return;
+            }
+        }
+    }
 
     domain* domain_;                   ///< Fabric domain
     memory_resource* resource_;        ///< Memory resource

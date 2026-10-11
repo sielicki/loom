@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/core/mr_cache.hpp>
 
+#include <barrier>
 #include <thread>
 #include <vector>
 
@@ -169,6 +170,105 @@ TEST_CASE("clearing a cache preserves live handles", "[mr_cache]") {
     REQUIRE(cache.stats().current_entries == 0);
     REQUIRE(cache.stats().total_registered_bytes == 0);
     REQUIRE(cache.stats().evictions == 2);
+}
+
+TEST_CASE("invalidated registrations retire after their last handle", "[mr_cache][invalidate]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    auto old = cache.lookup(buffer, mr_access_flags::send);
+    REQUIRE(old);
+    auto copy = *old;
+    const auto old_key = old->key();
+    cache.invalidate(buffer.data() + 17, 1);
+    cache.invalidate(buffer.data(), buffer.size());
+    REQUIRE(old->valid());
+    REQUIRE(old->key() == old_key);
+    REQUIRE(copy.key() == old_key);
+    REQUIRE(provider.live_regions == 1);
+
+    auto fresh = cache.lookup(buffer, mr_access_flags::send);
+    REQUIRE(fresh);
+    REQUIRE(fresh->key() != old_key);
+    REQUIRE(provider.live_regions == 2);
+    *old = {};
+    REQUIRE(provider.live_regions == 2);
+    copy = {};
+    REQUIRE(provider.live_regions == 1);
+    REQUIRE(cache.size() == 1);
+    REQUIRE(cache.stats().current_entries == 1);
+    REQUIRE(cache.stats().total_registered_bytes == buffer.size());
+    REQUIRE(cache.stats().evictions == 1);
+
+    auto hit = cache.lookup(buffer, mr_access_flags::send);
+    REQUIRE(hit);
+    REQUIRE(hit->key() == fresh->key());
+    REQUIRE(cache.stats().hits == 1);
+    cache.clear();
+    REQUIRE(provider.live_regions == 1);
+    *fresh = {};
+    *hit = {};
+    cache.clear();
+    REQUIRE(provider.live_regions == 0);
+    REQUIRE(cache.stats().total_registered_bytes == 0);
+    REQUIRE(cache.stats().evictions == 2);
+}
+
+TEST_CASE("invalidation retires each overlapping registration independently",
+          "[mr_cache][invalidate]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 8192> buffer{};
+    auto sender = cache.lookup(buffer.data(), 32, mr_access_flags::send);
+    auto receiver = cache.lookup(buffer.data(), 32, mr_access_flags::recv);
+    auto device = cache.lookup_hmem(buffer.data(), 32, mr_access_flags::send, hmem_device::cuda(0));
+    auto dma = cache.lookup_dmabuf(buffer.data(), 32, mr_access_flags::send, 7);
+    auto separate = cache.lookup(buffer.data() + 4096, 32, mr_access_flags::send);
+    REQUIRE(sender);
+    REQUIRE(receiver);
+    REQUIRE(device);
+    REQUIRE(dma);
+    REQUIRE(separate);
+    const auto separate_key = separate->key();
+    cache.invalidate(buffer.data() + 4096, 0);
+    cache.invalidate(buffer.data(), 1);
+    *sender = {};
+    *receiver = {};
+    *device = {};
+    *dma = {};
+    *separate = {};
+    REQUIRE(provider.live_regions == 1);
+    REQUIRE(cache.stats().evictions == 4);
+    auto reused = cache.lookup(buffer.data() + 4096, 32, mr_access_flags::send);
+    REQUIRE(reused);
+    REQUIRE(reused->key() == separate_key);
+}
+
+TEST_CASE("last handle release can race cache invalidation and eviction",
+          "[mr_cache][invalidate]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    for (int iteration = 0; iteration < 100; ++iteration) {
+        auto registration = cache.lookup(buffer, mr_access_flags::send);
+        REQUIRE(registration);
+        std::barrier ready{2};
+        std::jthread release([handle = std::move(*registration), &ready]() mutable {
+            ready.arrive_and_wait();
+            handle = {};
+        });
+        ready.arrive_and_wait();
+        cache.invalidate(buffer.data(), buffer.size());
+        cache.evict_unreferenced();
+        release.join();
+        REQUIRE(provider.live_regions == 0);
+        REQUIRE(cache.size() == 0);
+        REQUIRE(cache.stats().total_registered_bytes == 0);
+    }
+    REQUIRE(cache.stats().evictions == 100);
 }
 
 TEST_CASE("cache_traits alignment", "[mr_cache]") {
