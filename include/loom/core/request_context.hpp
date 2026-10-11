@@ -4,9 +4,12 @@
 #include <rdma/fabric.h>
 
 #include <cstdint>
+#include <deque>
 #include <memory_resource>
 #include <type_traits>
 #include <utility>
+
+#include "loom/core/allocator.hpp"
 
 /**
  * @namespace loom
@@ -159,6 +162,8 @@ private:
  * @brief Pool for reusing request contexts.
  *
  * Manages a pool of request_context objects to avoid repeated allocations.
+ * Growth and moving a pool preserve acquired context addresses. Complete and
+ * release outstanding operations before destroying or overwriting their pool.
  */
 class request_context_pool {
 public:
@@ -171,13 +176,14 @@ public:
      */
     explicit request_context_pool(std::size_t initial_capacity = 64,
                                   std::pmr::memory_resource* resource = nullptr)
-        : contexts_(initial_capacity, resource ? resource : std::pmr::get_default_resource()) {}
+        : contexts_(make_storage(initial_capacity, resource)) {}
 
     /**
      * @brief Constructs a pool with a specific memory resource.
      * @param resource Memory resource to use.
      */
-    explicit request_context_pool(std::pmr::memory_resource* resource) : contexts_(64, resource) {}
+    explicit request_context_pool(std::pmr::memory_resource* resource)
+        : request_context_pool(64, resource) {}
 
     /**
      * @brief Deleted copy constructor.
@@ -205,16 +211,19 @@ public:
      * @return Pointer to an available context.
      */
     [[nodiscard]] auto acquire() -> request_context* {
-        for (auto& ctx : contexts_) {
+        if (!contexts_) {
+            contexts_ = make_storage(0, get_allocator().resource());
+        }
+        for (auto& ctx : *contexts_) {
             if (!ctx.in_use) {
                 ctx.in_use = true;
                 return &ctx.context;
             }
         }
 
-        contexts_.emplace_back();
-        contexts_.back().in_use = true;
-        return &contexts_.back().context;
+        contexts_->emplace_back();
+        contexts_->back().in_use = true;
+        return &contexts_->back().context;
     }
 
     /**
@@ -222,7 +231,9 @@ public:
      * @param ctx The context to release.
      */
     void release(request_context* ctx) noexcept {
-        for (auto& entry : contexts_) {
+        if (!contexts_)
+            return;
+        for (auto& entry : *contexts_) {
             if (&entry.context == ctx) {
                 entry.in_use = false;
                 entry.context = request_context{};
@@ -235,15 +246,19 @@ public:
      * @brief Gets the total pool size.
      * @return Number of contexts in the pool.
      */
-    [[nodiscard]] auto size() const noexcept -> std::size_t { return contexts_.size(); }
+    [[nodiscard]] auto size() const noexcept -> std::size_t {
+        return contexts_ ? contexts_->size() : 0;
+    }
 
     /**
      * @brief Gets the number of contexts currently in use.
      * @return Count of in-use contexts.
      */
     [[nodiscard]] auto in_use_count() const noexcept -> std::size_t {
+        if (!contexts_)
+            return 0;
         std::size_t count = 0;
-        for (const auto& entry : contexts_) {
+        for (const auto& entry : *contexts_) {
             if (entry.in_use) {
                 ++count;
             }
@@ -256,7 +271,7 @@ public:
      * @return The polymorphic allocator.
      */
     [[nodiscard]] auto get_allocator() const noexcept -> allocator_type {
-        return contexts_.get_allocator();
+        return allocator_type{contexts_.get_deleter().resource};
     }
 
 private:
@@ -269,7 +284,16 @@ private:
         bool in_use{false};       ///< Whether this context is currently in use
     };
 
-    std::pmr::vector<pool_entry> contexts_;  ///< Pool storage
+    using storage = std::pmr::deque<pool_entry>;
+    using storage_ptr = detail::pmr_unique_ptr<storage>;
+
+    static auto make_storage(std::size_t count, std::pmr::memory_resource* resource)
+        -> storage_ptr {
+        auto* allocator = resource ? resource : std::pmr::get_default_resource();
+        return detail::make_pmr_unique<storage>(allocator, count, allocator);
+    }
+
+    storage_ptr contexts_;  ///< Owning storage keeps moves independent of allocator equality.
 };
 
 /**
