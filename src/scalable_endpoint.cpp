@@ -54,6 +54,8 @@ auto scalable_endpoint::create(const domain& dom,
     const auto max_msg_size = info_ptr->ep_attr ? info_ptr->ep_attr->max_msg_size : 0;
     const auto inject_size = info_ptr->tx_attr ? info_ptr->tx_attr->inject_size : 0;
     const auto capabilities = detail::from_fi_caps(info_ptr->caps);
+    const auto tx_flags = info_ptr->tx_attr ? info_ptr->tx_attr->op_flags : 0;
+    const auto rx_flags = info_ptr->rx_attr ? info_ptr->rx_attr->op_flags : 0;
     endpoint_type type{endpoint_types::msg};
     const auto format = detail::from_fi_addr_format(info_ptr->addr_format);
     if (info_ptr->ep_attr) {
@@ -71,7 +73,9 @@ auto scalable_endpoint::create(const domain& dom,
                                                                             format,
                                                                             max_msg_size,
                                                                             inject_size,
-                                                                            capabilities);
+                                                                            capabilities,
+                                                                            tx_flags,
+                                                                            rx_flags);
         (void)pending.release();
         return scalable_endpoint{std::move(impl)};
     }
@@ -85,7 +89,9 @@ auto scalable_endpoint::create(const domain& dom,
                                                                         format,
                                                                         max_msg_size,
                                                                         inject_size,
-                                                                        capabilities);
+                                                                        capabilities,
+                                                                        tx_flags,
+                                                                        rx_flags);
     (void)pending.release();
     return scalable_endpoint{std::move(impl)};
 }
@@ -148,7 +154,9 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
                                                                   impl_->addr_format,
                                                                   impl_->max_msg_size,
                                                                   impl_->inject_size,
-                                                                  impl_->capabilities);
+                                                                  impl_->capabilities,
+                                                                  impl_->tx_op_flags,
+                                                                  impl_->rx_op_flags);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }
@@ -178,7 +186,9 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
                                                                   impl_->addr_format,
                                                                   impl_->max_msg_size,
                                                                   0UZ,
-                                                                  impl_->capabilities);
+                                                                  impl_->capabilities,
+                                                                  impl_->tx_op_flags,
+                                                                  impl_->rx_op_flags);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }

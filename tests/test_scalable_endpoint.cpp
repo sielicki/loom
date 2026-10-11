@@ -75,6 +75,8 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     raw_info->ep_attr->type = FI_EP_RDM;
     raw_info->ep_attr->max_msg_size = 16384;
     raw_info->tx_attr->inject_size = 32;
+    raw_info->tx_attr->op_flags = FI_FENCE | FI_DELIVERY_COMPLETE;
+    raw_info->rx_attr->op_flags = FI_COMPLETION;
     raw_info->ep_attr->tx_ctx_cnt = 2;
     raw_info->ep_attr->rx_ctx_cnt = 3;
     raw_info->addr_format = FI_SOCKADDR_IN6;
@@ -88,6 +90,9 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     REQUIRE_FALSE(sep->rx_context(3));
     auto context = receive ? sep->rx_context(2) : sep->tx_context(1);
     REQUIRE(context);
+    REQUIRE(context->impl_operation_flags(loom::completion_direction::transmit) ==
+            (FI_FENCE | FI_DELIVERY_COMPLETE));
+    REQUIRE(context->impl_operation_flags(loom::completion_direction::receive) == FI_COMPLETION);
     REQUIRE(loom::trigger::supports_trigger(*context) == triggered);
     REQUIRE(loom::rma::get_max_rma_size(*context) == 16384);
     REQUIRE(loom::rma::get_inject_size(*context) == (receive ? 0 : 32));

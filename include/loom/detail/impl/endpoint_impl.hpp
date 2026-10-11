@@ -39,6 +39,8 @@ struct endpoint_impl {
     std::size_t max_msg_size{};
     std::size_t inject_size{};
     caps capabilities{};
+    std::uint64_t tx_op_flags{};
+    std::uint64_t rx_op_flags{};
     completion_queue_binding tx_cq;
     completion_queue_binding rx_cq;
 
@@ -52,14 +54,19 @@ struct endpoint_impl {
     /// @param max_msg_size_ The maximum transfer size from the creation attributes.
     /// @param inject_size_ The inject limit from the creation attributes.
     /// @param capabilities_ The capabilities negotiated during creation.
+    /// @param tx_op_flags_ Native transmit flags from the creation attributes.
+    /// @param rx_op_flags_ Native receive flags from the creation attributes.
     endpoint_impl(::fid_ep* ep_,
                   endpoint_type type_,
                   address_format fmt,
                   std::size_t max_msg_size_ = 0,
                   std::size_t inject_size_ = 0,
-                  caps capabilities_ = {})
+                  caps capabilities_ = {},
+                  std::uint64_t tx_op_flags_ = 0,
+                  std::uint64_t rx_op_flags_ = 0)
         : ep(ep_), type(type_), addr_format(fmt), max_msg_size(max_msg_size_),
-          inject_size(inject_size_), capabilities(capabilities_) {}
+          inject_size(inject_size_), capabilities(capabilities_), tx_op_flags(tx_op_flags_),
+          rx_op_flags(rx_op_flags_) {}
 
     [[nodiscard]] auto query_size_limit(int option, std::size_t fallback) const
         -> result<std::size_t> {
@@ -133,6 +140,20 @@ endpoint::endpoint(endpoint&&) noexcept = default;
 
 auto endpoint::operator=(endpoint&&) noexcept -> endpoint& = default;
 
+auto endpoint::impl_operation_flags(completion_direction direction) const noexcept
+    -> std::uint64_t {
+    if (!impl_) {
+        return 0;
+    }
+    switch (direction) {
+        case completion_direction::transmit:
+            return impl_->tx_op_flags;
+        case completion_direction::receive:
+            return impl_->rx_op_flags;
+    }
+    return 0;
+}
+
 auto endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->ep;
 }
@@ -160,17 +181,33 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
     const auto max_msg_size = info_ptr->ep_attr->max_msg_size;
     const auto inject_size = info_ptr->tx_attr ? info_ptr->tx_attr->inject_size : 0;
     const auto capabilities = detail::from_fi_caps(info_ptr->caps);
+    const auto tx_flags = info_ptr->tx_attr ? info_ptr->tx_attr->op_flags : 0;
+    const auto rx_flags = info_ptr->rx_attr ? info_ptr->rx_attr->op_flags : 0;
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
-            resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
+        auto impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
+                                                                   ep,
+                                                                   ep_type,
+                                                                   addr_fmt,
+                                                                   max_msg_size,
+                                                                   inject_size,
+                                                                   capabilities,
+                                                                   tx_flags,
+                                                                   rx_flags);
         (void)pending.release();
         return endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
-        default_resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
+    auto impl = detail::make_pmr_unique<detail::endpoint_impl>(default_resource,
+                                                               ep,
+                                                               ep_type,
+                                                               addr_fmt,
+                                                               max_msg_size,
+                                                               inject_size,
+                                                               capabilities,
+                                                               tx_flags,
+                                                               rx_flags);
     (void)pending.release();
     return endpoint{std::move(impl)};
 }

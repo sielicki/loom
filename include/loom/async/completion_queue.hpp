@@ -143,9 +143,6 @@ struct completion_queue_attr {
 class completion_queue;
 class endpoint;
 
-/// The CQ responsible for a local operation's completion.
-enum class completion_direction { transmit, receive };
-
 /// Registers one completion without interpreting a native context as an object.
 /// The registration, context storage and callback object must remain alive until
 /// dispatch or explicit reset. Reset only detaches the callback; it does not

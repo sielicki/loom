@@ -724,6 +724,9 @@ inline constexpr op_flags transmit_complete{1ULL << 3};
 inline constexpr op_flags delivery_complete{1ULL << 4};
 }  // namespace op_flag
 
+/// Endpoint direction used for completion registration and operation defaults.
+enum class completion_direction { transmit, receive };
+
 /**
  * @class mr_descriptor
  * @brief Opaque memory region descriptor for data operations.

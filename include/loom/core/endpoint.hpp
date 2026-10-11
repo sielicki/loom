@@ -217,6 +217,9 @@ public:
     [[nodiscard]] auto bind_stx(shared_tx_context& stx) -> void_result;
     [[nodiscard]] auto bind_srx(shared_rx_context& srx) -> void_result;
 
+    /// Native creation defaults for implementation-level message submission.
+    [[nodiscard]] auto impl_operation_flags(completion_direction direction) const noexcept
+        -> std::uint64_t;
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;
     [[nodiscard]] auto impl_valid() const noexcept -> bool;
 

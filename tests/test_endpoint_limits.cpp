@@ -10,6 +10,8 @@
 namespace {
 struct limit_provider {
     std::uint64_t capabilities{};
+    std::uint64_t tx_flags{};
+    std::uint64_t rx_flags{};
     int query_result = -FI_ENOPROTOOPT;
     std::size_t rma_limit = 8192;
     std::size_t inject_limit = 24;
@@ -50,6 +52,8 @@ struct limit_provider {
         raw->ep_attr->type = FI_EP_RDM;
         raw->ep_attr->max_msg_size = 65536;
         raw->tx_attr->inject_size = 48;
+        raw->tx_attr->op_flags = tx_flags;
+        raw->rx_attr->op_flags = rx_flags;
         loom::fabric_info info{loom::detail::make_pmr_unique<loom::detail::fabric_info_impl>(
             loom::get_default_resource(), raw)};
         auto result = loom::endpoint::create(domain, info);
@@ -152,4 +156,15 @@ TEST_CASE("message inject queries handle unavailable operation tables", "[endpoi
         native.endpoint_ops.size = offsetof(fi_ops_ep, getopt);
     }
     REQUIRE(ep.message_inject_size().value() == 48);
+}
+
+TEST_CASE("endpoint operation defaults survive discovery and wrapper moves", "[endpoint][flags]") {
+    limit_provider native;
+    native.tx_flags = FI_FENCE | FI_DELIVERY_COMPLETE;
+    native.rx_flags = FI_COMPLETION;
+    auto original = native.endpoint();
+    auto moved = std::move(original);
+    REQUIRE(moved.impl_operation_flags(loom::completion_direction::transmit) == native.tx_flags);
+    REQUIRE(moved.impl_operation_flags(loom::completion_direction::receive) == native.rx_flags);
+    REQUIRE(original.impl_operation_flags(loom::completion_direction::transmit) == 0);
 }

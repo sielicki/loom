@@ -50,6 +50,20 @@ endpoint::endpoint(endpoint&&) noexcept = default;
 
 auto endpoint::operator=(endpoint&&) noexcept -> endpoint& = default;
 
+auto endpoint::impl_operation_flags(completion_direction direction) const noexcept
+    -> std::uint64_t {
+    if (!impl_) {
+        return 0;
+    }
+    switch (direction) {
+        case completion_direction::transmit:
+            return impl_->tx_op_flags;
+        case completion_direction::receive:
+            return impl_->rx_op_flags;
+    }
+    return 0;
+}
+
 auto endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->ep;
 }
@@ -77,17 +91,33 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
     const auto max_msg_size = info_ptr->ep_attr->max_msg_size;
     const auto inject_size = info_ptr->tx_attr ? info_ptr->tx_attr->inject_size : 0;
     const auto capabilities = detail::from_fi_caps(info_ptr->caps);
+    const auto tx_flags = info_ptr->tx_attr ? info_ptr->tx_attr->op_flags : 0;
+    const auto rx_flags = info_ptr->rx_attr ? info_ptr->rx_attr->op_flags : 0;
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
-            resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
+        auto impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
+                                                                   ep,
+                                                                   ep_type,
+                                                                   addr_fmt,
+                                                                   max_msg_size,
+                                                                   inject_size,
+                                                                   capabilities,
+                                                                   tx_flags,
+                                                                   rx_flags);
         (void)pending.release();
         return endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
-        default_resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
+    auto impl = detail::make_pmr_unique<detail::endpoint_impl>(default_resource,
+                                                               ep,
+                                                               ep_type,
+                                                               addr_fmt,
+                                                               max_msg_size,
+                                                               inject_size,
+                                                               capabilities,
+                                                               tx_flags,
+                                                               rx_flags);
     (void)pending.release();
     return endpoint{std::move(impl)};
 }
