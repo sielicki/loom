@@ -823,15 +823,28 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
     enum class remote_range { valid, short_extent, overflow };
     const auto range =
         GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
-    const bool invalid_remote = range != remote_range::valid;
+    enum class local_range { valid, empty, short_extent, before_start, unrelated, unmapped };
+    const auto local = GENERATE(local_range::valid,
+                                local_range::empty,
+                                local_range::short_extent,
+                                local_range::before_start,
+                                local_range::unrelated,
+                                local_range::unmapped);
+    const bool invalid_range = range != remote_range::valid || local != local_range::valid;
     provider fabric{FI_MORE, FI_FENCE | FI_MORE | FI_DELIVERY_COMPLETE};
     fabric.selective_completion = GENERATE(false, true);
     CAPTURE(fabric.selective_completion);
     fabric.submission_status = status;
-    std::array<std::byte, 16> storage{};
+    std::array<std::byte, 16> storage{}, unrelated{};
     fid_mr native_mr{.fid = {.ops = &fabric.ops}, .mem_desc = &native_mr};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &native_mr, storage.data(), storage.size())};
+        loom::get_default_resource(),
+        local == local_range::empty ? nullptr : &native_mr,
+        local == local_range::unmapped ? nullptr
+        : local == local_range::unrelated
+            ? unrelated.data()
+            : storage.data() + (local == local_range::before_start ? 1 : 0),
+        storage.size() - (local == local_range::short_extent ? 1 : 0))};
     const loom::fabric_addr peer{19};
     const loom::remote_memory remote{
         range == remote_range::overflow ? std::numeric_limits<std::uint64_t>::max() - 15 : 24,
@@ -841,7 +854,7 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
     auto run = [&](auto sender) {
         auto operation = loom::execution::connect(std::move(sender), receiver{&state});
         loom::execution::start(operation);
-        if (invalid_remote) {
+        if (invalid_range) {
             REQUIRE(state.calls == 1);
             REQUIRE(state.error == loom::errc::invalid_argument);
             REQUIRE(fabric.submitted_bytes == 0);
@@ -871,6 +884,45 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
         run(operations.write_to(storage, mr, peer, remote, &fabric.cq));
     else
         run(operations.read_from(storage, mr, peer, remote, &fabric.cq));
+}
+
+TEST_CASE("registered RMA senders validate the registration used at start",
+          "[execution][progress]") {
+    const auto write = GENERATE(false, true);
+    const auto fits = GENERATE(false, true);
+    provider native;
+    std::array<std::byte, 16> buffer{}, unrelated{};
+    fid_mr first{.fid = {.ops = &native.ops}, .mem_desc = &first};
+    fid_mr second{.fid = {.ops = &native.ops}, .mem_desc = &second};
+    const auto region = [&](fid_mr& handle, auto& storage) {
+        return loom::memory_region{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+            loom::get_default_resource(), &handle, storage.data(), storage.size())};
+    };
+    auto mr = region(first, buffer);
+    const loom::remote_memory remote{24, 7, buffer.size()};
+    completion_state state;
+    const auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        // A sender has no native work yet. Validate the borrowed MR at start
+        // and submit its matching descriptor after replacement.
+        mr = region(second, fits ? buffer : unrelated);
+        loom::execution::start(operation);
+        if (fits) {
+            CHECK(native.local_descriptor == &second);
+            REQUIRE(loom::execution::poll_completions(native.cq).value().completed == 1);
+            CHECK_FALSE(state.error);
+        } else {
+            CHECK(native.submitted_bytes == 0);
+            CHECK(state.error == loom::errc::invalid_argument);
+        }
+        CHECK(state.calls == 1);
+        CHECK(native.pending.empty());
+    };
+    const auto operations = loom::rma_async(native.ep);
+    if (write)
+        run(operations.write_to(buffer, mr, loom::fabric_addr{19}, remote, &native.cq));
+    else
+        run(operations.read_from(buffer, mr, loom::fabric_addr{19}, remote, &native.cq));
 }
 
 TEST_CASE("RMA senders complete sockets transfers with selective completion",

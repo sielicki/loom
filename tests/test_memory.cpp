@@ -619,6 +619,8 @@ TEST_CASE("DMA-BUF local addresses identify the registered subrange", "[memory][
     auto moved = std::move(*region);
     CHECK(moved.address() == (mapped ? storage.data() + offset : nullptr));
     CHECK(moved.length() == 32);
+    CHECK(moved.contains(mapped ? storage.data() + offset : nullptr, 32) == mapped);
+    CHECK_FALSE(moved.contains(mapped ? storage.data() + offset : nullptr, 33));
     CHECK(region->address() == nullptr);
     CHECK(moved.remote_address() ==
           (mode == 0 ? 0 : reinterpret_cast<std::uintptr_t>(base) + offset));
@@ -645,4 +647,33 @@ TEST_CASE("DMA-BUF registration rejects wrapping local and file ranges", "[memor
     REQUIRE_FALSE(region);
     CHECK(region.error() == errc::invalid_argument);
     CHECK(provider.registrations == 0);
+}
+
+TEST_CASE("local MR range checks preserve boundaries and reject overflow", "[memory][bounds]") {
+    test::mock_domain domain;
+    std::array<std::byte, 32> storage{};
+    auto mr = memory_region::register_memory(domain.dom,
+                                             std::span{storage}.subspan(8, 8),
+                                             mr_access_flags::read | mr_access_flags::write)
+                  .value();
+    CHECK(mr.contains(storage.data() + 8, 8));
+    CHECK(mr.contains(storage.data() + 9, 7));
+    CHECK(mr.contains(storage.data() + 16, 0));
+    CHECK_FALSE(mr.contains(storage.data() + 7, 1));
+    CHECK_FALSE(mr.contains(storage.data() + 9, 8));
+    CHECK_FALSE(mr.contains(storage.data() + 16, 1));
+    CHECK_FALSE(mr.contains(nullptr, 0));
+    CHECK_FALSE(memory_region{}.contains(storage.data(), 0));
+    auto moved = std::move(mr);
+    CHECK_FALSE(mr.contains(storage.data() + 8, 8));
+    CHECK(moved.contains(storage.data() + 8, 8));
+
+    constexpr auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    auto* address = reinterpret_cast<void*>(maximum - 3);
+    auto wrapped =
+        memory_region::register_memory(domain.dom, address, 8, mr_access_flags::read).value();
+    CHECK(wrapped.contains(address, 3));
+    CHECK_FALSE(wrapped.contains(address, 4));
+    CHECK(wrapped.contains(reinterpret_cast<void*>(maximum), 0));
+    CHECK_FALSE(wrapped.contains(reinterpret_cast<void*>(maximum), 1));
 }

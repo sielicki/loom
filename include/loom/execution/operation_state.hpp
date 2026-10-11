@@ -453,9 +453,10 @@ public:
                          fabric_addr peer,
                          remote_memory remote,
                          completion_queue* cq,
-                         Receiver receiver) noexcept
+                         Receiver receiver,
+                         const memory_region* registration = nullptr) noexcept
         : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), descriptor_(descriptor),
-          peer_(peer), remote_(remote), cq_(cq) {}
+          peer_(peer), remote_(remote), cq_(cq), registration_(registration) {}
 
     void start() & noexcept {
         if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
@@ -463,15 +464,17 @@ public:
             return;
         }
 
-        if (!remote_.contains(0, buffer_.size())) {
+        if (!remote_.contains(0, buffer_.size()) ||
+            (registration_ && !registration_->contains(buffer_.data(), buffer_.size()))) {
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }
         if (!this->register_completion(*ep_, completion_direction::transmit)) {
             return;
         }
+        const auto descriptor = registration_ ? registration_->descriptor() : descriptor_;
         auto result = rma::read_to<operation_defaults::inherit_without_more>(
-            *ep_, buffer_, descriptor_, peer_, remote_, op_flag::completion, this->as_fi_context());
+            *ep_, buffer_, descriptor, peer_, remote_, op_flag::completion, this->as_fi_context());
         if (!result) {
             this->complete_error(result.error());
         }
@@ -486,6 +489,7 @@ private:
     fabric_addr peer_;
     remote_memory remote_;
     completion_queue* cq_;
+    const memory_region* registration_;
 };
 
 /**
@@ -519,9 +523,10 @@ public:
                           fabric_addr peer,
                           remote_memory remote,
                           completion_queue* cq,
-                          Receiver receiver) noexcept
+                          Receiver receiver,
+                          const memory_region* registration = nullptr) noexcept
         : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), descriptor_(descriptor),
-          peer_(peer), remote_(remote), cq_(cq) {}
+          peer_(peer), remote_(remote), cq_(cq), registration_(registration) {}
 
     void start() & noexcept {
         if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
@@ -529,15 +534,17 @@ public:
             return;
         }
 
-        if (!remote_.contains(0, buffer_.size())) {
+        if (!remote_.contains(0, buffer_.size()) ||
+            (registration_ && !registration_->contains(buffer_.data(), buffer_.size()))) {
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }
         if (!this->register_completion(*ep_, completion_direction::transmit)) {
             return;
         }
+        const auto descriptor = registration_ ? registration_->descriptor() : descriptor_;
         auto result = rma::write_to<operation_defaults::inherit_without_more>(
-            *ep_, buffer_, descriptor_, peer_, remote_, op_flag::completion, this->as_fi_context());
+            *ep_, buffer_, descriptor, peer_, remote_, op_flag::completion, this->as_fi_context());
         if (!result) {
             this->complete_error(result.error());
         }
@@ -550,6 +557,7 @@ private:
     fabric_addr peer_;
     remote_memory remote_;
     completion_queue* cq_;
+    const memory_region* registration_;
 };
 
 /**

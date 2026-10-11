@@ -53,6 +53,15 @@ struct asio_buffers {
     std::span<const iovec> iov;
     std::span<const mr_descriptor> descriptors;
     std::size_t bytes{};
+
+    [[nodiscard]] auto within(const memory_region& region) const noexcept -> bool {
+        if (!region)
+            return false;
+        for (const auto& buffer : iov)
+            if (!region.contains(buffer.iov_base, buffer.iov_len))
+                return false;
+        return true;
+    }
 };
 
 template <typename Allocator = std::allocator<std::byte>>

@@ -144,6 +144,8 @@ auto read(endpoint& ep,
           memory_region& local_mr,
           remote_memory remote,
           Ctx context = {}) -> result<void> {
+    if (!local_mr.contains(local_buffer.data(), local_buffer.size()))
+        return make_error_result<void>(errc::invalid_argument);
     return detail::scalar_read(ep,
                                local_buffer,
                                local_mr.descriptor(),
@@ -252,6 +254,8 @@ auto write(endpoint& ep,
            memory_region& local_mr,
            remote_memory remote,
            Ctx context = {}) -> result<void> {
+    if (!local_mr.contains(local_buffer.data(), local_buffer.size()))
+        return make_error_result<void>(errc::invalid_argument);
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
@@ -386,6 +390,8 @@ auto write_data(endpoint& ep,
                 remote_memory remote,
                 std::uint64_t data,
                 Ctx context = {}) -> result<void> {
+    if (!local_mr.contains(local_buffer.data(), local_buffer.size()))
+        return make_error_result<void>(errc::invalid_argument);
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
@@ -495,6 +501,8 @@ auto read_to(endpoint& ep,
              fabric_addr dest_addr,
              remote_memory remote,
              Ctx context = {}) -> result<void> {
+    if (!local_mr.contains(local_buffer.data(), local_buffer.size()))
+        return make_error_result<void>(errc::invalid_argument);
     return read_to(ep, local_buffer, local_mr.descriptor(), dest_addr, remote, context);
 }
 
@@ -507,6 +515,8 @@ auto read_to(endpoint& ep,
              remote_memory remote,
              op_flags flags,
              Ctx context = {}) -> result<void> {
+    if (!local_mr.contains(local_buffer.data(), local_buffer.size()))
+        return make_error_result<void>(errc::invalid_argument);
     return read_to<Defaults>(
         ep, local_buffer, local_mr.descriptor(), dest_addr, remote, flags, context);
 }
@@ -600,6 +610,8 @@ auto write_to(endpoint& ep,
               fabric_addr dest_addr,
               remote_memory remote,
               Ctx context = {}) -> result<void> {
+    if (!local_mr.contains(local_buffer.data(), local_buffer.size()))
+        return make_error_result<void>(errc::invalid_argument);
     return write_to(ep, local_buffer, local_mr.descriptor(), dest_addr, remote, context);
 }
 
@@ -612,6 +624,8 @@ auto write_to(endpoint& ep,
               remote_memory remote,
               op_flags flags,
               Ctx context = {}) -> result<void> {
+    if (!local_mr.contains(local_buffer.data(), local_buffer.size()))
+        return make_error_result<void>(errc::invalid_argument);
     return write_to<Defaults>(
         ep, local_buffer, local_mr.descriptor(), dest_addr, remote, flags, context);
 }

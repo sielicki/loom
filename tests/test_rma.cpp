@@ -176,6 +176,59 @@ TEST_CASE("RMA scalar submissions enforce remote extents", "[rma][bounds]") {
     }
 }
 
+TEST_CASE("registered RMA rejects buffers outside the local MR", "[rma][bounds]") {
+    struct range {
+        std::size_t offset, length;
+        bool valid;
+    };
+    constexpr std::array ranges{
+        range{16, 0, true},
+        range{16, 16, true},
+        range{17, 15, true},
+        range{32, 0, true},
+        range{15, 1, false},
+        range{17, 16, false},
+        range{32, 1, false},
+        range{0, 0, false},
+        range{48, 8, false},
+    };
+    const auto null_descriptor = GENERATE(false, true);
+    const auto dma = GENERATE(false, true);
+    test::mock_domain domain;
+    alignas(4096) std::array<std::byte, 64> storage{};
+    const auto access = mr_access_flags::read | mr_access_flags::write;
+    auto mr = (dma ? memory_region::register_dmabuf(domain.dom, storage.data(), 16, access, 7, 16)
+                   : memory_region::register_memory(
+                         domain.dom, std::span{storage}.subspan(16, 16), access))
+                  .value();
+    if (null_descriptor)
+        static_cast<fid_mr*>(mr.internal_ptr())->mem_desc = nullptr;
+    rma_provider native;
+    native.status = -FI_EAGAIN;
+    auto ep = native.endpoint();
+    const fabric_addr peer{19};
+    const remote_memory remote{0x1000, 7, storage.size()};
+    for (const auto& range : ranges) {
+        CAPTURE(range.offset, range.length, null_descriptor);
+        native.calls = 0;
+        const auto buffer = std::span{storage}.subspan(range.offset, range.length);
+        const std::array results{
+            rma::read(ep, buffer, mr, remote),
+            rma::write(ep, buffer, mr, remote),
+            rma::write_data(ep, buffer, mr, remote, 7),
+            rma::read_to(ep, buffer, mr, peer, remote),
+            rma::read_to(ep, buffer, mr, peer, remote, op_flag::none),
+            rma::write_to(ep, buffer, mr, peer, remote),
+            rma::write_to(ep, buffer, mr, peer, remote, op_flag::none),
+        };
+        for (const auto& result : results) {
+            REQUIRE_FALSE(result);
+            CHECK(result.error() == (range.valid ? errc::again : errc::invalid_argument));
+        }
+        CHECK(native.calls == (range.valid ? results.size() : 0));
+    }
+}
+
 TEST_CASE("RMA rejects unavailable native operations", "[rma]") {
     const auto missing = GENERATE(0, 1, 2, 3);
     rma_provider native;
@@ -189,7 +242,10 @@ TEST_CASE("RMA rejects unavailable native operations", "[rma]") {
     else
         native.rma_ops.size = sizeof(std::size_t);
     std::array<std::byte, 8> buffer{};
-    memory_region memory;
+    test::mock_domain domain;
+    auto memory = memory_region::register_memory(
+                      domain.dom, buffer, mr_access_flags::read | mr_access_flags::write)
+                      .value();
     const remote_memory remote{0, 1, buffer.size()};
     const fabric_addr peer{19};
     const std::array iov{iovec{buffer.data(), buffer.size()}};

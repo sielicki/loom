@@ -238,6 +238,10 @@ public:
 
     [[nodiscard]] auto length() const noexcept -> std::size_t;
 
+    /// Check a local byte range without accessing its contents. Requires a
+    /// valid, locally mapped MR; empty ranges at its end are permitted.
+    [[nodiscard]] auto contains(const void* buffer, std::size_t size) const noexcept -> bool;
+
     /**
      * @brief Binds this memory region to an endpoint.
      * @param ep The endpoint to bind to.

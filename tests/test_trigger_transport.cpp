@@ -131,13 +131,15 @@ TEST_CASE("triggered RMA enforces remote bounds before changing its context", "[
     enum class remote_range { valid, short_extent, overflow };
     const auto range =
         GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
+    const auto short_local = GENERATE(false, true);
     trigger_provider native;
     loom::test::mock_domain domain;
     std::array<std::byte, 8> buffer{};
-    auto memory =
-        loom::memory_region::register_memory(
-            domain.dom, buffer, loom::mr_access_flags::read | loom::mr_access_flags::write)
-            .value();
+    auto memory = loom::memory_region::register_memory(domain.dom,
+                                                       std::span{buffer}.first(short_local ? 7 : 8),
+                                                       loom::mr_access_flags::read |
+                                                           loom::mr_access_flags::write)
+                      .value();
     const loom::remote_memory remote{
         range == remote_range::overflow ? std::numeric_limits<std::uint64_t>::max() - 7 : 0x1000,
         7,
@@ -148,7 +150,7 @@ TEST_CASE("triggered RMA enforces remote bounds before changing its context", "[
     const auto result =
         write ? loom::trigger::write(native.endpoint, buffer, memory, remote, &context, condition)
               : loom::trigger::read(native.endpoint, buffer, memory, remote, &context, condition);
-    const bool valid = range == remote_range::valid;
+    const bool valid = range == remote_range::valid && !short_local;
     REQUIRE(result.has_value() == valid);
     if (!valid)
         CHECK(result.error() == loom::errc::invalid_argument);
@@ -326,7 +328,11 @@ TEST_CASE("triggered submissions reject unavailable resources", "[trigger]") {
         missing == unavailable::counter ? &empty : &native.counter, 7};
     const auto result = [&]() -> loom::void_result {
         using namespace loom;
-        memory_region memory;
+        test::mock_domain domain;
+        std::array<std::byte, 1> buffer{};
+        auto memory = memory_region::register_memory(
+                          domain.dom, buffer, mr_access_flags::read | mr_access_flags::write)
+                          .value();
         switch (operation) {
             case 0:
                 return trigger::sendmsg(native.endpoint,
@@ -347,9 +353,11 @@ TEST_CASE("triggered submissions reject unavailable resources", "[trigger]") {
                     msg::tagged_recv_message<trigger_context*>{.context = &context},
                     condition);
             case 4:
-                return trigger::read(native.endpoint, {}, memory, {}, &context, condition);
+                return trigger::read(
+                    native.endpoint, std::span{buffer}.first(0), memory, {}, &context, condition);
             default:
-                return trigger::write(native.endpoint, {}, memory, {}, &context, condition);
+                return trigger::write(
+                    native.endpoint, std::span{buffer}.first(0), memory, {}, &context, condition);
         }
     }();
     REQUIRE_FALSE(result);

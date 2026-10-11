@@ -823,7 +823,10 @@ arrays of independently registered buffers and offset or shortened views. The
 same views can wrap an MR created with `memory_registration` for HMEM; device
 allocation lifetime and visibility synchronization remain the caller's
 responsibility. RMA overloads that take an explicit MR use that registration for
-every buffer in the sequence.
+every buffer in the sequence and check each local range before submission.
+An empty or unmapped MR, a buffer outside its registered span, or a wrapping
+range returns `errc::invalid_argument`. The native descriptor may be null for a
+valid registration. `memory_region::contains` exposes the same range check.
 
 #### Building with Asio
 

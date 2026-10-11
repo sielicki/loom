@@ -210,7 +210,14 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     enum class remote_range { valid, short_extent, overflow };
     const auto range =
         GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
-    const bool invalid_remote = range != remote_range::valid;
+    enum class local_range { valid, empty, short_extent, before_start, unrelated, unmapped };
+    const auto local = GENERATE(local_range::valid,
+                                local_range::empty,
+                                local_range::short_extent,
+                                local_range::before_start,
+                                local_range::unrelated,
+                                local_range::unmapped);
+    const bool invalid_range = range != remote_range::valid || local != local_range::valid;
     const auto null_descriptor = GENERATE(false, true);
     vector_provider native;
     native.submission_status = status;
@@ -219,10 +226,16 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
                             native.endpoint(loom::cq_bind::transmit | loom::cq_bind::recv,
                                             FI_MORE,
                                             FI_FENCE | FI_MORE | FI_DELIVERY_COMPLETE)};
-    std::array<std::byte, 8> storage{};
+    std::array<std::byte, 8> storage{}, unrelated{};
     fid_mr handle{.fid = {.ops = &native.ops}, .mem_desc = null_descriptor ? nullptr : &handle};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &handle, storage.data(), storage.size())};
+        loom::get_default_resource(),
+        local == local_range::empty ? nullptr : &handle,
+        local == local_range::unmapped ? nullptr
+        : local == local_range::unrelated
+            ? unrelated.data()
+            : storage.data() + (local == local_range::before_start ? 1 : 0),
+        storage.size() - (local == local_range::short_extent ? 1 : 0))};
     const loom::fabric_addr peer{23};
     const loom::remote_memory remote{
         range == remote_range::overflow ? std::numeric_limits<std::uint64_t>::max() - 7 : 32,
@@ -242,13 +255,13 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     auto handler =
         ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
             ++completed;
-            if (invalid_remote)
+            if (invalid_range)
                 REQUIRE(error == loom::errc::invalid_argument);
             else if (status)
                 REQUIRE(error == loom::make_error_code_from_fi_errno(-status));
             else
                 REQUIRE_FALSE(error);
-            REQUIRE(bytes == (invalid_remote || status ? 0 : storage.size()));
+            REQUIRE(bytes == (invalid_range || status ? 0 : storage.size()));
         });
     if (helper) {
         if (read)
@@ -263,7 +276,7 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
         ep.async_write_to(buffers, mr, peer, remote, handler);
     }
     REQUIRE(completed == 0);
-    if (!invalid_remote) {
+    if (!invalid_range) {
         CHECK(native.submission_flags ==
               (FI_COMPLETION | FI_FENCE | (read ? 0 : FI_DELIVERY_COMPLETE)));
         REQUIRE(native.peer == peer.get());
@@ -276,7 +289,7 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
             REQUIRE(native.descriptors == std::vector<void*>{&handle, &handle});
     }
     buffers = {};
-    if (!invalid_remote && !status) {
+    if (!invalid_range && !status) {
         REQUIRE(native.buffers.size() == 2);
         REQUIRE(native.buffers[0].iov_base == storage.data());
         REQUIRE(native.buffers[1].iov_base == storage.data() + 3);
@@ -309,11 +322,15 @@ TEST_CASE("Asio operations register and complete without later submissions",
                                                       : loom::cq_bind::recv,
                                             FI_MORE,
                                             FI_MORE | FI_FENCE | FI_DELIVERY_COMPLETE)};
-    loom::memory_region mr;
     const loom::remote_memory remote{0x1000, 1, 4096};
-    std::array<char, 2> first{'a', 'b'};
-    std::array<char, 4> second{'c', 'd', 'e', 'f'};
-    std::array<::asio::mutable_buffer, 2> buffers{::asio::buffer(first), ::asio::buffer(second)};
+    std::array<char, 6> storage{'a', 'b', 'c', 'd', 'e', 'f'};
+    const auto first = std::span{storage}.first(2);
+    const auto second = std::span{storage}.subspan(2);
+    fid_mr handle{.fid = {.ops = &native.ops}, .mem_desc = &handle};
+    loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(), &handle, storage.data(), storage.size())};
+    std::array<::asio::mutable_buffer, 2> buffers{::asio::buffer(first.data(), first.size()),
+                                                  ::asio::buffer(second.data(), second.size())};
     std::array<::asio::const_buffer, 2> const_buffers{buffers[0], buffers[1]};
     int completions{};
     const auto expected = !bound   ? loom::make_error_code(loom::errc::invalid_argument)

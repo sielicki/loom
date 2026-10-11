@@ -103,15 +103,16 @@ public:
                 mr_descriptor descriptor,
                 fabric_addr peer,
                 remote_memory remote,
-                completion_queue* cq) noexcept
-        : ep_(ep), buffer_(buffer), descriptor_(descriptor), peer_(peer), remote_(remote), cq_(cq) {
-    }
+                completion_queue* cq,
+                const memory_region* registration = nullptr) noexcept
+        : ep_(ep), buffer_(buffer), descriptor_(descriptor), peer_(peer), remote_(remote), cq_(cq),
+          registration_(registration) {}
 
     template <typename Receiver>
     [[nodiscard]] auto connect(Receiver receiver) && noexcept
         -> read_operation_state<std::decay_t<Receiver>> {
         return read_operation_state<std::decay_t<Receiver>>(
-            ep_, buffer_, descriptor_, peer_, remote_, cq_, std::move(receiver));
+            ep_, buffer_, descriptor_, peer_, remote_, cq_, std::move(receiver), registration_);
     }
 
     [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_}; }
@@ -123,6 +124,7 @@ private:
     fabric_addr peer_;
     remote_memory remote_;
     completion_queue* cq_;
+    const memory_region* registration_;
 };
 
 /**
@@ -163,15 +165,16 @@ public:
                  mr_descriptor descriptor,
                  fabric_addr peer,
                  remote_memory remote,
-                 completion_queue* cq) noexcept
-        : ep_(ep), buffer_(buffer), descriptor_(descriptor), peer_(peer), remote_(remote), cq_(cq) {
-    }
+                 completion_queue* cq,
+                 const memory_region* registration = nullptr) noexcept
+        : ep_(ep), buffer_(buffer), descriptor_(descriptor), peer_(peer), remote_(remote), cq_(cq),
+          registration_(registration) {}
 
     template <typename Receiver>
     [[nodiscard]] auto connect(Receiver receiver) && noexcept
         -> write_operation_state<std::decay_t<Receiver>> {
         return write_operation_state<std::decay_t<Receiver>>(
-            ep_, buffer_, descriptor_, peer_, remote_, cq_, std::move(receiver));
+            ep_, buffer_, descriptor_, peer_, remote_, cq_, std::move(receiver), registration_);
     }
 
     [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_}; }
@@ -183,6 +186,7 @@ private:
     fabric_addr peer_;
     remote_memory remote_;
     completion_queue* cq_;
+    const memory_region* registration_;
 };
 
 /**
@@ -683,7 +687,7 @@ public:
                                  fabric_addr peer,
                                  remote_memory remote,
                                  completion_queue* cq) const noexcept -> read_sender {
-        return read_sender(ep_, buffer, local_mr.descriptor(), peer, remote, cq);
+        return read_sender(ep_, buffer, local_mr.descriptor(), peer, remote, cq, &local_mr);
     }
 
     /// Write to an explicit peer. Borrowed resources and the source buffer
@@ -693,7 +697,7 @@ public:
                                 fabric_addr peer,
                                 remote_memory remote,
                                 completion_queue* cq) const noexcept -> write_sender {
-        return write_sender(ep_, buffer, local_mr.descriptor(), peer, remote, cq);
+        return write_sender(ep_, buffer, local_mr.descriptor(), peer, remote, cq, &local_mr);
     }
 
     /**

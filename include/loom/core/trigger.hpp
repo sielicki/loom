@@ -458,7 +458,8 @@ template <structured_triggered_context Ctx>
                         const threshold_condition& trigger) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr || context == nullptr || trigger.cntr == nullptr || !*trigger.cntr ||
-        !remote.contains(0, local_buffer.size())) {
+        !remote.contains(0, local_buffer.size()) ||
+        !local_mr.contains(local_buffer.data(), local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, readmsg)) {
@@ -517,7 +518,8 @@ template <structured_triggered_context Ctx>
                          const threshold_condition& trigger) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr || context == nullptr || trigger.cntr == nullptr || !*trigger.cntr ||
-        !remote.contains(0, local_buffer.size())) {
+        !remote.contains(0, local_buffer.size()) ||
+        !local_mr.contains(local_buffer.data(), local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, writemsg)) {

@@ -244,6 +244,16 @@ auto memory_region::length() const noexcept -> std::size_t {
     return impl_ ? impl_->length : 0;
 }
 
+auto memory_region::contains(const void* buffer, std::size_t size) const noexcept -> bool {
+    if (!impl_ || !impl_->mr || !impl_->addr)
+        return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(impl_->addr);
+    const auto address = reinterpret_cast<std::uintptr_t>(buffer);
+    return address >= base && address - base <= impl_->length &&
+           size <= impl_->length - (address - base) &&
+           size <= std::numeric_limits<std::uintptr_t>::max() - address;
+}
+
 auto memory_region::bind(endpoint& ep) -> result<void> {
     if (!impl_ || !impl_->mr || !ep) {
         return make_error_result<void>(errc::invalid_argument);
