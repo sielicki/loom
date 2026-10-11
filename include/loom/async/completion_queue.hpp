@@ -41,8 +41,10 @@ struct completion_queue_impl;
  * @brief Extended error information from a completion queue entry.
  */
 struct cq_error_info {
-    int prov_errno{0};             ///< Provider-specific error code
-    void* err_data{nullptr};       ///< Provider-specific error data
+    int prov_errno{0};  ///< Provider-specific error code
+    /// Owned immutable diagnostic bytes, shared by copies of the event.
+    /// The queue's memory resource must outlive all retaining events.
+    std::shared_ptr<const std::byte[]> err_data{};
     std::size_t err_data_size{0};  ///< Size of error data in bytes
 
     /**

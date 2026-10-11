@@ -73,6 +73,7 @@ loom_add_test(test_submission_context)
 loom_add_test(test_safe_context)
 loom_add_test(test_request_context)
 loom_add_test(test_completion_queue)
+loom_add_test(test_completion_diagnostics)
 loom_add_test(test_queue_wait)
 loom_add_test(test_counter)
 loom_add_test(test_empty_resources)
@@ -107,6 +108,7 @@ add_executable(test_implementation
     test_collective_join.cpp
     test_collective_transfers.cpp
     test_completion_queue.cpp
+    test_completion_diagnostics.cpp
     test_queue_wait.cpp
     test_counter.cpp
     test_scalable_endpoint.cpp

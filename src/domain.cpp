@@ -74,6 +74,7 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
                                                                  registration_mode,
                                                                  key_bytes,
                                                                  resource);
+        impl->max_error_data = info_ptr->domain_attr ? info_ptr->domain_attr->max_err_data : 0;
         (void)pending.release();
         return domain{std::move(impl)};
     }
@@ -89,6 +90,7 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
                                                              registration_mode,
                                                              key_bytes,
                                                              default_resource);
+    impl->max_error_data = info_ptr->domain_attr ? info_ptr->domain_attr->max_err_data : 0;
     (void)pending.release();
     return domain{std::move(impl)};
 }

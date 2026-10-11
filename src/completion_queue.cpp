@@ -70,6 +70,7 @@ auto completion_queue::create(const domain& dom,
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
             resource, cq, progress, attr.wait_obj, format, attr.size.get(), attr.source_addresses);
+        impl->max_error_data = dom.impl_->max_error_data;
         (void)pending.release();
         return completion_queue{std::move(impl)};
     }
@@ -82,6 +83,7 @@ auto completion_queue::create(const domain& dom,
                                                                        format,
                                                                        attr.size.get(),
                                                                        attr.source_addresses);
+    impl->max_error_data = dom.impl_->max_error_data;
     (void)pending.release();
     return completion_queue{std::move(impl)};
 }
@@ -204,11 +206,26 @@ auto completion_queue::read_error(int status) const -> result<completion_event> 
         return make_error_result_from_fi_errno<completion_event>(status);
     }
 
+    // A nonzero input size requests caller-owned data, including when the
+    // provider advertises no diagnostics. Allocate before consuming the error.
+    const auto capacity = std::max(impl_->max_error_data, std::size_t{1});
+    const auto words =
+        capacity / sizeof(std::max_align_t) + (capacity % sizeof(std::max_align_t) != 0);
+    auto* resource = impl_.get_deleter().resource;
+    auto storage = std::allocate_shared<std::max_align_t[]>(
+        pmr_allocator<std::max_align_t>{resource ? resource : get_default_resource()}, words);
     ::fi_cq_err_entry entry{};
+    entry.err_data = storage.get();
+    entry.err_data_size = capacity;
     const auto ret = ::fi_cq_readerr(impl_->cq, &entry, 0);
     if (ret <= 0) {
         return make_error_result_from_fi_errno<completion_event>(ret == 0 ? FI_EAGAIN
                                                                           : static_cast<int>(-ret));
+    }
+
+    if (entry.err_data_size > capacity ||
+        (entry.err_data_size && entry.err_data != storage.get())) {
+        return make_error_result_from_fi_errno<completion_event>(FI_EIO);
     }
 
     completion_event event{};
@@ -220,7 +237,12 @@ auto completion_queue::read_error(int status) const -> result<completion_event> 
     event.len = entry.len;
     event.tag = entry.tag;
     event.data = entry.data;
-    event.error_info = {entry.prov_errno, entry.err_data, entry.err_data_size};
+    event.error_info.prov_errno = entry.prov_errno;
+    if (entry.err_data_size) {
+        const auto* data = reinterpret_cast<const std::byte*>(storage.get());
+        event.error_info.err_data = {std::move(storage), data};
+        event.error_info.err_data_size = entry.err_data_size;
+    }
     if (impl_->source_addresses)
         event.source = fabric_addr{entry.src_addr};
     return event;
@@ -231,7 +253,7 @@ auto completion_queue::read() const -> result<completion_event> {
     if (!event) {
         return make_error_result<completion_event>(errc::again);
     }
-    return *event;
+    return std::move(*event);
 }
 
 auto completion_queue::capacity() const noexcept -> std::size_t {
