@@ -7,7 +7,7 @@ runCommandCC "openmpi-pmix-get-check" { } ''
     -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I${lib.getDev pmix}/include ${./test-pmix-get.c} \
     -L${lib.getLib pmix}/lib -Wl,-rpath,${lib.getLib pmix}/lib \
-    -lpmix -o test-pmix-get
+    -lpmix -pthread -o test-pmix-get
   # PMIx needs hash for client-local storage even with shared server data.
   for datastore in shmem2,hash hash; do
     ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \

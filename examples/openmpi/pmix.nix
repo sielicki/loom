@@ -4,6 +4,7 @@ pmix.overrideAttrs (old: {
     ./pmix-keyindex.patch
     ./pmix-get-ownership.patch
     ./pmix-hostname-ownership.patch
+    ./pmix-query-ownership.patch
   ];
   doInstallCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
   installCheckPhase = ''

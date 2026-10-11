@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only */
 #include <pmix.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,6 +64,69 @@ static void check_values(const pmix_proc_t* proc) {
     PMIX_VALUE_RELEASE(scalar);
 }
 
+struct async_value {
+    pthread_mutex_t mutex;
+    pthread_cond_t condition;
+    bool ready;
+    pmix_status_t status;
+    pmix_value_t* value;
+};
+
+static void value_ready(pmix_status_t status, pmix_value_t* value, void* data) {
+    struct async_value* result = data;
+    CHECK(0 == pthread_mutex_lock(&result->mutex));
+    result->status = status;
+    result->value = value;
+    result->ready = true;
+    CHECK(0 == pthread_cond_signal(&result->condition));
+    CHECK(0 == pthread_mutex_unlock(&result->mutex));
+}
+
+static pmix_value_t*
+get_hostname(const pmix_proc_t* proc, const pmix_info_t* info, size_t ninfo, bool nonblocking) {
+    pmix_value_t* value = NULL;
+    if (nonblocking) {
+        struct async_value result = {.mutex = PTHREAD_MUTEX_INITIALIZER,
+                                     .condition = PTHREAD_COND_INITIALIZER};
+        CHECK(PMIX_SUCCESS == PMIx_Get_nb(proc, PMIX_HOSTNAME, info, ninfo, value_ready, &result));
+        CHECK(0 == pthread_mutex_lock(&result.mutex));
+        while (!result.ready) {
+            CHECK(0 == pthread_cond_wait(&result.condition, &result.mutex));
+        }
+        CHECK(0 == pthread_mutex_unlock(&result.mutex));
+        CHECK(PMIX_SUCCESS == result.status);
+        value = result.value;
+        CHECK(0 == pthread_cond_destroy(&result.condition));
+        CHECK(0 == pthread_mutex_destroy(&result.mutex));
+    } else {
+        CHECK(PMIX_SUCCESS == PMIx_Get(proc, PMIX_HOSTNAME, info, ninfo, &value));
+    }
+    CHECK(NULL != value && PMIX_STRING == value->type);
+    CHECK(NULL != value->data.string && '\0' != value->data.string[0]);
+    return value;
+}
+
+static void check_hostnames(const pmix_proc_t* proc) {
+    pmix_value_t* first = get_hostname(proc, NULL, 0, false);
+    pmix_value_t* second = get_hostname(proc, NULL, 0, true);
+    CHECK(0 == strcmp(first->data.string, second->data.string));
+    PMIX_VALUE_RELEASE(second);
+
+    /* An explicit hostname belongs to the caller's directive. Query teardown
+     * must release derived names without freeing this borrowed allocation. */
+    pmix_info_t directive;
+    PMIX_INFO_LOAD(&directive, PMIX_HOSTNAME, first->data.string, PMIX_STRING);
+    for (unsigned nonblocking = 0; nonblocking < 2; ++nonblocking) {
+        pmix_value_t* value = get_hostname(proc, &directive, 1, nonblocking);
+        CHECK(0 == strcmp(first->data.string, value->data.string));
+        CHECK(0 == strcmp(first->data.string, directive.value.data.string));
+        CHECK(value->data.string != directive.value.data.string);
+        PMIX_VALUE_RELEASE(value);
+    }
+    PMIX_INFO_DESTRUCT(&directive);
+    PMIX_VALUE_RELEASE(first);
+}
+
 int main(void) {
     pmix_proc_t self, peer, job;
     pmix_value_t* value = NULL;
@@ -90,6 +154,8 @@ int main(void) {
 
     check_values(&self);
     check_values(&peer);
+    check_hostnames(&self);
+    check_hostnames(&peer);
     CHECK(PMIX_SUCCESS == PMIx_Finalize(NULL, 0));
     puts("PMIx Get ownership checks passed");
     return EXIT_SUCCESS;

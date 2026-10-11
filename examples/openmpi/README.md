@@ -102,7 +102,9 @@ of allocating a second copy and losing the first. Its two-process regression
 checks local and server-fetched values, independent mutable results, and
 missing keys under ASan/UBSan with leak detection. It exercises both the
 shared-memory and hash datastores. The hash datastore releases the initial
-hostname before replacing it with the server-provided hostname:
+hostname before replacing it with the server-provided hostname. Blocking and
+nonblocking queries release names derived during lookup while retaining
+caller ownership of explicitly supplied hostname directives:
 
 ```sh
 nix build .#checks.x86_64-linux.openmpi-pmix-get --no-link

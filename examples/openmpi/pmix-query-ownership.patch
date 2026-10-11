@@ -1,0 +1,52 @@
+--- a/src/include/pmix_globals.h
++++ b/src/include/pmix_globals.h
+@@ -623,8 +623,9 @@
+     uint32_t sessionid;
+     bool nodeinfo;
+     bool nodedirective;
+     char *hostname;
++    bool hostname_owned;
+     uint32_t nodeid;
+     bool appinfo;
+     bool appdirective;
+     uint32_t appnum;
+--- a/src/include/pmix_globals.c
++++ b/src/include/pmix_globals.c
+@@ -402,16 +402,23 @@
+     p->sessionid = UINT32_MAX;
+     p->nodeinfo = false;
+     p->nodedirective = false;
+     p->hostname = NULL;
++    p->hostname_owned = false;
+     p->nodeid = UINT32_MAX;
+     p->appinfo = false;
+     p->appdirective = false;
+     p->appnum = UINT32_MAX;
+ }
++static void lgdes(pmix_get_logic_t *p)
++{
++    if (p->hostname_owned) {
++        free(p->hostname);
++    }
++}
+ PMIX_EXPORT PMIX_CLASS_INSTANCE(pmix_get_logic_t,
+                                 pmix_object_t,
+-                                lgcon, NULL);
++                                lgcon, lgdes);
+
+ static void cbcon(pmix_cb_t *p)
+ {
+     PMIX_CONSTRUCT_LOCK(&p->lock);
+--- a/src/client/pmix_client_get.c
++++ b/src/client/pmix_client_get.c
+@@ -776,8 +776,10 @@
+         pmix_output_verbose(2, pmix_client_globals.get_output,
+                             "pmix:client:get_data value requesting node-level info for proc %s key %s",
+                             PMIX_NAME_PRINT(&lg->p), (NULL == cb->key) ? "NULL" : cb->key);
+         if (NULL == lg->hostname && UINT32_MAX == lg->nodeid) {
++            /* Names derived below are owned; supplied directives are borrowed. */
++            lg->hostname_owned = true;
+             /* if they didn't specify the target node, then see if they
+              * specified a proc */
+             if (PMIX_RANK_IS_VALID(cb->proc->rank)) {
+                 /* if this is us, then see if we know our info */
