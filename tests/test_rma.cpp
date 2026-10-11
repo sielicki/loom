@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <vector>
 
+#include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -42,15 +44,25 @@ struct rma_provider {
     void* context{};
     std::vector<void*> descriptors;
     std::vector<std::uint64_t> keys;
+    static auto record(fid_ep* ep) -> ssize_t {
+        auto& self = *static_cast<rma_provider*>(ep->fid.context);
+        ++self.calls;
+        return self.status;
+    }
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_rma rma_ops{
         .size = sizeof(fi_ops_rma),
+        .read = [](fid_ep* ep, auto...) -> ssize_t { return record(ep); },
         .readmsg = [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t flags) -> ssize_t {
             return static_cast<rma_provider*>(ep->fid.context)->transfer(*msg, false, flags);
         },
+        .write = [](fid_ep* ep, auto...) -> ssize_t { return record(ep); },
         .writemsg = [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t flags) -> ssize_t {
             return static_cast<rma_provider*>(ep->fid.context)->transfer(*msg, true, flags);
         },
+        .inject = [](fid_ep* ep, auto...) -> ssize_t { return record(ep); },
+        .writedata = [](fid_ep* ep, auto...) -> ssize_t { return record(ep); },
+        .injectdata = [](fid_ep* ep, auto...) -> ssize_t { return record(ep); },
     };
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .rma = &rma_ops};
 
@@ -105,6 +117,64 @@ struct rma_provider {
     }
 };
 }  // namespace
+
+TEST_CASE("RMA scalar submissions enforce remote extents", "[rma][bounds]") {
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    struct transfer {
+        std::uint64_t address;
+        std::size_t extent;
+        std::size_t length;
+        bool valid;
+    };
+    constexpr std::array cases{
+        transfer{0, 0, 0, true},
+        transfer{0, 0, 1, false},
+        transfer{0x1000, 8, 7, true},
+        transfer{0x1000, 8, 8, true},
+        transfer{0x1000, 8, 9, false},
+        transfer{0x1000, 8, 16, false},
+        transfer{maximum - 7, 8, 7, true},
+        transfer{maximum - 7, 8, 8, false},
+        transfer{maximum, 0, 0, true},
+        transfer{maximum, 8, 1, false},
+        transfer{0x1000, 16, 16, true},
+    };
+    test::mock_domain domain;
+    std::array<std::byte, 16> storage{};
+    auto mr = memory_region::register_memory(
+                  domain.dom, storage, mr_access_flags::read | mr_access_flags::write)
+                  .value();
+    rma_provider native;
+    auto ep = native.endpoint();
+    native.status = -FI_EAGAIN;  // Capture submission without accessing a remote address.
+    for (const auto& test : cases) {
+        CAPTURE(test.address, test.extent, test.length);
+        native.calls = 0;
+        const auto buffer = std::span{storage}.first(test.length);
+        const remote_memory remote{test.address, maximum - 1, test.extent};
+        const fabric_addr peer{19};
+        const std::array results{
+            rma::read(ep, buffer, mr, remote),
+            rma::write(ep, buffer, mr, remote),
+            rma::write_data(ep, buffer, mr, remote, 7),
+            rma::inject_write(ep, buffer, remote),
+            rma::inject_write_data(ep, buffer, remote, 7),
+            rma::read_to(ep, buffer, mr.descriptor(), peer, remote),
+            rma::write_to(ep, buffer, mr.descriptor(), peer, remote),
+            rma::read_to(ep, buffer, mr.descriptor(), peer, remote, op_flag::none),
+            rma::write_to(ep, buffer, mr.descriptor(), peer, remote, op_flag::none),
+            rma::read_to(ep, buffer, mr, peer, remote),
+            rma::write_to(ep, buffer, mr, peer, remote),
+            rma::read_to(ep, buffer, mr, peer, remote, op_flag::none),
+            rma::write_to(ep, buffer, mr, peer, remote, op_flag::none),
+        };
+        for (const auto& result : results) {
+            REQUIRE_FALSE(result);
+            CHECK(result.error() == (test.valid ? errc::again : errc::invalid_argument));
+        }
+        CHECK(native.calls == (test.valid ? results.size() : 0));
+    }
+}
 
 TEST_CASE("RMA rejects unavailable native operations", "[rma]") {
     const auto missing = GENERATE(0, 1, 2, 3);

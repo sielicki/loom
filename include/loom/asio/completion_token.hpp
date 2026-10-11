@@ -395,7 +395,7 @@ struct initiate_fabric_write {
             std::forward<Handler>(handler), executor, ep_, buffers, mr.descriptor());
         ctx->set_transfer_size(ctx->buffers().bytes);
 
-        if (ctx->buffers().bytes > remote.length) {
+        if (!remote.contains(0, ctx->buffers().bytes)) {
             finish_asio_submission(std::move(ctx), make_error_result<void>(errc::invalid_argument));
             return;
         }
@@ -446,7 +446,7 @@ struct initiate_fabric_read {
             std::forward<Handler>(handler), executor, ep_, buffers, mr.descriptor());
         ctx->set_transfer_size(ctx->buffers().bytes);
 
-        if (ctx->buffers().bytes > remote.length) {
+        if (!remote.contains(0, ctx->buffers().bytes)) {
             finish_asio_submission(std::move(ctx), make_error_result<void>(errc::invalid_argument));
             return;
         }

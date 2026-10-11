@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <span>
 #include <string>
 #include <thread>
@@ -206,7 +207,10 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     const auto read = GENERATE(false, true);
     const auto helper = GENERATE(false, true);
     const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
-    const auto short_remote = GENERATE(false, true);
+    enum class remote_range { valid, short_extent, overflow };
+    const auto range =
+        GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
+    const bool invalid_remote = range != remote_range::valid;
     const auto null_descriptor = GENERATE(false, true);
     vector_provider native;
     native.submission_status = status;
@@ -217,7 +221,10 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
         loom::get_default_resource(), &handle, storage.data(), storage.size())};
     const loom::fabric_addr peer{23};
-    const loom::remote_memory remote{32, 0x123456789abcdef0ULL, short_remote ? 7u : 8u};
+    const loom::remote_memory remote{
+        range == remote_range::overflow ? std::numeric_limits<std::uint64_t>::max() - 7 : 32,
+        0x123456789abcdef0ULL,
+        range == remote_range::short_extent ? 7u : 8u};
     // The explicit RMA registration takes precedence over descriptors carried
     // by the buffer views, including when its native descriptor is null.
     fid_mr view_handle{.fid = {.ops = &native.ops}, .mem_desc = &view_handle};
@@ -232,13 +239,13 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     auto handler =
         ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
             ++completed;
-            if (short_remote)
+            if (invalid_remote)
                 REQUIRE(error == loom::errc::invalid_argument);
             else if (status)
                 REQUIRE(error == loom::make_error_code_from_fi_errno(-status));
             else
                 REQUIRE_FALSE(error);
-            REQUIRE(bytes == (short_remote || status ? 0 : storage.size()));
+            REQUIRE(bytes == (invalid_remote || status ? 0 : storage.size()));
         });
     if (helper) {
         if (read)
@@ -253,7 +260,7 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
         ep.async_write_to(buffers, mr, peer, remote, handler);
     }
     REQUIRE(completed == 0);
-    if (!short_remote) {
+    if (!invalid_remote) {
         CHECK(native.submission_flags == (FI_COMPLETION | FI_FENCE));
         REQUIRE(native.peer == peer.get());
         REQUIRE(native.remote_address == remote.addr);
@@ -265,7 +272,7 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
             REQUIRE(native.descriptors == std::vector<void*>{&handle, &handle});
     }
     buffers = {};
-    if (!short_remote && !status) {
+    if (!invalid_remote && !status) {
         REQUIRE(native.buffers.size() == 2);
         REQUIRE(native.buffers[0].iov_base == storage.data());
         REQUIRE(native.buffers[1].iov_base == storage.data() + 3);

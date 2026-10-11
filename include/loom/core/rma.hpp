@@ -86,7 +86,7 @@ auto read(endpoint& ep,
           remote_memory remote,
           Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (fid_ep == nullptr) {
+    if (fid_ep == nullptr || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, read)) {
@@ -208,7 +208,7 @@ auto write(endpoint& ep,
            remote_memory remote,
            Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (fid_ep == nullptr) {
+    if (fid_ep == nullptr || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, write)) {
@@ -342,7 +342,7 @@ auto write_data(endpoint& ep,
                 std::uint64_t data,
                 Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (fid_ep == nullptr) {
+    if (fid_ep == nullptr || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, writedata)) {
@@ -403,7 +403,7 @@ auto read_to(endpoint& ep,
              op_flags flags,
              Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || local_buffer.size() > remote.length) {
+    if (!fid_ep || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, readmsg)) {
@@ -437,7 +437,7 @@ auto read_to(endpoint& ep,
              remote_memory remote,
              Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (fid_ep == nullptr) {
+    if (fid_ep == nullptr || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, read)) {
@@ -508,7 +508,7 @@ auto write_to(endpoint& ep,
               op_flags flags,
               Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || local_buffer.size() > remote.length) {
+    if (!fid_ep || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, writemsg)) {
@@ -542,7 +542,7 @@ auto write_to(endpoint& ep,
               remote_memory remote,
               Ctx context = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (fid_ep == nullptr) {
+    if (fid_ep == nullptr || !remote.contains(0, local_buffer.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, write)) {

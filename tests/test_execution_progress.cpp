@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -820,7 +821,10 @@ TEST_CASE("receive senders reject multi-receive defaults", "[execution][progress
 TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progress]") {
     const auto write = GENERATE(false, true);
     const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
-    const auto short_remote = GENERATE(false, true);
+    enum class remote_range { valid, short_extent, overflow };
+    const auto range =
+        GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
+    const bool invalid_remote = range != remote_range::valid;
     provider fabric;
     fabric.selective_completion = GENERATE(false, true);
     CAPTURE(fabric.selective_completion);
@@ -830,12 +834,15 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
         loom::get_default_resource(), &native_mr, storage.data(), storage.size())};
     const loom::fabric_addr peer{19};
-    const loom::remote_memory remote{24, 0x123456789abcdef0ULL, short_remote ? 15u : 16u};
+    const loom::remote_memory remote{
+        range == remote_range::overflow ? std::numeric_limits<std::uint64_t>::max() - 15 : 24,
+        0x123456789abcdef0ULL,
+        range == remote_range::short_extent ? 15u : 16u};
     completion_state state;
     auto run = [&](auto sender) {
         auto operation = loom::execution::connect(std::move(sender), receiver{&state});
         loom::execution::start(operation);
-        if (short_remote) {
+        if (invalid_remote) {
             REQUIRE(state.calls == 1);
             REQUIRE(state.error == loom::errc::invalid_argument);
             REQUIRE(fabric.submitted_bytes == 0);

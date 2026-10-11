@@ -7,10 +7,12 @@
 #include <array>
 #include <cstdlib>
 #include <exception>
+#include <limits>
 
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -123,6 +125,37 @@ struct trigger_provider {
 
 struct trigger_context : loom::triggered_context<trigger_context> {};
 }  // namespace
+
+TEST_CASE("triggered RMA enforces remote bounds before changing its context", "[trigger][bounds]") {
+    const auto write = GENERATE(false, true);
+    enum class remote_range { valid, short_extent, overflow };
+    const auto range =
+        GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
+    trigger_provider native;
+    loom::test::mock_domain domain;
+    std::array<std::byte, 8> buffer{};
+    auto memory =
+        loom::memory_region::register_memory(
+            domain.dom, buffer, loom::mr_access_flags::read | loom::mr_access_flags::write)
+            .value();
+    const loom::remote_memory remote{
+        range == remote_range::overflow ? std::numeric_limits<std::uint64_t>::max() - 7 : 0x1000,
+        7,
+        range == remote_range::short_extent ? 7u : 8u};
+    trigger_context context;
+    context.set_threshold_trigger(&native.counter_handle, 99);
+    const loom::trigger::threshold_condition condition{&native.counter, 7};
+    const auto result =
+        write ? loom::trigger::write(native.endpoint, buffer, memory, remote, &context, condition)
+              : loom::trigger::read(native.endpoint, buffer, memory, remote, &context, condition);
+    const bool valid = range == remote_range::valid;
+    REQUIRE(result.has_value() == valid);
+    if (!valid)
+        CHECK(result.error() == loom::errc::invalid_argument);
+    CHECK(native.submissions == (valid ? 1 : 0));
+    CHECK(context.trig_ctx.trigger.threshold.cntr == &native.counter_handle);
+    CHECK(context.trig_ctx.trigger.threshold.threshold == (valid ? 7 : 99));
+}
 
 TEST_CASE("deferred transfers default to their work context", "[trigger]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5);

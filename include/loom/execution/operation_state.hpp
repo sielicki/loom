@@ -463,7 +463,7 @@ public:
             return;
         }
 
-        if (buffer_.size() > remote_.length) {
+        if (!remote_.contains(0, buffer_.size())) {
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }
@@ -529,7 +529,7 @@ public:
             return;
         }
 
-        if (buffer_.size() > remote_.length) {
+        if (!remote_.contains(0, buffer_.size())) {
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }

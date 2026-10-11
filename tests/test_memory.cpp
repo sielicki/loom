@@ -545,9 +545,21 @@ TEST_CASE("exported remote addresses support sockets loopback writes", "[memory]
                                              mr_access_flags::remote_write | mr_access_flags::read |
                                                  mr_access_flags::write);
     REQUIRE(mr);
-    auto remote = remote_memory::from_mr(*mr);
-    remote.addr += 16;
-    remote.length = 1;
+    const auto remote = remote_memory::from_mr(*mr).subregion(16, 1).value();
+    for (const auto& rejected : {rma::write_to(*ep,
+                                               std::span<const std::byte>{buffer}.first(2),
+                                               *mr,
+                                               fabric_addr{peer->value},
+                                               remote),
+                                 rma::write_to(*ep,
+                                               std::span<const std::byte>{buffer}.first(2),
+                                               *mr,
+                                               fabric_addr{peer->value},
+                                               remote,
+                                               op_flag::none)}) {
+        REQUIRE_FALSE(rejected);
+        CHECK(rejected.error() == errc::invalid_argument);
+    }
     int context{};
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
     result<void> submitted;
