@@ -182,26 +182,13 @@ find_package(PkgConfig)
 # Try to find libfabric
 set(LOOM_LIBFABRIC_MIN_VERSION 2.7.0)
 set(LOOM_LIBFABRIC_FOUND OFF)
+set(LOOM_LIBFABRIC_ERROR "libfabric ${LOOM_LIBFABRIC_MIN_VERSION} or newer is required")
 
 if(PKG_CONFIG_FOUND)
-    if(LOOM_LIBFABRIC_STATIC)
-        pkg_check_modules(LIBFABRIC IMPORTED_TARGET "libfabric>=${LOOM_LIBFABRIC_MIN_VERSION}")
-        if(LIBFABRIC_FOUND)
-            # For static linking, we need the static library
-            pkg_check_modules(LIBFABRIC_STATIC IMPORTED_TARGET STATIC "libfabric>=${LOOM_LIBFABRIC_MIN_VERSION}")
-            if(LIBFABRIC_STATIC_FOUND)
-                set(LOOM_LIBFABRIC_TARGET PkgConfig::LIBFABRIC_STATIC)
-                set(LOOM_LIBFABRIC_FOUND ON)
-                message(STATUS "Using system libfabric (static): ${LIBFABRIC_STATIC_VERSION}")
-            endif()
-        endif()
-    else()
-        pkg_check_modules(LIBFABRIC IMPORTED_TARGET "libfabric>=${LOOM_LIBFABRIC_MIN_VERSION}")
-        if(LIBFABRIC_FOUND)
-            set(LOOM_LIBFABRIC_TARGET PkgConfig::LIBFABRIC)
-            set(LOOM_LIBFABRIC_FOUND ON)
-            message(STATUS "Using system libfabric (shared): ${LIBFABRIC_VERSION}")
-        endif()
+    include(LoomFindLibfabric)
+    loom_find_libfabric(${LOOM_LIBFABRIC_MIN_VERSION} ${LOOM_LIBFABRIC_STATIC})
+    if(LOOM_LIBFABRIC_FOUND)
+        message(STATUS "Using system libfabric: ${LOOM_LIBFABRIC_VERSION} (static: ${LOOM_LIBFABRIC_STATIC})")
     endif()
 endif()
 
@@ -211,11 +198,15 @@ if(NOT LOOM_LIBFABRIC_FOUND)
         message(STATUS "Using libfabric from third_party")
         set(LIBFABRIC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         add_subdirectory(third_party/libfabric EXCLUDE_FROM_ALL)
+        get_target_property(LOOM_VENDORED_LIBFABRIC_TYPE fabric TYPE)
+        if(LOOM_LIBFABRIC_STATIC AND NOT LOOM_VENDORED_LIBFABRIC_TYPE STREQUAL "STATIC_LIBRARY")
+            message(FATAL_ERROR "LOOM_LIBFABRIC_STATIC requires a static third_party/libfabric target")
+        endif()
         set(LOOM_LIBFABRIC_TARGET fabric)
         set(LOOM_LIBFABRIC_FOUND ON)
     else()
         message(FATAL_ERROR
-            "libfabric ${LOOM_LIBFABRIC_MIN_VERSION} or newer is required. Please either:\n"
+            "${LOOM_LIBFABRIC_ERROR}. Please either:\n"
             "  1. Install a compatible libfabric development package\n"
             "  2. Provide libfabric in third_party/libfabric\n"
             "  3. Set PKG_CONFIG_PATH to include libfabric's pkgconfig directory")
@@ -660,6 +651,7 @@ write_basic_package_version_file(
 install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/loomConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/loomConfigVersion.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/LoomFindLibfabric.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom
 )
 

@@ -21,6 +21,14 @@ environment or `nix build .#libfabric` to build that dependency directly.
 `flake.lock` records the exact source revision. CMake can also use an
 installed libfabric through `pkg-config`.
 
+Set `LOOM_LIBFABRIC_STATIC=ON` to link the libfabric archive, including its
+private dependencies reported by `pkg-config --static`. This requires an
+installed archive; a shared-only libfabric installation is rejected.
+To embed static libfabric in a shared Loom library, build libfabric with
+`--enable-embedded --with-pic` and install the resulting `src/.libs/libfabric.a`
+alongside its pkg-config metadata. Upstream's embedded mode builds the archive
+for use by a parent project and does not install it automatically.
+
 The default Nix dependency disables OPX: its GPU support requires vendor
 HFI1 kernel headers not present in the pinned dependency set. Re-enabling
 OPX requires supplying compatible headers and the corresponding driver.
