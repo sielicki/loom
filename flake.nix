@@ -787,6 +787,9 @@
             // pkgs.lib.optionalAttrs (!isDarwin) {
               openmpi-consumer = self'.packages.openmpi-consumer;
               openmpi-loom = self'.packages.openmpi-loom;
+              openmpi-pmix-get = pkgs.callPackage ./examples/openmpi/pmix-get-check.nix {
+                pmix = self'.packages.openmpi-pmix;
+              };
               nixl-consumer = self'.packages.nixl-consumer.tests.sdk;
               nixl-loom = self'.packages.nixl-loom;
               monarch-consumer = self'.packages.monarch-consumer;

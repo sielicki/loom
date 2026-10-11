@@ -1,0 +1,22 @@
+--- a/src/client/pmix_client_get.c
++++ b/src/client/pmix_client_get.c
+@@ -466,16 +466,13 @@
+ static void _value_cbfunc(pmix_status_t status, pmix_value_t *kv, void *cbdata)
+ {
+     pmix_cb_t *cb;
+-    pmix_status_t rc;
+-
++
+     PMIX_ACQUIRE_OBJECT(cb);
+     cb = (pmix_cb_t *) cbdata;
+     cb->status = status;
+     if (PMIX_SUCCESS == status) {
+-        PMIX_BFROPS_COPY(rc, pmix_client_globals.myserver, (void **)&cb->value, kv, PMIX_VALUE);
+-        if (PMIX_SUCCESS != rc) {
+-            PMIX_ERROR_LOG(rc);
+-        }
++        /* The fetch already transfers an owned value to this callback. */
++        cb->value = kv;
+     }
+     PMIX_POST_OBJECT(cb);
+     PMIX_WAKEUP_THREAD(&cb->lock);
