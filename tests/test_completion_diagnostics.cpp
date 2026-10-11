@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -37,6 +38,8 @@ struct diagnostic_provider {
     bool missing{};
     int error_status{1};
     int error_reads{};
+    int error_code{FI_EIO};
+    std::size_t overflow_length{};
     std::size_t supplied_capacity{};
     fi_ops lifetime{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_cq cq_ops{
@@ -55,7 +58,12 @@ struct diagnostic_provider {
                 return self.error_status;
             auto* buffer = entry->err_data;
             self.supplied_capacity = entry->err_data_size;
-            *entry = {.op_context = &self.ready, .err = FI_EIO, .prov_errno = 37};
+            *entry = {.op_context = &self.ready,
+                      .flags = FI_RECV,
+                      .len = 7,
+                      .olen = self.overflow_length,
+                      .err = self.error_code,
+                      .prov_errno = 37};
             if (self.supplied_capacity) {
                 entry->err_data = buffer;
                 entry->err_data_size = std::min(self.supplied_capacity, self.data.size());
@@ -152,6 +160,7 @@ TEST_CASE("completion diagnostics survive later reads and queue destruction",
     REQUIRE(event.error == loom::errc::io_error);
     REQUIRE(event.context.get() == &provider.ready);
     REQUIRE(event.error_info.prov_errno == 37);
+    REQUIRE(event.error_info.available);
     REQUIRE(std::ranges::equal(bytes(event), expected));
     auto copy = event;
     event = {};
@@ -189,6 +198,31 @@ TEST_CASE("completion diagnostic allocation precedes error consumption",
     REQUIRE(resource.live == 0);
 }
 
+TEST_CASE("completion errors retain native truncation counts", "[completion_queue][diagnostic]") {
+    const auto method = GENERATE(0, 1, 2, 3);
+    const auto selective = GENERATE(false, true);
+    diagnostic_provider provider;
+    provider.error_code = FI_ETRUNC;
+    provider.overflow_length = GENERATE(0UZ, 13UZ, std::numeric_limits<std::size_t>::max());
+    auto domain = provider.open_domain();
+    auto queue = loom::completion_queue::create(domain, {.wait_obj = true}).value();
+    if (selective) {
+        int other{};
+        REQUIRE(queue.read_for(loom::context_ptr<void>{&other}).error() == loom::errc::again);
+    }
+    auto event = read_diagnostic(queue, method);
+    REQUIRE(event.error == loom::make_error_code_from_fi_errno(FI_ETRUNC));
+    REQUIRE(event.bytes_transferred == 7);
+    REQUIRE(event.error_info.available);
+    REQUIRE(event.error_info.overflow_length == provider.overflow_length);
+    const auto copy = event;
+    event = {};
+    queue = {};
+    REQUIRE_FALSE(event.error_info.available);
+    REQUIRE(copy.error_info.available);
+    REQUIRE(copy.error_info.overflow_length == provider.overflow_length);
+}
+
 TEST_CASE("invalid completion diagnostic payloads do not escape",
           "[completion_queue][diagnostic]") {
     const auto method = GENERATE(0, 1, 2, 3);
@@ -208,6 +242,7 @@ TEST_CASE("invalid completion diagnostic payloads do not escape",
         const auto event = read_diagnostic(*queue, method);
         REQUIRE(event.error == loom::errc::io_error);
         REQUIRE(event.error_info.err_data_size == 0);
+        REQUIRE_FALSE(event.error_info.available);
     }
 }
 

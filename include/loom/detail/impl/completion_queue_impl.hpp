@@ -575,6 +575,8 @@ auto completion_queue::read_error(int status) const -> result<completion_event> 
     event.tag = entry.tag;
     event.data = entry.data;
     event.error_info.prov_errno = entry.prov_errno;
+    event.error_info.overflow_length = entry.olen;
+    event.error_info.available = true;
     if (entry.err_data_size) {
         const auto* data = reinterpret_cast<const std::byte*>(storage.get());
         event.error_info.err_data = {std::move(storage), data};

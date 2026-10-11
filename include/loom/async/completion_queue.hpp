@@ -63,6 +63,10 @@ struct cq_error_info {
     /// The queue's memory resource must outlive all retaining events.
     std::shared_ptr<const std::byte[]> err_data{};
     std::size_t err_data_size{0};  ///< Size of error data in bytes
+    std::size_t overflow_length{0};  ///< Received bytes discarded by truncation (native olen)
+    /// True when a native CQ error entry supplied these fields. Queue read
+    /// failures have no entry, even when their generic error code is nonzero.
+    bool available{false};
 
     /**
      * @brief Checks if a provider-specific error occurred.
