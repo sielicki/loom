@@ -156,8 +156,8 @@ struct vector_provider {
     fid_ep handle{
         .fid = {.context = this, .ops = &ops}, .msg = &messages, .rma = &rma, .tagged = &tags};
 
-    auto endpoint(loom::cq_bind_flags bindings = loom::cq_bind::transmit | loom::cq_bind::recv)
-        -> loom::endpoint {
+    auto endpoint(loom::cq_bind_flags bindings = loom::cq_bind::transmit | loom::cq_bind::recv,
+                  std::uint64_t receive_defaults = FI_MORE) -> loom::endpoint {
         auto ep = loom::endpoint{
             loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
                                                                        &handle,
@@ -167,7 +167,7 @@ struct vector_provider {
                                                                        0UZ,
                                                                        loom::caps{},
                                                                        FI_FENCE,
-                                                                       FI_MORE)};
+                                                                       receive_defaults)};
         if (bindings.has(loom::cq_bind::transmit))
             REQUIRE(ep.bind_cq(tx, loom::cq_bind::transmit));
         if (bindings.has(loom::cq_bind::recv))
@@ -366,6 +366,64 @@ TEST_CASE("Asio operations register their buffer sequences before submission", "
     REQUIRE_FALSE(queue.dispatch(event));
     ioc.run();
     REQUIRE(completions == 1);
+}
+
+TEST_CASE("Asio receives reject multi-receive defaults", "[asio][endpoint]") {
+    const auto tagged = GENERATE(false, true);
+    const auto helper = GENERATE(false, true);
+    const auto defaults = GENERATE(FI_MULTI_RECV, FI_MULTI_RECV | FI_MORE);
+    vector_provider native;
+    ::asio::io_context ioc;
+    loom::asio::endpoint ep{
+        ioc.get_executor(),
+        native.endpoint(loom::cq_bind::transmit | loom::cq_bind::recv, defaults)};
+    std::array<std::byte, 16> storage{};
+    int calls{};
+    std::error_code result;
+    std::size_t bytes{};
+    auto handler =
+        ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t count) {
+            ++calls;
+            result = error;
+            bytes = count;
+        });
+    if (helper) {
+        if (tagged)
+            loom::asio::initiate_fabric_tagged_recv{ep.native_handle()}(
+                handler, ::asio::buffer(storage), 42, 0x80);
+        else
+            loom::asio::initiate_fabric_recv{ep.native_handle()}(handler, ::asio::buffer(storage));
+    } else if (tagged) {
+        ep.async_tagged_receive(::asio::buffer(storage), 42, 0x80, handler);
+    } else {
+        ep.async_receive(::asio::buffer(storage), handler);
+    }
+    CHECK(native.attempted_context == nullptr);
+    REQUIRE(calls == 0);
+    // Clean up an erroneous pre-fix submission with its first receive event.
+    // That event must not release a real multi-receive buffer or its context.
+    if (native.context) {
+        loom::completion_event event{.context = loom::context_ptr<void>{native.context},
+                                     .bytes_transferred = 7};
+        REQUIRE(native.rx.dispatch(event));
+    }
+    ioc.run();
+    REQUIRE(calls == 1);
+    CHECK(result == loom::errc::not_supported);
+    CHECK(bytes == 0);
+    REQUIRE(ioc.poll() == 0);
+
+    calls = 0;
+    ioc.restart();
+    ep.async_send(::asio::buffer(storage), handler);
+    REQUIRE(native.submission_flags == (FI_COMPLETION | FI_FENCE));
+    REQUIRE(calls == 0);
+    loom::completion_event sent{.context = loom::context_ptr<void>{native.context}};
+    REQUIRE(native.tx.dispatch(sent));
+    ioc.run();
+    REQUIRE(calls == 1);
+    REQUIRE_FALSE(result);
+    REQUIRE(bytes == storage.size());
 }
 
 TEST_CASE("Asio initiation exceptions release the pending context", "[asio][endpoint]") {

@@ -925,6 +925,11 @@ preserving configured fence and delivery requirements.
 Configure those defaults before creating the endpoint or scalable context;
 subsequent raw `FI_SETOPSFLAG` changes are not tracked by Loom.
 
+Tagged and untagged receive frontends complete once per operation. They reject
+inherited `FI_MULTI_RECV` with `errc::not_supported` before posting any work.
+Use the core message APIs for multi-receive and retain the buffer and context
+until the provider emits the terminal `FI_MULTI_RECV` completion flag.
+
 Core `msg::sendmsg`, `msg::recvmsg`, `msg::tagged_sendmsg`, and
 `msg::tagged_recvmsg` also accept `<operation_defaults::inherit>` to extend
 the corresponding transmit or receive defaults. Their ordinary overloads

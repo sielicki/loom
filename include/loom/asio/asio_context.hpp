@@ -232,6 +232,12 @@ public:
     /// Rejection or context destruction removes the registration automatically.
     [[nodiscard]] auto bind_completion(endpoint& ep, completion_direction direction) noexcept
         -> void_result {
+        // Asio's handler retires on one event. A multi-receive buffer and
+        // context must survive until the separate provider-release event.
+        if (direction == completion_direction::receive &&
+            (ep.impl_operation_flags(direction) & FI_MULTI_RECV)) {
+            return make_error_result<void>(errc::not_supported);
+        }
         return registration_.bind(
             ep, direction, context_ptr<void>{as_fi_context()}, this, complete_registered);
     }

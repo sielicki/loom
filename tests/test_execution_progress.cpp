@@ -228,16 +228,19 @@ struct provider {
                      .atomic = &atomics};
     loom::completion_queue cq{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
         loom::get_default_resource(), &cq_handle)};
-    loom::endpoint ep{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
-        loom::get_default_resource(),
-        &ep_handle,
-        loom::endpoint_types::rdm,
-        loom::address_format::unspecified,
-        0UZ,
-        0UZ,
-        loom::caps{},
-        FI_FENCE,
-        FI_MORE)};
+    loom::endpoint ep;
+
+    explicit provider(std::uint64_t receive_defaults = FI_MORE)
+        : ep{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+              loom::get_default_resource(),
+              &ep_handle,
+              loom::endpoint_types::rdm,
+              loom::address_format::unspecified,
+              0UZ,
+              0UZ,
+              loom::caps{},
+              FI_FENCE,
+              receive_defaults)} {}
 
     auto post(void* ctx, std::uint64_t flags = 0) -> ssize_t {
         if (submission_status)
@@ -374,6 +377,42 @@ TEST_CASE("message senders request selective completions", "[execution][progress
     } else {
         run(operations.send(storage, &native.cq));
     }
+}
+
+TEST_CASE("receive senders reject multi-receive defaults", "[execution][progress][message]") {
+    const auto tagged = GENERATE(false, true);
+    provider native{GENERATE(FI_MULTI_RECV, FI_MULTI_RECV | FI_MORE)};
+    std::array<std::byte, 16> storage{};
+    completion_state state;
+    auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        CHECK(native.pending.empty());
+        CHECK(native.submitted_flags == 0);
+        // Retire any erroneously accepted work so the pre-fix regression does
+        // not leave a live native context behind when the assertion fails.
+        if (!native.pending.empty())
+            (void)loom::execution::poll_completions(native.cq).value();
+        REQUIRE(state.calls == 1);
+        CHECK(state.error == loom::errc::not_supported);
+        CHECK(state.bytes == 0);
+        REQUIRE(loom::execution::poll_completions(native.cq).value().completed == 0);
+    };
+    auto operations = loom::async(native.ep);
+    if (tagged)
+        run(operations.tagged_recv(storage, 42, 0x80, &native.cq));
+    else
+        run(operations.recv(storage, &native.cq));
+
+    // Receive defaults must not disable transmit operations on this endpoint.
+    state = {};
+    auto send = loom::execution::connect(operations.send(storage, &native.cq), receiver{&state});
+    loom::execution::start(send);
+    REQUIRE(native.submitted_flags == (FI_COMPLETION | FI_FENCE));
+    REQUIRE(state.calls == 0);
+    REQUIRE(loom::execution::poll_completions(native.cq).value().completed == 1);
+    REQUIRE(state.calls == 1);
+    REQUIRE_FALSE(state.error);
 }
 
 TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progress]") {

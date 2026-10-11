@@ -251,6 +251,13 @@ public:
             return;
         }
 
+        // This sender completes once; a multi-receive buffer remains owned by
+        // the provider after ordinary receive events and needs another API.
+        if (ep_->impl_operation_flags(completion_direction::receive) & FI_MULTI_RECV) {
+            this->complete_error(make_error_code(errc::not_supported));
+            return;
+        }
+
         if (!this->register_completion()) {
             return;
         }
@@ -339,6 +346,11 @@ public:
     void start() & noexcept {
         if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
             this->complete_error(std::make_error_code(std::errc::bad_file_descriptor));
+            return;
+        }
+
+        if (ep_->impl_operation_flags(completion_direction::receive) & FI_MULTI_RECV) {
+            this->complete_error(make_error_code(errc::not_supported));
             return;
         }
 
