@@ -82,6 +82,13 @@ pub mod ffi {
         type CompletionQueueHandle;
         type AddressVectorHandle;
         type MemoryRegionHandle;
+        type OperationContextHandle;
+
+        /// Allocate stable, zero-initialized FI_CONTEXT2 scratch storage.
+        fn create_operation_context() -> Result<UniquePtr<OperationContextHandle>>;
+
+        /// Address supplied to libfabric and returned in its completion.
+        fn operation_context_address(context: &OperationContextHandle) -> usize;
 
         // ====================================================================
         // Factory functions
@@ -128,6 +135,9 @@ pub mod ffi {
 
         /// Enable an endpoint.
         fn endpoint_enable(ep: Pin<&mut EndpointHandle>) -> Result<()>;
+
+        /// Zero on close success; native negative status on failure.
+        fn endpoint_close(ep: Pin<&mut EndpointHandle>) -> i32;
 
         /// Bind a completion queue to an endpoint.
         fn endpoint_bind_cq(

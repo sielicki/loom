@@ -286,6 +286,8 @@ impl CompletionEvent {
 pub struct CompletionQueue {
     inner: Rc<UniquePtr<ffi::ffi::CompletionQueueHandle>>,
     _domain: Domain,
+    #[cfg(feature = "tokio")]
+    operation_contexts: Rc<async_cq::OperationContexts>,
 }
 
 impl CompletionQueue {
@@ -309,7 +311,12 @@ impl CompletionQueue {
     pub fn with_options(domain: &Domain, size: usize, wait_obj: bool) -> Result<Self> {
         let attr = ffi::CqAttributes { size, wait_obj };
         let inner = ffi::ffi::create_completion_queue(&domain.inner, &attr)?;
-        Ok(Self { inner: Rc::new(inner), _domain: domain.clone() })
+        Ok(Self {
+            inner: Rc::new(inner),
+            _domain: domain.clone(),
+            #[cfg(feature = "tokio")]
+            operation_contexts: Rc::new(async_cq::OperationContexts::default()),
+        })
     }
 
     /// Poll for a completion (non-blocking).
@@ -323,7 +330,7 @@ impl CompletionQueue {
             return None;
         }
 
-        Some(CompletionEvent::from_raw(data))
+        Some(self.decode_completion(data))
     }
 
     /// Wait for a completion with timeout.
@@ -337,7 +344,13 @@ impl CompletionQueue {
         let timeout = timeout_ms.unwrap_or(-1);
         let data = ffi::ffi::cq_wait(&self.inner, timeout);
 
-        CompletionEvent::from_raw(data).into_result()
+        self.decode_completion(data).into_result()
+    }
+
+    fn decode_completion(&self, data: ffi::CompletionEventData) -> CompletionEvent {
+        #[cfg(feature = "tokio")]
+        self.operation_contexts.retire(data.context);
+        CompletionEvent::from_raw(data)
     }
 
     /// Get the wait file descriptor for async integration.
@@ -441,6 +454,12 @@ impl MemoryRegion {
 
 /// A fabric endpoint for communication.
 ///
+/// Context arguments are native addresses, not arbitrary operation IDs.
+/// When the selected mode requires FI_CONTEXT or FI_CONTEXT2, they must
+/// reference suitably aligned, writable native scratch storage that remains
+/// stable until completion or successful close. AsyncEndpoint manages this
+/// storage for its own submissions.
+///
 /// Submitting borrowed buffers requires an explicit lifetime guarantee:
 ///
 /// ```compile_fail
@@ -473,6 +492,17 @@ impl Endpoint {
     /// before being enabled.
     pub fn enable(&mut self) -> Result<()> {
         Ok(ffi::ffi::endpoint_enable(self.inner.pin_mut())?)
+    }
+
+    /// Close the native endpoint. Success discards outstanding operations and
+    /// can discard CQ entries without reporting their completions. Failure
+    /// retains the endpoint and its bound resources so close can be retried.
+    /// A closed endpoint rejects further operations; repeated close succeeds.
+    pub fn close(&mut self) -> Result<()> {
+        match ffi::ffi::endpoint_close(self.inner.pin_mut()) {
+            0 => Ok(()),
+            code => Err(Error::Close { code }),
+        }
     }
 
     /// Bind a completion queue to the endpoint.
@@ -597,6 +627,21 @@ impl Endpoint {
     /// Get the local address/name of the endpoint.
     pub fn name(&self) -> Result<Vec<u8>> {
         Ok(ffi::ffi::endpoint_get_name(&self.inner)?)
+    }
+}
+
+impl Drop for Endpoint {
+    fn drop(&mut self) {
+        if self.close().is_err() {
+            // Native work may still reference the endpoint's entire resource
+            // graph, including managed contexts retained by bound queues.
+            // Drop cannot report the failure or prove quiescence. Retain the
+            // graph rather than release storage the provider can still use.
+            std::mem::forget(std::mem::replace(&mut self.inner, UniquePtr::null()));
+            std::mem::forget(self._domain.clone());
+            std::mem::forget(std::mem::take(&mut self.bound_queues));
+            std::mem::forget(std::mem::take(&mut self.bound_vectors));
+        }
     }
 }
 

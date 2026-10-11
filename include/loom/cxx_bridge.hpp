@@ -91,6 +91,30 @@ struct RemoteMemory;
 // Opaque wrapper types (own their resources, movable)
 // ============================================================================
 
+/// Native provider scratch space. Rust moves only the owning unique_ptr.
+class OperationContextHandle {
+public:
+    OperationContextHandle() = default;
+    OperationContextHandle(const OperationContextHandle&) = delete;
+    auto operator=(const OperationContextHandle&) -> OperationContextHandle& = delete;
+
+    [[nodiscard]] auto address() const noexcept -> std::uintptr_t {
+        return reinterpret_cast<std::uintptr_t>(&provider_);
+    }
+
+private:
+    ::fi_context2 provider_{};
+};
+
+[[nodiscard]] inline auto create_operation_context() -> std::unique_ptr<OperationContextHandle> {
+    return std::make_unique<OperationContextHandle>();
+}
+
+[[nodiscard]] inline auto operation_context_address(const OperationContextHandle& context) noexcept
+    -> std::uintptr_t {
+    return context.address();
+}
+
 /// Wrapper around fabric_info that owns the data
 class FabricInfoHandle {
 public:
@@ -226,6 +250,9 @@ auto register_memory(const DomainHandle& dom,
 
 /// Enable an endpoint
 void endpoint_enable(EndpointHandle& ep);
+
+/// Return the native close status, retaining endpoint ownership on failure.
+auto endpoint_close(EndpointHandle& ep) noexcept -> std::int32_t;
 
 /// Bind a completion queue to an endpoint for transmit and/or receive
 void endpoint_bind_cq(EndpointHandle& ep, const CompletionQueueHandle& cq, std::uint64_t flags);

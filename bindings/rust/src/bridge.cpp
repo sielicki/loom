@@ -84,6 +84,11 @@ void endpoint_enable(EndpointHandle& ep) {
     unwrap_void_or_throw(ep.get().enable());
 }
 
+auto endpoint_close(EndpointHandle& ep) noexcept -> std::int32_t {
+    const auto result = ep.get().close();
+    return result ? 0 : result.error().value();
+}
+
 void endpoint_bind_cq(EndpointHandle& ep, const CompletionQueueHandle& cq, std::uint64_t flags) {
     unwrap_void_or_throw(ep.get().bind_cq(cq.get(), loom::cq_bind_flags{flags}));
 }

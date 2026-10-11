@@ -117,6 +117,22 @@ context lifetime obligations until completion. `Error::Completion`
 describes a failure after acceptance and is kept distinct from a retryable
 submission rejection. C++ exceptions remain `Error::Cxx`.
 
+Async submissions allocate native `fi_context2` scratch storage. The bound
+completion queue retains it when a future is dropped and releases it when
+the matching completion is consumed. Polling a clone of the underlying
+queue performs the same retirement. User buffers and registrations still
+need to remain valid independently of the future.
+
+`Endpoint::close` and `AsyncEndpoint::close` expose native shutdown errors
+as `Error::Close { code }`. Successful close discards outstanding work and
+may discard CQ entries without reporting completions; it permits buffer
+reuse. Async endpoint close also releases managed contexts. Failed close
+preserves ownership for retry. If destruction cannot close an endpoint, it retains the native
+resource graph and contexts instead of freeing storage still in use.
+`AsyncEndpoint::inner_mut` now returns a `Result`: pending managed work
+prevents replacing the endpoint, and a closed async endpoint cannot reopen
+on queues that may still contain old completions.
+
 ## Building from Source
 
 ```bash
@@ -134,6 +150,8 @@ queue saturation regression requires that software provider explicitly:
 
 ```bash
 cargo test --all-features receive_backpressure_survives_the_cpp_bridge -- --ignored
+cargo test --all-features dropped_receives_retain_contexts_until_close -- --ignored
+cargo test --all-features completion_decoding_retires_only_its_native_context -- --ignored
 ```
 
 ## License

@@ -8,6 +8,15 @@ use thiserror::Error;
 /// Error type for loom operations.
 #[derive(Error, Debug)]
 pub enum Error {
+    /// Managed operations must retire before the endpoint can be replaced.
+    #[error("Endpoint still has pending managed operations")]
+    PendingOperations,
+    /// Endpoint close failed; native resources remain owned and may be retried.
+    #[error("Fabric endpoint close failed with code {code}")]
+    Close {
+        /// The negative libfabric error code.
+        code: i32,
+    },
     /// The provider rejected a submission; no operation was accepted.
     #[error("Fabric submission rejected with code {code}")]
     Submission {
