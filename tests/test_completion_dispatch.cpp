@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/async/completion_queue.hpp>
 #include <loom/detail/impl/completion_queue_impl.hpp>
+#include <loom/detail/impl/endpoint_impl.hpp>
 
 #include <array>
 #include <atomic>
@@ -15,6 +16,23 @@ struct queue_fixture {
     fid_cq handle{.fid = {.ops = &ops}};
     loom::completion_queue queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
         loom::get_default_resource(), &handle)};
+};
+struct endpoint_fixture {
+    int bind_status{};
+    fi_ops ops{
+        .size = sizeof(fi_ops),
+        .close = [](fid*) { return 0; },
+        .bind =
+            [](fid* handle, fid*, std::uint64_t) {
+                return static_cast<endpoint_fixture*>(handle->context)->bind_status;
+            },
+    };
+    fid_ep handle{.fid = {.context = this, .ops = &ops}};
+    loom::endpoint endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+        loom::get_default_resource(),
+        &handle,
+        loom::endpoint_types::rdm,
+        loom::address_format::unspecified)};
 };
 struct observer {
     int calls{};
@@ -195,4 +213,157 @@ TEST_CASE("separate completion registrations support concurrent progress", "[cq]
         worker.join();
     REQUIRE(valid.load());
     REQUIRE(calls.load() == 1024);
+}
+
+TEST_CASE("endpoint completion bindings survive wrapper moves", "[cq][dispatch][binding]") {
+    queue_fixture tx, rx;
+    endpoint_fixture fixture;
+    fi_context2 tx_context{}, rx_context{};
+    observer tx_receiver, rx_receiver;
+    loom::completion_registration tx_registration, rx_registration;
+    REQUIRE_FALSE(tx_registration.bind(fixture.endpoint,
+                                       loom::completion_direction::transmit,
+                                       loom::context_ptr<void>{&tx_context},
+                                       &tx_receiver,
+                                       observer::complete));
+    REQUIRE_FALSE(rx_registration.bind(fixture.endpoint,
+                                       loom::completion_direction::receive,
+                                       loom::context_ptr<void>{&rx_context},
+                                       &rx_receiver,
+                                       observer::complete));
+    REQUIRE(fixture.endpoint.bind_cq(
+        tx.queue, loom::cq_bind::transmit | loom::cq_bind::selective_completion));
+    REQUIRE(fixture.endpoint.bind_rx_cq(rx.queue));
+    auto endpoint = std::move(fixture.endpoint);
+    auto transmit = std::move(tx.queue);
+    auto receive = std::move(rx.queue);
+    REQUIRE_FALSE(tx_registration.bind(fixture.endpoint,
+                                       loom::completion_direction::transmit,
+                                       loom::context_ptr<void>{&tx_context},
+                                       &tx_receiver,
+                                       observer::complete));
+    REQUIRE(tx_registration.bind(endpoint,
+                                 loom::completion_direction::transmit,
+                                 loom::context_ptr<void>{&tx_context},
+                                 &tx_receiver,
+                                 observer::complete));
+    REQUIRE(rx_registration.bind(endpoint,
+                                 loom::completion_direction::receive,
+                                 loom::context_ptr<void>{&rx_context},
+                                 &rx_receiver,
+                                 observer::complete));
+    REQUIRE_FALSE(transmit.dispatch(completion(&rx_context)));
+    REQUIRE_FALSE(receive.dispatch(completion(&tx_context)));
+    REQUIRE(transmit.dispatch(completion(&tx_context)));
+    REQUIRE(receive.dispatch(completion(&rx_context)));
+    REQUIRE(tx_receiver.calls == 1);
+    REQUIRE(rx_receiver.calls == 1);
+    REQUIRE_FALSE(tx_registration.bind(endpoint,
+                                       static_cast<loom::completion_direction>(255),
+                                       loom::context_ptr<void>{&tx_context},
+                                       &tx_receiver,
+                                       observer::complete));
+}
+
+TEST_CASE("failed native binding preserves the previous completion route",
+          "[cq][dispatch][binding]") {
+    queue_fixture original, replacement;
+    endpoint_fixture fixture;
+    fi_context2 context{};
+    observer receiver;
+    loom::completion_registration registration;
+    REQUIRE(
+        fixture.endpoint.bind_cq(original.queue, loom::cq_bind::transmit | loom::cq_bind::recv));
+    fixture.bind_status = -FI_EIO;
+    const auto rebound =
+        fixture.endpoint.bind_cq(replacement.queue, loom::cq_bind::transmit | loom::cq_bind::recv);
+    REQUIRE_FALSE(rebound);
+    REQUIRE(rebound.error() == loom::errc::io_error);
+    for (auto direction :
+         {loom::completion_direction::transmit, loom::completion_direction::receive}) {
+        REQUIRE(registration.bind(fixture.endpoint,
+                                  direction,
+                                  loom::context_ptr<void>{&context},
+                                  &receiver,
+                                  observer::complete));
+        REQUIRE_FALSE(replacement.queue.dispatch(completion(&context)));
+        REQUIRE(original.queue.dispatch(completion(&context)));
+    }
+    fixture.bind_status = 0;
+    REQUIRE(fixture.endpoint.bind_tx_cq(replacement.queue));
+    REQUIRE(registration.bind(fixture.endpoint,
+                              loom::completion_direction::transmit,
+                              loom::context_ptr<void>{&context},
+                              &receiver,
+                              observer::complete));
+    REQUIRE_FALSE(original.queue.dispatch(completion(&context)));
+    REQUIRE(replacement.queue.dispatch(completion(&context)));
+    REQUIRE(registration.bind(fixture.endpoint,
+                              loom::completion_direction::receive,
+                              loom::context_ptr<void>{&context},
+                              &receiver,
+                              observer::complete));
+    REQUIRE_FALSE(replacement.queue.dispatch(completion(&context)));
+    REQUIRE(original.queue.dispatch(completion(&context)));
+    REQUIRE(receiver.calls == 4);
+}
+
+TEST_CASE("destroyed resources invalidate endpoint completion bindings",
+          "[cq][dispatch][binding]") {
+    endpoint_fixture first, second;
+    fi_context2 context{};
+    observer receiver;
+    loom::completion_registration registration;
+    {
+        queue_fixture queue;
+        REQUIRE(first.endpoint.bind_cq(queue.queue, loom::cq_bind::transmit | loom::cq_bind::recv));
+        REQUIRE(
+            second.endpoint.bind_cq(queue.queue, loom::cq_bind::transmit | loom::cq_bind::recv));
+        // Native mocks permit teardown without real outstanding I/O. Erasing
+        // the queue must invalidate both endpoints' observations, not dangle.
+    }
+    for (auto* endpoint : {&first.endpoint, &second.endpoint}) {
+        for (auto direction :
+             {loom::completion_direction::transmit, loom::completion_direction::receive}) {
+            REQUIRE_FALSE(registration.bind(*endpoint,
+                                            direction,
+                                            loom::context_ptr<void>{&context},
+                                            &receiver,
+                                            observer::complete));
+        }
+    }
+    queue_fixture replacement;
+    REQUIRE(first.endpoint.bind_tx_cq(replacement.queue));
+    REQUIRE(registration.bind(first.endpoint,
+                              loom::completion_direction::transmit,
+                              loom::context_ptr<void>{&context},
+                              &receiver,
+                              observer::complete));
+    REQUIRE(replacement.queue.dispatch(completion(&context)));
+    REQUIRE(first.endpoint.close());
+    REQUIRE_FALSE(registration.bind(first.endpoint,
+                                    loom::completion_direction::transmit,
+                                    loom::context_ptr<void>{&context},
+                                    &receiver,
+                                    observer::complete));
+    REQUIRE(receiver.calls == 1);
+}
+
+TEST_CASE("endpoint close detaches bindings without disturbing other endpoints",
+          "[cq][dispatch][binding]") {
+    queue_fixture queue;
+    endpoint_fixture first, second;
+    REQUIRE(first.endpoint.bind_cq(queue.queue, loom::cq_bind::transmit | loom::cq_bind::recv));
+    REQUIRE(second.endpoint.bind_cq(queue.queue, loom::cq_bind::transmit | loom::cq_bind::recv));
+    REQUIRE(first.endpoint.close());
+    fi_context2 context{};
+    observer receiver;
+    loom::completion_registration registration;
+    REQUIRE(registration.bind(second.endpoint,
+                              loom::completion_direction::receive,
+                              loom::context_ptr<void>{&context},
+                              &receiver,
+                              observer::complete));
+    REQUIRE(queue.queue.dispatch(completion(&context)));
+    REQUIRE(receiver.calls == 1);
 }

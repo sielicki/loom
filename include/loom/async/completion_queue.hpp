@@ -34,6 +34,23 @@ namespace detail {
  * @brief Internal implementation for completion_queue.
  */
 struct completion_queue_impl;
+
+/// Stable, non-owning endpoint binding, detached when either resource dies.
+/// Queue and endpoint wrappers may move without relocating their implementations.
+struct completion_queue_binding {
+    completion_queue_binding() noexcept = default;
+    ~completion_queue_binding();
+    completion_queue_binding(const completion_queue_binding&) = delete;
+    auto operator=(const completion_queue_binding&) -> completion_queue_binding& = delete;
+    completion_queue_binding(completion_queue_binding&&) = delete;
+    auto operator=(completion_queue_binding&&) -> completion_queue_binding& = delete;
+
+    void bind(completion_queue_impl& queue) noexcept;
+    void reset() noexcept;
+    completion_queue_impl* owner{};
+    completion_queue_binding* previous{};
+    completion_queue_binding* next{};
+};
 }  // namespace detail
 
 /**
@@ -124,6 +141,10 @@ struct completion_queue_attr {
 };
 
 class completion_queue;
+class endpoint;
+
+/// The CQ responsible for a local operation's completion.
+enum class completion_direction { transmit, receive };
 
 /// Registers one completion without interpreting a native context as an object.
 /// The registration, context storage and callback object must remain alive until
@@ -146,9 +167,21 @@ public:
                             context_ptr<void> context,
                             void* object,
                             callback complete) noexcept -> void_result;
+    /// Register through the endpoint's last successful native CQ binding.
+    /// Returns an error for a missing, destroyed or unbound resource. This does
+    /// not retain either resource; they must outlive accepted native work.
+    [[nodiscard]] auto bind(endpoint& ep,
+                            completion_direction direction,
+                            context_ptr<void> context,
+                            void* object,
+                            callback complete) noexcept -> void_result;
     void reset() noexcept;
 
 private:
+    [[nodiscard]] auto bind_to(detail::completion_queue_impl& queue,
+                               context_ptr<void> context,
+                               void* object,
+                               callback complete) noexcept -> void_result;
     void unlink() noexcept;
     detail::completion_queue_impl* owner_{};
     completion_registration* previous_{};

@@ -21,6 +21,39 @@
 
 namespace loom {
 
+detail::completion_queue_binding::~completion_queue_binding() {
+    reset();
+}
+
+void detail::completion_queue_binding::bind(completion_queue_impl& queue) noexcept {
+    reset();
+    const std::lock_guard lock{queue.registrations_mutex};
+    owner = &queue;
+    next = queue.bindings;
+    if (next) {
+        next->previous = this;
+    }
+    queue.bindings = this;
+}
+
+void detail::completion_queue_binding::reset() noexcept {
+    if (!owner) {
+        return;
+    }
+    const std::lock_guard lock{owner->registrations_mutex};
+    if (previous) {
+        previous->next = next;
+    } else {
+        owner->bindings = next;
+    }
+    if (next) {
+        next->previous = previous;
+    }
+    owner = nullptr;
+    previous = nullptr;
+    next = nullptr;
+}
+
 completion_registration::~completion_registration() {
     reset();
 }
@@ -29,13 +62,22 @@ auto completion_registration::bind(completion_queue& queue,
                                    context_ptr<void> context,
                                    void* object,
                                    callback complete) noexcept -> void_result {
-    if (!queue || !context || !complete) {
+    if (!queue) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    return bind_to(*queue.impl_, context, object, complete);
+}
+
+auto completion_registration::bind_to(detail::completion_queue_impl& owner,
+                                      context_ptr<void> context,
+                                      void* object,
+                                      callback complete) noexcept -> void_result {
+    if (!owner.cq || !context || !complete) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (owner_) {
         return make_error_result<void>(errc::busy);
     }
-    auto& owner = *queue.impl_;
     const std::lock_guard lock{owner.registrations_mutex};
     for (auto* entry = owner.registrations; entry; entry = entry->next_) {
         if (entry->context_ == context.get()) {

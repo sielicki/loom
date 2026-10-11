@@ -205,6 +205,9 @@ public:
     [[nodiscard]] auto get_local_address() const -> result<address>;
     [[nodiscard]] auto get_peer_address() const -> result<address>;
 
+    /// Record successful native bindings for subsequent completion registration.
+    /// Serialize binding changes with submissions and resource destruction.
+    /// Bound queues must remain alive through the endpoint's native work.
     [[nodiscard]] auto bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result;
     [[nodiscard]] auto bind_tx_cq(completion_queue& cq) -> void_result;
     [[nodiscard]] auto bind_rx_cq(completion_queue& cq) -> void_result;
@@ -220,6 +223,7 @@ public:
 private:
     impl_ptr impl_;
     friend class completion_queue;
+    friend class completion_registration;
     friend class event_queue;
     friend auto rma::get_max_rma_size(const endpoint&) -> std::size_t;
     friend auto rma::get_inject_size(const endpoint&) -> std::size_t;

@@ -15,6 +15,31 @@
 
 namespace loom {
 
+auto completion_registration::bind(endpoint& ep,
+                                   completion_direction direction,
+                                   context_ptr<void> context,
+                                   void* object,
+                                   callback complete) noexcept -> void_result {
+    if (!ep) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    detail::completion_queue_impl* queue{};
+    switch (direction) {
+        case completion_direction::transmit:
+            queue = ep.impl_->tx_cq.owner;
+            break;
+        case completion_direction::receive:
+            queue = ep.impl_->rx_cq.owner;
+            break;
+        default:
+            return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!queue) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    return bind_to(*queue, context, object, complete);
+}
+
 auto endpoint::bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
@@ -32,6 +57,12 @@ auto endpoint::bind_cq(const completion_queue& cq, cq_bind_flags flags) -> void_
         return make_error_result_from_fi_errno<void>(-ret);
     }
 
+    if (flags.has(cq_bind::transmit)) {
+        impl_->tx_cq.bind(*cq.impl_);
+    }
+    if (flags.has(cq_bind::recv)) {
+        impl_->rx_cq.bind(*cq.impl_);
+    }
     return make_success();
 }
 
