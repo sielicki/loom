@@ -280,6 +280,10 @@ auto fabric::impl_internal_ptr() const noexcept -> void* {
 }
 
 auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> result<fabric_info> {
+    const auto native_format = detail::to_fi_addr_format(hints.addr_format);
+    if (hints.addr_format != address_format::unspecified && native_format == FI_FORMAT_UNSPEC) {
+        return make_error_result<fabric_info>(errc::not_supported);
+    }
     const std::unique_ptr<::fi_info, decltype(&::fi_freeinfo)> info_hints{::fi_allocinfo(),
                                                                           &::fi_freeinfo};
     if (!info_hints || !info_hints->ep_attr || !info_hints->domain_attr ||
@@ -289,7 +293,7 @@ auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> resul
 
     info_hints->caps = detail::to_fi_caps(hints.capabilities);
     info_hints->mode = detail::to_fi_mode(hints.mode_bits);
-    info_hints->addr_format = detail::to_fi_addr_format(hints.addr_format);
+    info_hints->addr_format = native_format;
     info_hints->ep_attr->type = detail::to_fi_ep_type(hints.ep_type);
 
     // fi_freeinfo owns these strings; copy bounded views into C allocations.

@@ -89,6 +89,24 @@ struct std::formatter<loom::address_format> : std::formatter<std::string_view> {
                     return "ethernet";
                 case loom::address_format::str:
                     return "str";
+                case loom::address_format::sockaddr:
+                    return "sockaddr";
+                case loom::address_format::sockaddr_ip:
+                    return "sockaddr_ip";
+                case loom::address_format::mlx:
+                    return "mlx";
+                case loom::address_format::ib_ud:
+                    return "ib_ud";
+                case loom::address_format::efa:
+                    return "efa";
+                case loom::address_format::psmx3:
+                    return "psmx3";
+                case loom::address_format::opx:
+                    return "opx";
+                case loom::address_format::cxi:
+                    return "cxi";
+                case loom::address_format::ucx:
+                    return "ucx";
                 default:
                     return "unknown";
             }

@@ -452,16 +452,25 @@ inline constexpr comp_order data{0x2ULL};
  * @brief Network address format types supported by fabric providers.
  */
 enum class address_format : std::uint32_t {
-    unspecified = 0,  ///< No specific format required
-    inet = 1,         ///< IPv4 socket address
-    inet6 = 2,        ///< IPv6 socket address
-    ib = 3,           ///< InfiniBand address
-    psmx = 4,         ///< PSM address (deprecated)
-    psmx2 = 5,        ///< PSM2 address
-    gni = 6,          ///< Cray GNI address
-    bgq = 7,          ///< IBM Blue Gene/Q address
-    ethernet = 8,     ///< Ethernet MAC address
-    str = 9,          ///< String-formatted address
+    unspecified = 0,   ///< No specific format required
+    inet = 1,          ///< IPv4 socket address
+    inet6 = 2,         ///< IPv6 socket address
+    ib = 3,            ///< InfiniBand address
+    psmx = 4,          ///< PSM address (deprecated)
+    psmx2 = 5,         ///< PSM2 address
+    gni = 6,           ///< Cray GNI address
+    bgq = 7,           ///< IBM Blue Gene/Q address
+    ethernet = 8,      ///< Ethernet MAC address (no libfabric address format)
+    str = 9,           ///< String-formatted address
+    sockaddr = 10,     ///< Socket address with a runtime family
+    sockaddr_ip = 11,  ///< IPv4 or IPv6 socket address
+    mlx = 12,          ///< Mellanox provider address
+    ib_ud = 13,        ///< InfiniBand unreliable datagram address
+    efa = 14,          ///< Amazon EFA provider address
+    psmx3 = 15,        ///< PSM3 address
+    opx = 16,          ///< OPX provider address
+    cxi = 17,          ///< CXI provider address
+    ucx = 18,          ///< UCX provider address
 };
 
 /**

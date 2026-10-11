@@ -216,3 +216,44 @@ TEST_CASE("negotiated capability flags survive conversion independently",
     CHECK(info.get_caps() == (loom::detail::from_fi_caps(base) | requested));
     CHECK(loom::detail::to_fi_caps(info.get_caps()) == native.caps);
 }
+
+TEST_CASE("negotiated address formats survive discovery", "[fabric][attributes][address]") {
+    const auto format = GENERATE(std::uint32_t{FI_FORMAT_UNSPEC},
+                                 std::uint32_t{FI_SOCKADDR},
+                                 std::uint32_t{FI_SOCKADDR_IN},
+                                 std::uint32_t{FI_SOCKADDR_IN6},
+                                 std::uint32_t{FI_SOCKADDR_IB},
+                                 std::uint32_t{FI_ADDR_PSMX},
+                                 std::uint32_t{FI_ADDR_GNI},
+                                 std::uint32_t{FI_ADDR_BGQ},
+                                 std::uint32_t{FI_ADDR_MLX},
+                                 std::uint32_t{FI_ADDR_STR},
+                                 std::uint32_t{FI_ADDR_PSMX2},
+                                 std::uint32_t{FI_ADDR_IB_UD},
+                                 std::uint32_t{FI_ADDR_EFA},
+                                 std::uint32_t{FI_ADDR_PSMX3},
+                                 std::uint32_t{FI_ADDR_OPX},
+                                 std::uint32_t{FI_ADDR_CXI},
+                                 std::uint32_t{FI_ADDR_UCX},
+                                 std::uint32_t{FI_SOCKADDR_IP});
+    fi_domain_attr domain{};
+    fi_info native{};
+    native.addr_format = format;
+    native.domain_attr = &domain;
+    const auto info = wrap(native);
+    const auto attributes = info.get_domain_attr();
+    REQUIRE(attributes);
+    CHECK(loom::detail::to_fi_addr_format(info.get_address_format()) == format);
+    CHECK(loom::detail::to_fi_addr_format(attributes->addr_format) == format);
+}
+
+TEST_CASE("unsupported address hints cannot become unconstrained discovery",
+          "[fabric][attributes][address]") {
+    loom::fabric_hints hints;
+    hints.addr_format =
+        GENERATE(loom::address_format::ethernet, static_cast<loom::address_format>(UINT32_MAX));
+    hints.provider_name = "loom-unsupported-address-test";
+    const auto result = loom::query_fabric(hints);
+    REQUIRE_FALSE(result);
+    CHECK(result.error() == loom::errc::not_supported);
+}

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/detail/conversions.hpp>
 #include <loom/detail/impl/address_vector_impl.hpp>
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
@@ -9,6 +10,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace {
 struct provider {
@@ -247,6 +249,103 @@ TEST_CASE("address insertion encodes IPv6 and rejects format mismatches", "[addr
     REQUIRE_FALSE(mismatched);
     REQUIRE(mismatched.error() == loom::errc::invalid_argument);
     REQUIRE(native.calls == 1);
+}
+
+TEST_CASE("generic socket formats retain typed IP transport", "[address]") {
+    enum class transport { connect, insert, batch, batch_with_context };
+    const auto format = GENERATE(loom::address_format::sockaddr, loom::address_format::sockaddr_ip);
+    const bool ipv6 = GENERATE(false, true);
+    const auto via = GENERATE(
+        transport::connect, transport::insert, transport::batch, transport::batch_with_context);
+    const std::array<std::uint16_t, 8> segments{0x2001, 0xdb8, 0, 0, 0, 0, 0, 42};
+    const loom::address addr = ipv6 ? loom::address{loom::ipv6_address{segments, 9876, 7, 0x12345}}
+                                    : loom::address{loom::ipv4_address{0xC0000201U, 4321}};
+    provider native;
+    native.address_size = ipv6 ? sizeof(sockaddr_in6) : sizeof(sockaddr_in);
+    auto av = native.vector(format);
+    if (via == transport::connect) {
+        auto ep = native.endpoint(format);
+        REQUIRE(ep.connect(addr));
+    } else if (via == transport::insert) {
+        REQUIRE(av.insert(addr));
+    } else {
+        const bool with_contexts = via == transport::batch_with_context;
+        const std::array addresses{addr, addr};
+        std::array<loom::av_handle, 2> handles{};
+        std::array<int, 2> tokens{};
+        std::array<void*, 2> contexts{&tokens[0], &tokens[1]};
+        const auto result = av.insert_batch(
+            addresses, handles, with_contexts ? std::span{contexts} : std::span<void*>{});
+        REQUIRE(result);
+        REQUIRE(*result == 2);
+        REQUIRE(native.calls == (with_contexts ? 2 : 1));
+        REQUIRE(native.received.size() == native.address_size * (with_contexts ? 1 : 2));
+        if (with_contexts) {
+            REQUIRE(std::ranges::equal(native.contexts, contexts));
+        } else {
+            REQUIRE(loom::address_from_raw(native.received.data() + native.address_size,
+                                           native.address_size,
+                                           format) == addr);
+        }
+    }
+    REQUIRE(loom::address_from_raw(native.received.data(), native.address_size, format) == addr);
+    // Decoding must tolerate unaligned storage and reject incomplete native addresses.
+    std::vector<std::byte> unaligned(native.address_size + 1);
+    std::memcpy(unaligned.data() + 1, native.received.data(), native.address_size);
+    REQUIRE(loom::address_from_raw(unaligned.data() + 1, native.address_size, format) == addr);
+    REQUIRE(std::holds_alternative<loom::unspecified_address>(
+        loom::address_from_raw(unaligned.data() + 1, native.address_size - 1, format)));
+    REQUIRE(std::holds_alternative<loom::unspecified_address>(
+        loom::address_from_raw(unaligned.data() + 1, 1, format)));
+    sockaddr unknown{};
+    REQUIRE(std::holds_alternative<loom::unspecified_address>(
+        loom::address_from_raw(&unknown, sizeof(unknown), format)));
+}
+
+TEST_CASE("generic socket batches reject mixed address strides before submission", "[address]") {
+    const auto format = GENERATE(loom::address_format::sockaddr, loom::address_format::sockaddr_ip);
+    const bool reverse = GENERATE(false, true);
+    const bool with_contexts = GENERATE(false, true);
+    std::array<loom::address, 2> addresses{loom::ipv4_address{0xC0000201U, 4321},
+                                           loom::ipv6_address{}};
+    if (reverse) {
+        std::swap(addresses[0], addresses[1]);
+    }
+    std::array<loom::av_handle, 2> handles{};
+    std::array<void*, 2> contexts{};
+    provider native;
+    auto av = native.vector(format);
+    const auto result = av.insert_batch(
+        addresses, handles, with_contexts ? std::span{contexts} : std::span<void*>{});
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == loom::errc::invalid_argument);
+    REQUIRE(native.calls == 0);
+}
+
+TEST_CASE("provider address formats cannot silently accept an IP encoding", "[address]") {
+    const auto format = GENERATE(std::uint32_t{FI_ADDR_PSMX},
+                                 std::uint32_t{FI_ADDR_PSMX2},
+                                 std::uint32_t{FI_ADDR_PSMX3},
+                                 std::uint32_t{FI_ADDR_GNI},
+                                 std::uint32_t{FI_ADDR_BGQ},
+                                 std::uint32_t{FI_ADDR_MLX},
+                                 std::uint32_t{FI_ADDR_STR},
+                                 std::uint32_t{FI_ADDR_IB_UD},
+                                 std::uint32_t{FI_ADDR_EFA},
+                                 std::uint32_t{FI_ADDR_OPX},
+                                 std::uint32_t{FI_ADDR_CXI},
+                                 std::uint32_t{FI_ADDR_UCX});
+    provider native;
+    auto av = native.vector(loom::detail::from_fi_addr_format(format));
+    auto ep = native.endpoint(loom::detail::from_fi_addr_format(format));
+    const loom::address addr = loom::ipv4_address{0xC0000201U, 4321};
+    const auto inserted = av.insert(addr);
+    const auto connected = ep.connect(addr);
+    REQUIRE_FALSE(inserted);
+    REQUIRE_FALSE(connected);
+    REQUIRE(inserted.error() == loom::errc::invalid_argument);
+    REQUIRE(connected.error() == loom::errc::invalid_argument);
+    REQUIRE(native.calls == 0);
 }
 
 TEST_CASE("address vectors inherit the domain format for round trips", "[address][integration]") {

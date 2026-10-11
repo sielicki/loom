@@ -15,6 +15,22 @@ auto address_from_raw(const void* data, std::size_t len, address_format format) 
     }
 
     switch (format) {
+        case address_format::sockaddr:
+        case address_format::sockaddr_ip: {
+            if (len < sizeof(::sockaddr)) {
+                return unspecified_address{};
+            }
+            ::sockaddr sa{};
+            std::memcpy(&sa, data, sizeof(sa));
+            switch (sa.sa_family) {
+                case AF_INET:
+                    return address_from_raw(data, len, address_format::inet);
+                case AF_INET6:
+                    return address_from_raw(data, len, address_format::inet6);
+                default:
+                    return unspecified_address{};
+            }
+        }
         case address_format::inet: {
             if (len < sizeof(::sockaddr_in)) {
                 return unspecified_address{};

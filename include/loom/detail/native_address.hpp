@@ -17,7 +17,12 @@ using native_address = std::variant<sockaddr_in, sockaddr_in6>;
 // These values own the native objects until the provider call returns.
 [[nodiscard]] inline auto to_native_address(const address& addr, address_format format)
     -> result<native_address> {
-    if (format != address_format::unspecified && format != get_address_format(addr)) {
+    const auto actual = get_address_format(addr);
+    const bool socket_format =
+        format == address_format::sockaddr || format == address_format::sockaddr_ip;
+    const bool ip_format = actual == address_format::inet || actual == address_format::inet6;
+    if (format != address_format::unspecified && format != actual &&
+        !(socket_format && ip_format)) {
         return make_error_result<native_address>(errc::invalid_argument);
     }
     if (const auto* ip = std::get_if<ipv4_address>(&addr)) {

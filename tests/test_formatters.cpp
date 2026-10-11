@@ -37,6 +37,15 @@ TEST_CASE("format address_format enum", "[formatters]") {
     REQUIRE(std::format("{}", loom::address_format::inet6) == "inet6");
     REQUIRE(std::format("{}", loom::address_format::ib) == "ib");
     REQUIRE(std::format("{}", loom::address_format::ethernet) == "ethernet");
+    REQUIRE(std::format("{}", loom::address_format::sockaddr) == "sockaddr");
+    REQUIRE(std::format("{}", loom::address_format::sockaddr_ip) == "sockaddr_ip");
+    REQUIRE(std::format("{}", loom::address_format::mlx) == "mlx");
+    REQUIRE(std::format("{}", loom::address_format::ib_ud) == "ib_ud");
+    REQUIRE(std::format("{}", loom::address_format::efa) == "efa");
+    REQUIRE(std::format("{}", loom::address_format::psmx3) == "psmx3");
+    REQUIRE(std::format("{}", loom::address_format::opx) == "opx");
+    REQUIRE(std::format("{}", loom::address_format::cxi) == "cxi");
+    REQUIRE(std::format("{}", loom::address_format::ucx) == "ucx");
 }
 
 TEST_CASE("format atomic_op enum", "[formatters]") {

@@ -274,8 +274,35 @@ namespace loom::detail {
             return FI_SOCKADDR_IN6;
         case address_format::ib:
             return FI_SOCKADDR_IB;
-        case address_format::ethernet:
+        case address_format::psmx:
+            return FI_ADDR_PSMX;
+        case address_format::psmx2:
+            return FI_ADDR_PSMX2;
+        case address_format::gni:
+            return FI_ADDR_GNI;
+        case address_format::bgq:
+            return FI_ADDR_BGQ;
+        case address_format::str:
+            return FI_ADDR_STR;
+        case address_format::sockaddr:
+            return FI_SOCKADDR;
+        case address_format::sockaddr_ip:
+            return FI_SOCKADDR_IP;
+        case address_format::mlx:
+            return FI_ADDR_MLX;
+        case address_format::ib_ud:
+            return FI_ADDR_IB_UD;
+        case address_format::efa:
             return FI_ADDR_EFA;
+        case address_format::psmx3:
+            return FI_ADDR_PSMX3;
+        case address_format::opx:
+            return FI_ADDR_OPX;
+        case address_format::cxi:
+            return FI_ADDR_CXI;
+        case address_format::ucx:
+            return FI_ADDR_UCX;
+        case address_format::ethernet:
         case address_format::unspecified:
         default:
             return FI_FORMAT_UNSPEC;
@@ -295,6 +322,34 @@ namespace loom::detail {
             return address_format::inet6;
         case FI_SOCKADDR_IB:
             return address_format::ib;
+        case FI_ADDR_PSMX:
+            return address_format::psmx;
+        case FI_ADDR_PSMX2:
+            return address_format::psmx2;
+        case FI_ADDR_GNI:
+            return address_format::gni;
+        case FI_ADDR_BGQ:
+            return address_format::bgq;
+        case FI_ADDR_STR:
+            return address_format::str;
+        case FI_SOCKADDR:
+            return address_format::sockaddr;
+        case FI_SOCKADDR_IP:
+            return address_format::sockaddr_ip;
+        case FI_ADDR_MLX:
+            return address_format::mlx;
+        case FI_ADDR_IB_UD:
+            return address_format::ib_ud;
+        case FI_ADDR_EFA:
+            return address_format::efa;
+        case FI_ADDR_PSMX3:
+            return address_format::psmx3;
+        case FI_ADDR_OPX:
+            return address_format::opx;
+        case FI_ADDR_CXI:
+            return address_format::cxi;
+        case FI_ADDR_UCX:
+            return address_format::ucx;
         default:
             return address_format::unspecified;
     }

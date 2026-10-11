@@ -171,9 +171,17 @@ auto address_vector::insert_batch(std::span<const address> addresses,
         return std::size_t{0};
     }
 
-    const auto format = impl_->addr_format == address_format::unspecified
-                            ? get_address_format(addresses.front())
-                            : impl_->addr_format;
+    // Native batch insertion uses one address stride for the entire array.
+    const auto format = [this, addresses] {
+        switch (impl_->addr_format) {
+            case address_format::unspecified:
+            case address_format::sockaddr:
+            case address_format::sockaddr_ip:
+                return get_address_format(addresses.front());
+            default:
+                return impl_->addr_format;
+        }
+    }();
     std::vector<std::byte> packed;
     std::size_t stride{};
     for (const auto& addr : addresses) {
