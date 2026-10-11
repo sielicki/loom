@@ -761,10 +761,20 @@ installed libstdc++ 16 currently lacks it, so that backend is not runtime-tested
 All translation units exchanging loom senders must select the same backend.
 
 Fabric senders require application-driven progress. Bind the endpoint to
-the CQ passed to the sender, dedicate that CQ to loom execution operations,
-and call `loom::execution::poll_completions(cq)` from a progress loop.
-Starting an operation submits it; the progress loop delivers its completion
-to the receiver. Keep operation states and buffers alive until delivery.
+the CQ passed to the sender and call `loom::execution::poll_completions(cq)`
+from a progress loop. Its result contains `completed`, the number dispatched,
+and an optional `unhandled` event. Handle that event before continuing: it may
+belong to another frontend or carry a remote notification or queue failure.
+Foreign contexts are compared with registered addresses and never dereferenced.
+
+Starting an operation registers its completion and submits it. Any CQ reader
+can call `cq.dispatch(event)` to deliver an event to its registered operation;
+`false` leaves the intact event with that reader. Route each event once, before
+its context storage can be reused. Native poll, batch and wait methods do not
+invoke receivers implicitly. Dispatch unlinks the registration before invoking
+the receiver, allowing it to destroy the completed state or submit more work.
+Keep operation states, buffers and their queue alive until delivery. A queue
+error without an operation context does not authorize freeing pending states.
 When using `sync_wait`, progress must run on another thread, with a provider
 threading mode that permits concurrent submission and polling.
 

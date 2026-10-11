@@ -21,7 +21,86 @@
 
 namespace loom {
 
+completion_registration::~completion_registration() {
+    reset();
+}
 
+auto completion_registration::bind(completion_queue& queue,
+                                   context_ptr<void> context,
+                                   void* object,
+                                   callback complete) noexcept -> void_result {
+    if (!queue || !context || !complete) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    if (owner_) {
+        return make_error_result<void>(errc::busy);
+    }
+    auto& owner = *queue.impl_;
+    const std::lock_guard lock{owner.registrations_mutex};
+    for (auto* entry = owner.registrations; entry; entry = entry->next_) {
+        if (entry->context_ == context.get()) {
+            return make_error_result<void>(errc::address_in_use);
+        }
+    }
+    owner_ = &owner;
+    context_ = context.get();
+    object_ = object;
+    complete_ = complete;
+    next_ = owner.registrations;
+    if (next_) {
+        next_->previous_ = this;
+    }
+    owner.registrations = this;
+    return make_success();
+}
+
+void completion_registration::unlink() noexcept {
+    if (previous_) {
+        previous_->next_ = next_;
+    } else {
+        owner_->registrations = next_;
+    }
+    if (next_) {
+        next_->previous_ = previous_;
+    }
+    owner_ = nullptr;
+    previous_ = nullptr;
+    next_ = nullptr;
+    context_ = nullptr;
+    object_ = nullptr;
+    complete_ = nullptr;
+}
+
+void completion_registration::reset() noexcept {
+    if (owner_) {
+        const std::lock_guard lock{owner_->registrations_mutex};
+        unlink();
+    }
+}
+
+auto completion_queue::dispatch(const completion_event& event) const noexcept -> bool {
+    if (!impl_ || !event.context) {
+        return false;
+    }
+    completion_registration::callback complete{};
+    void* object{};
+    {
+        const std::lock_guard lock{impl_->registrations_mutex};
+        for (auto* entry = impl_->registrations; entry; entry = entry->next_) {
+            if (entry->context_ == event.context.get()) {
+                complete = entry->complete_;
+                object = entry->object_;
+                entry->unlink();
+                break;
+            }
+        }
+    }
+    if (!complete) {
+        return false;
+    }
+    complete(object, event);
+    return true;
+}
 
 completion_queue::completion_queue() = default;
 

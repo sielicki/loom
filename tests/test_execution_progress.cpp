@@ -52,6 +52,7 @@ struct provider {
     std::uint64_t remote_key{};
     std::size_t submitted_bytes{};
     int submission_status{};
+    void* submitted_context{};
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
@@ -169,6 +170,7 @@ struct provider {
                   std::uint64_t key,
                   void* ctx) -> ssize_t {
         submitted_bytes = length;
+        submitted_context = ctx;
         local_descriptor = descriptor;
         peer = destination;
         remote_address = address;
@@ -222,7 +224,7 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
                 REQUIRE(state.error == loom::make_error_code_from_fi_errno(-status));
             } else {
                 REQUIRE(state.calls == 0);
-                REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+                REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 1);
                 REQUIRE(state.calls == 1);
                 REQUIRE_FALSE(state.error);
                 REQUIRE(state.bytes == (write ? 0 : storage.size()));
@@ -246,7 +248,7 @@ TEST_CASE("compare swap senders compare before replacing remote data", "[executi
             loom::rma_addr{0x1000}, expected, 84, loom::mr_key{1}, nullptr, &fabric.cq),
         receiver{&state});
     loom::execution::start(operation);
-    REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+    REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 1);
     REQUIRE(state.calls == 1);
     REQUIRE_FALSE(state.error);
     REQUIRE(state.bytes == 42);
@@ -263,11 +265,11 @@ TEST_CASE("execution progress completes composed fabric operations", "[execution
         receiver{&state});
     loom::execution::start(operation);
     REQUIRE(state.calls == 0);
-    REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 2);
+    REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 2);
     REQUIRE(state.calls == 1);
     REQUIRE(state.bytes == 7);
     REQUIRE_FALSE(state.error);
-    REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 0);
+    REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 0);
 }
 
 TEST_CASE("execution progress delivers operation failures", "[execution][progress]") {
@@ -279,7 +281,7 @@ TEST_CASE("execution progress delivers operation failures", "[execution][progres
         loom::execution::connect(loom::async(fabric.ep).send(data, &fabric.cq), receiver{&state});
     loom::execution::start(operation);
     REQUIRE(state.calls == 0);
-    REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+    REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 1);
     REQUIRE(state.calls == 1);
     REQUIRE(state.error == loom::errc::canceled);
 }
@@ -298,7 +300,7 @@ TEST_CASE("execution progress delivers RMA completions", "[execution][progress]"
     static_assert(loom::execution::operation_state<decltype(operation)>);
     loom::execution::start(operation);
     REQUIRE(state.calls == 0);
-    REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 2);
+    REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 2);
     REQUIRE(state.calls == 1);
     REQUIRE(state.bytes == data.size());
 }
@@ -311,7 +313,7 @@ TEST_CASE("execution progress delivers atomic results", "[execution][progress]")
         static_assert(loom::execution::operation_state<decltype(operation)>);
         loom::execution::start(operation);
         REQUIRE(state.calls == 0);
-        REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+        REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 1);
         REQUIRE(state.calls == 1);
         REQUIRE(state.bytes == 42);
         REQUIRE_FALSE(state.error);
@@ -341,7 +343,7 @@ TEST_CASE("atomic senders store results in the supplied registration", "[executi
         auto operation = loom::execution::connect(std::move(sender), receiver{&state});
         loom::execution::start(operation);
         REQUIRE(state.calls == 0);
-        REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+        REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 1);
         REQUIRE(state.calls == 1);
         REQUIRE_FALSE(state.error);
         REQUIRE(state.bytes == 42);
@@ -384,4 +386,91 @@ TEST_CASE("atomic senders reject invalid result registrations", "[execution][pro
         run(loom::rma_async(fabric.ep).fetch_add<std::uint64_t>(
             loom::rma_addr{0x1000}, 1, loom::mr_key{1}, &mr, &fabric.cq));
     }
+}
+
+TEST_CASE("execution polling returns foreign completions intact", "[execution][progress]") {
+    provider fabric;
+    std::array<std::byte, 16> data{};
+    fi_context2 foreign{};
+    fabric.pending.push_back(&foreign);
+    completion_state state;
+    auto operation =
+        loom::execution::connect(loom::async(fabric.ep).send(data, &fabric.cq), receiver{&state});
+    loom::execution::start(operation);
+    fabric.pending.push_back(nullptr);
+    auto first = loom::execution::poll_completions(fabric.cq).value();
+    REQUIRE(first.completed == 0);
+    REQUIRE(first.unhandled);
+    REQUIRE(first.unhandled->context.get() == &foreign);
+    REQUIRE(first.unhandled->bytes_transferred == fabric.completion_length);
+    REQUIRE(state.calls == 0);
+    auto second = loom::execution::poll_completions(fabric.cq).value();
+    REQUIRE(second.completed == 1);
+    REQUIRE(second.unhandled);
+    REQUIRE_FALSE(second.unhandled->context);
+    REQUIRE(second.unhandled->bytes_transferred == fabric.completion_length);
+    REQUIRE(state.calls == 1);
+    REQUIRE_FALSE(state.error);
+    auto third = loom::execution::poll_completions(fabric.cq).value();
+    REQUIRE(third.completed == 0);
+    REQUIRE_FALSE(third.unhandled);
+}
+
+TEST_CASE("unattributed CQ errors do not complete or discard senders", "[execution][progress]") {
+    provider fabric;
+    std::array<std::byte, 16> data{};
+    fabric.pending.push_back(nullptr);
+    fabric.fail = true;
+    completion_state state;
+    auto operation =
+        loom::execution::connect(loom::async(fabric.ep).send(data, &fabric.cq), receiver{&state});
+    loom::execution::start(operation);
+    auto first = loom::execution::poll_completions(fabric.cq).value();
+    REQUIRE(first.completed == 0);
+    REQUIRE(first.unhandled);
+    REQUIRE_FALSE(first.unhandled->context);
+    REQUIRE(first.unhandled->error == loom::errc::canceled);
+    REQUIRE(state.calls == 0);
+    REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 1);
+    REQUIRE(state.calls == 1);
+    REQUIRE_FALSE(state.error);
+}
+
+TEST_CASE("raw CQ readers can dispatch registered sender completions", "[execution][progress]") {
+    provider fabric;
+    std::array<std::byte, 16> data{};
+    completion_state state;
+    auto operation =
+        loom::execution::connect(loom::async(fabric.ep).recv(data, &fabric.cq), receiver{&state});
+    loom::execution::start(operation);
+    const auto event = fabric.cq.poll();
+    REQUIRE(event);
+    REQUIRE(state.calls == 0);
+    REQUIRE(fabric.cq.dispatch(*event));
+    REQUIRE(state.calls == 1);
+    REQUIRE(state.bytes == fabric.completion_length);
+    REQUIRE_FALSE(fabric.cq.dispatch(*event));
+    REQUIRE(state.calls == 1);
+    auto moved = std::move(fabric.cq);
+    REQUIRE_FALSE(moved.dispatch(*event));
+}
+
+TEST_CASE("sender rejection detaches its completion registration", "[execution][progress]") {
+    provider fabric;
+    fabric.submission_status = -FI_EAGAIN;
+    completion_state state;
+    std::array<std::byte, 16> data{};
+    auto operation = loom::execution::connect(
+        loom::rma_async(fabric.ep).write(data, loom::rma_addr{0}, loom::mr_key{1}, &fabric.cq),
+        receiver{&state});
+    loom::execution::start(operation);
+    REQUIRE(state.calls == 1);
+    REQUIRE(state.error == loom::errc::again);
+    REQUIRE(fabric.pending.empty());
+    // No callback remains registered after the failed start.
+    loom::completion_event event{};
+    event.context = loom::context_ptr<void>{fabric.submitted_context};
+    REQUIRE(event.context);
+    REQUIRE_FALSE(fabric.cq.dispatch(event));
+    REQUIRE(state.calls == 1);
 }

@@ -123,6 +123,43 @@ struct completion_queue_attr {
     bool source_addresses{false};
 };
 
+class completion_queue;
+
+/// Registers one completion without interpreting a native context as an object.
+/// The registration, context storage and callback object must remain alive until
+/// dispatch or explicit reset. Reset only detaches the callback; it does not
+/// cancel native work. Do not race reset/destruction with dispatch of this entry.
+/// Separate entries may be registered and dispatched concurrently, subject to
+/// the provider's threading contract. Registration and dispatch do not allocate.
+class completion_registration {
+public:
+    using callback = void (*)(void*, const completion_event&) noexcept;
+
+    completion_registration() noexcept = default;
+    ~completion_registration();
+    completion_registration(const completion_registration&) = delete;
+    auto operator=(const completion_registration&) -> completion_registration& = delete;
+    completion_registration(completion_registration&&) = delete;
+    auto operator=(completion_registration&&) -> completion_registration& = delete;
+
+    [[nodiscard]] auto bind(completion_queue& queue,
+                            context_ptr<void> context,
+                            void* object,
+                            callback complete) noexcept -> void_result;
+    void reset() noexcept;
+
+private:
+    void unlink() noexcept;
+    detail::completion_queue_impl* owner_{};
+    completion_registration* previous_{};
+    completion_registration* next_{};
+    void* context_{};
+    void* object_{};
+    callback complete_{};
+    friend class completion_queue;
+    friend struct detail::completion_queue_impl;
+};
+
 /**
  * @class completion_queue
  * @brief Manages operation completion notifications.
@@ -173,6 +210,14 @@ public:
     static auto create(const domain& dom,
                        const completion_queue_attr& attr = {},
                        memory_resource* resource = nullptr) -> result<completion_queue>;
+
+    /// Deliver a previously read event to its registered operation. A false
+    /// result leaves the event with the caller, including foreign contexts and
+    /// context-free notifications/errors. Unlink before invoking the callback
+    /// so it may destroy its registration or submit and dispatch other work.
+    /// Native reads never invoke callbacks implicitly. Route each event once;
+    /// do not replay an old event after its context storage has been reused.
+    [[nodiscard]] auto dispatch(const completion_event& event) const noexcept -> bool;
 
     [[nodiscard]] auto poll() const -> std::optional<completion_event>;
 
@@ -226,6 +271,7 @@ private:
     [[nodiscard]] auto read_error(int status) const -> result<completion_event>;
     impl_ptr impl_;
     friend class endpoint;
+    friend class completion_registration;
 };
 
 /**

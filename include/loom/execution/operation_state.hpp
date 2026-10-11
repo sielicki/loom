@@ -13,6 +13,7 @@
 #include <rdma/fabric.h>
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <system_error>
 #include <type_traits>
@@ -29,41 +30,36 @@
 
 namespace loom::execution {
 
-namespace detail {
-struct operation_completion_context {
-    safe_context storage;
-    completion_queue* queue{};
-    void (*dispatch)(void*, const completion_event&) noexcept {};
+/// Progress stops at the first unregistered event, preserving its full payload.
+/// The caller owns that event and can pass it to another dispatcher or handle a
+/// remote notification/queue error. No context is dereferenced to identify it.
+struct completion_progress {
+    std::size_t completed{};
+    std::optional<completion_event> unhandled;
 };
-static_assert(std::is_standard_layout_v<operation_completion_context>);
-static_assert(std::is_pointer_interconvertible_with_class(&operation_completion_context::storage));
-}  // namespace detail
 
-/// Advance a CQ dedicated to loom execution operations. The endpoint must be
-/// bound to this CQ, and operation states must remain alive until completion.
-/// Call this from the application's progress loop; starting a sender does not
-/// create a polling thread. Do not mix foreign contexts into this queue.
+/// Advance registered operations on a CQ. Bind the endpoint to this queue and
+/// keep operation states and buffers alive until completion. Handle any returned
+/// unregistered event before continuing the progress loop. Starting a sender
+/// does not create a polling thread. Each call reads at most limit native events.
 [[nodiscard]] inline auto poll_completions(completion_queue& queue, std::size_t limit = 64)
-    -> result<std::size_t> {
-    std::size_t count{};
-    while (count < limit) {
-        const auto event = queue.poll();
+    -> result<completion_progress> {
+    if (!queue) {
+        return make_error_result<completion_progress>(errc::invalid_argument);
+    }
+    completion_progress progress;
+    while (progress.completed < limit) {
+        auto event = queue.poll();
         if (!event) {
             break;
         }
-        if (!event->context) {
-            return std::unexpected(event->error ? event->error
-                                                : make_error_code(errc::invalid_argument));
+        if (!queue.dispatch(*event)) {
+            progress.unhandled = std::move(event);
+            break;
         }
-        auto* context = static_cast<detail::operation_completion_context*>(event->context.get());
-        if (context->queue != &queue || !context->dispatch ||
-            !is_context_valid(&context->storage)) {
-            return make_error_result<std::size_t>(errc::invalid_argument);
-        }
-        context->dispatch(context->storage.object, *event);
-        ++count;
+        ++progress.completed;
     }
-    return count;
+    return progress;
 }
 
 /**
@@ -90,22 +86,34 @@ protected:
         std::is_nothrow_move_constructible_v<Receiver>)
         : receiver_(std::move(receiver)) {
         // Store back-pointer for completion dispatch with validation support
-        store_safe_context(fi_ctx_.storage, static_cast<Derived*>(this));
-        fi_ctx_.queue = cq;
-        fi_ctx_.dispatch = [](void* object, const completion_event& event) noexcept {
-            static_cast<Derived*>(object)->complete_event(event);
-        };
+        store_safe_context(fi_ctx_, static_cast<Derived*>(this));
+        queue_ = cq;
     }
 
     ~fabric_operation_state_base() {
         // Invalidate application metadata before releasing the context
-        invalidate_safe_context(fi_ctx_.storage);
+        registration_.reset();
+        invalidate_safe_context(fi_ctx_);
     }
 
     /**
      * @brief Returns the libfabric context pointer.
      */
-    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_.storage.provider; }
+    [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_.provider; }
+
+    [[nodiscard]] auto register_completion() noexcept -> bool {
+        auto result = registration_.bind(*queue_,
+                                         context(),
+                                         static_cast<Derived*>(this),
+                                         [](void* object, const completion_event& event) noexcept {
+                                             static_cast<Derived*>(object)->complete_event(event);
+                                         });
+        if (!result) {
+            complete_error(result.error());
+            return false;
+        }
+        return true;
+    }
 
     /**
      * @brief Handles successful completion.
@@ -129,6 +137,7 @@ protected:
      * @param ec The error code.
      */
     void complete_error(std::error_code ec) noexcept {
+        registration_.reset();
         loom::execution::set_error(std::move(receiver_), ec);
     }
 
@@ -155,7 +164,9 @@ protected:
         }
     }
 
-    detail::operation_completion_context fi_ctx_{};
+    safe_context fi_ctx_{};
+    completion_registration registration_;
+    completion_queue* queue_{};
     Receiver receiver_;
 };
 
@@ -191,6 +202,9 @@ public:
             return;
         }
 
+        if (!this->register_completion()) {
+            return;
+        }
         auto result = ep_->send(buffer_, this->context());
         if (!result) {
             this->complete_error(result.error());
@@ -233,6 +247,9 @@ public:
             return;
         }
 
+        if (!this->register_completion()) {
+            return;
+        }
         auto result = ep_->recv(buffer_, this->context());
         if (!result) {
             this->complete_error(result.error());
@@ -269,6 +286,9 @@ public:
             return;
         }
 
+        if (!this->register_completion()) {
+            return;
+        }
         auto result = ep_->tagged_send(buffer_, tag_, this->context());
         if (!result) {
             this->complete_error(result.error());
@@ -311,6 +331,9 @@ public:
             return;
         }
 
+        if (!this->register_completion()) {
+            return;
+        }
         auto result = ep_->tagged_recv(buffer_, tag_, ignore_, this->context());
         if (!result) {
             this->complete_error(result.error());
@@ -368,6 +391,9 @@ public:
 
         if (buffer_.size() > remote_.length) {
             this->complete_error(make_error_code(errc::invalid_argument));
+            return;
+        }
+        if (!this->register_completion()) {
             return;
         }
         auto result =
@@ -431,6 +457,9 @@ public:
 
         if (buffer_.size() > remote_.length) {
             this->complete_error(make_error_code(errc::invalid_argument));
+            return;
+        }
+        if (!this->register_completion()) {
             return;
         }
         auto result =

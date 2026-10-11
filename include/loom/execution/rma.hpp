@@ -228,6 +228,9 @@ public:
 
         remote_memory remote{remote_addr_.get(), key_.get(), sizeof(T)};
 
+        if (!this->register_completion()) {
+            return;
+        }
         auto result = atomic::fetch(*ep_,
                                     atomic::operation::sum,
                                     atomic::get_datatype<T>(),
@@ -358,6 +361,9 @@ public:
 
         remote_memory remote{remote_addr_.get(), key_.get(), sizeof(T)};
 
+        if (!this->register_completion()) {
+            return;
+        }
         auto result = atomic::compare_swap(*ep_,
                                            atomic::get_datatype<T>(),
                                            &compare_value_,
