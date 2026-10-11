@@ -29,7 +29,8 @@ The package runs four workloads: same-process and separate-process transfers
 on sockets and TCP/RxM. The executable loads the installed shared object and
 calls its exported `ncclNetPlugin_v12` table. It checks nonblocking connection
 setup, all 32 request slots, backpressure, reversed tag order including the sign
-bit, zero-byte transfers, actual completion lengths, truncation, registration
+bit, zero-byte transfers without buffers or registrations, actual completion
+lengths, truncation, registration
 retention after deregistration, invalid handles/ranges, and incomplete-accept
 cleanup. The separate-process workload verifies a registered 1 MiB payload.
 Payload and connection-handshake messages go through Loom; its bootstrap

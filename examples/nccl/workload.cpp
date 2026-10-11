@@ -91,6 +91,35 @@ void local(ncclNet_v12_t& net) {
         tick(start);
     }
     OK(net.closeListen(listener));
+    // Zero-byte messages still match even when neither side has an allocation
+    // or memory registration. No public registration is needed for the flush.
+    {
+        void* data{};
+        std::size_t size{};
+        int tag{23};
+        void *send_request{}, *recv_request{};
+        start = deadline::now();
+        while (!recv_request) {
+            OK(net.irecv(receive, 1, &data, &size, &tag, nullptr, nullptr, &recv_request));
+            tick(start);
+        }
+        int done{1};
+        OK(net.test(recv_request, &done, nullptr));
+        CHECK(!done);
+        while (!send_request) {
+            OK(net.isend(send, nullptr, 0, tag, nullptr, nullptr, &send_request));
+            tick(start);
+        }
+        while (send_request || recv_request) {
+            finish(net, send_request, 0);
+            finish(net, recv_request, 0);
+            tick(start);
+        }
+        void* flush{};
+        int bytes{};
+        OK(net.iflush(receive, 1, &data, &bytes, nullptr, &flush));
+        CHECK(!flush);
+    }
     constexpr int count = NCCL_NET_MAX_REQUESTS;
     constexpr std::size_t segment = 8192;
     std::vector<std::byte> source(count * segment), target(source.size());
@@ -157,10 +186,10 @@ void local(ncclNet_v12_t& net) {
 
     // Reuse completed slots, report receive length rather than capacity, and
     // preserve registrations after the caller releases their public handles.
-    for (const auto bytes : {0, 137, 64}) {
-        const bool truncated = bytes == 64;
+    for (const auto bytes : {0, 137, 32, 64}) {
+        const bool truncated = bytes == 32 || bytes == 64;
         auto* data = static_cast<void*>(target.data());
-        std::size_t capacity = truncated ? 4 : segment;
+        std::size_t capacity = bytes == 32 ? 0 : bytes == 64 ? 4 : segment;
         int value{42};
         void *recv_request{}, *send_request{};
         start = deadline::now();
@@ -172,7 +201,7 @@ void local(ncclNet_v12_t& net) {
             OK(net.isend(send, source.data(), bytes, value, source_mr, nullptr, &send_request));
             tick(start);
         }
-        if (truncated) {
+        if (bytes == 64) {
             OK(net.deregMr(send, source_mr));
             OK(net.deregMr(receive, target_mr));
         }

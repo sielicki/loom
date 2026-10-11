@@ -259,29 +259,32 @@ struct comm {
             }
         } pending{work};
         const iovec buffer{data, size};
-        const auto descriptor = memory->region.descriptor();
+        const auto descriptor = memory ? memory->region.descriptor() : loom::mr_descriptor{};
+        const auto buffers = size ? std::span<const iovec>{&buffer, 1} : std::span<const iovec>{};
+        const auto descriptors = memory ? std::span<const loom::mr_descriptor>{&descriptor, 1}
+                                        : std::span<const loom::mr_descriptor>{};
         loom::result<void> result;
         if (control && dir == direction::send)
             result =
                 loom::msg::sendmsg(endpoint,
-                                   loom::msg::send_message<>{.iov = {&buffer, 1},
-                                                             .desc = {&descriptor, 1},
+                                   loom::msg::send_message<>{.iov = buffers,
+                                                             .desc = descriptors,
                                                              .dest_addr = peer,
                                                              .context = work.context.context_ptr()},
                                    loom::msg::send_flag::completion);
         else if (control)
             result =
                 loom::msg::recvmsg(endpoint,
-                                   loom::msg::recv_message<>{.iov = {&buffer, 1},
-                                                             .desc = {&descriptor, 1},
+                                   loom::msg::recv_message<>{.iov = buffers,
+                                                             .desc = descriptors,
                                                              .src_addr = peer,
                                                              .context = work.context.context_ptr()},
                                    loom::msg::recv_flag::completion);
         else if (dir == direction::send)
             result = loom::msg::tagged_sendmsg(
                 endpoint,
-                loom::msg::tagged_send_message<>{.iov = {&buffer, 1},
-                                                 .desc = {&descriptor, 1},
+                loom::msg::tagged_send_message<>{.iov = buffers,
+                                                 .desc = descriptors,
                                                  .dest_addr = peer,
                                                  .tag = tag(value),
                                                  .context = work.context.context_ptr()},
@@ -289,8 +292,8 @@ struct comm {
         else
             result = loom::msg::tagged_recvmsg(
                 endpoint,
-                loom::msg::tagged_recv_message<>{.iov = {&buffer, 1},
-                                                 .desc = {&descriptor, 1},
+                loom::msg::tagged_recv_message<>{.iov = buffers,
+                                                 .desc = descriptors,
                                                  .src_addr = peer,
                                                  .tag = tag(value),
                                                  .context = work.context.context_ptr()},
@@ -490,17 +493,21 @@ auto submit(
         auto& object = *static_cast<comm*>(handle);
         std::lock_guard lock{object.mutex};
         require(object.ready && !object.closing && object.kind == dir && size <= object.limit);
-        auto found = object.registrations.find(memory);
-        require(found != object.registrations.end());
-        const auto& region = *found->second;
-        const auto base = reinterpret_cast<std::uintptr_t>(data);
-        require(base >= region.base && base - region.base <= region.size &&
-                size <= region.size - (base - region.base));
+        std::shared_ptr<registration> registered;
+        if (size) {
+            auto found = object.registrations.find(memory);
+            require(found != object.registrations.end());
+            const auto& region = *found->second;
+            const auto base = reinterpret_cast<std::uintptr_t>(data);
+            require(base >= region.base && base - region.base <= region.size &&
+                    size <= region.size - (base - region.base));
+            registered = found->second;
+        }
         object.progress();
         auto slot = std::ranges::find(object.requests, phase::free, &operation::state);
         if (slot == object.requests.end())
             return;
-        object.post(*slot, dir, data, size, found->second, tag);
+        object.post(*slot, dir, data, size, std::move(registered), tag);
         if (slot->state == phase::pending)
             *output = &*slot;
     });
@@ -517,17 +524,20 @@ auto receive(void* comm,
              void** memory,
              void**,
              void** output) -> ncclResult_t {
-    if (count != 1 || !data || !sizes || !tags || !memory)
+    if (count != 1 || !data || !sizes || !tags || (sizes[0] && !memory))
         return ncclInvalidArgument;
-    return submit(comm, direction::receive, data[0], sizes[0], tags[0], memory[0], output);
+    return submit(
+        comm, direction::receive, data[0], sizes[0], tags[0], memory ? memory[0] : nullptr, output);
 }
-auto flush(void* handle, int count, void**, int*, void** memory, void** output) -> ncclResult_t {
+auto flush(void* handle, int count, void**, int* sizes, void** memory, void** output)
+    -> ncclResult_t {
     return boundary([&] {
-        require(handle && count == 1 && memory && output);
+        require(handle && count == 1 && sizes && sizes[0] >= 0 && output);
         *output = nullptr;
         auto& object = *static_cast<comm*>(handle);
         std::lock_guard lock{object.mutex};
-        require(object.kind == direction::receive && object.registrations.contains(memory[0]));
+        require(object.kind == direction::receive && object.ready && !object.closing);
+        require(!sizes[0] || (memory && object.registrations.contains(memory[0])));
         // Host memory needs no device visibility operation. CUDA is not advertised.
     });
 }
