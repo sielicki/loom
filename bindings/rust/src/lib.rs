@@ -44,6 +44,7 @@
 mod discovery;
 mod error;
 mod ffi;
+mod registration;
 
 #[cfg(feature = "tokio")]
 mod async_cq;
@@ -54,6 +55,7 @@ pub use discovery::{
 };
 pub use error::{Error, Result};
 pub use ffi::ffi::{RemoteMemory, RmaCompletion, RmaOptions, RmaTarget};
+pub use registration::{HmemAllocationKind, HmemDevice, MemoryRegistration};
 
 use cxx::UniquePtr;
 use std::rc::Rc;
@@ -525,6 +527,37 @@ impl MemoryRegion {
         access: MrAccess,
     ) -> Result<Self> {
         let inner = ffi::ffi::register_memory(&domain.inner, ptr as usize, len, access.bits())?;
+        Ok(Self {
+            inner: Rc::new(inner),
+            _domain: domain.clone(),
+        })
+    }
+
+    /// Register memory with an explicit interface, device and allocation kind.
+    /// Device memory requires a domain negotiated with [`Capabilities::HMEM`].
+    /// Provider registration failures are returned without falling back to host
+    /// registration. This call neither owns the allocation nor establishes GPU
+    /// visibility, and it does not bind or enable endpoint-bound registrations.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must name `len` bytes in a live allocation described accurately by
+    /// `attributes`. The allocation must outlive every registration clone and
+    /// accepted operation. Device allocation and registration lifetime rules,
+    /// producer synchronization, and completion visibility remain the caller's
+    /// responsibility. Use raw-pointer operations for device-only addresses.
+    pub unsafe fn register_with_options(
+        domain: &Domain,
+        ptr: *mut u8,
+        len: usize,
+        attributes: MemoryRegistration,
+    ) -> Result<Self> {
+        let inner = ffi::ffi::register_memory_with_options(
+            &domain.inner,
+            ptr as usize,
+            len,
+            &attributes.bridge()?,
+        )?;
         Ok(Self {
             inner: Rc::new(inner),
             _domain: domain.clone(),

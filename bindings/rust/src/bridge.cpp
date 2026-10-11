@@ -19,7 +19,7 @@ auto native_value(Bridge value, const std::array<std::pair<Bridge, Native>, N>& 
     for (const auto& [bridge, native] : entries)
         if (bridge == value)
             return native;
-    throw std::invalid_argument("unsupported discovery enum");
+    throw std::invalid_argument("unsupported bridge enum");
 }
 
 template <typename Bridge, typename Native, std::size_t N>
@@ -90,6 +90,21 @@ constexpr std::array endpoint_values{
     std::pair{EndpointKind::Msg, FI_EP_MSG},
     std::pair{EndpointKind::Rdm, FI_EP_RDM},
     std::pair{EndpointKind::Dgram, FI_EP_DGRAM},
+};
+
+constexpr std::array hmem_interface_values{
+    std::pair{HmemInterface::System, loom::hmem_iface::system},
+    std::pair{HmemInterface::Cuda, loom::hmem_iface::cuda},
+    std::pair{HmemInterface::Rocr, loom::hmem_iface::rocr},
+    std::pair{HmemInterface::LevelZero, loom::hmem_iface::level_zero},
+    std::pair{HmemInterface::Neuron, loom::hmem_iface::neuron},
+    std::pair{HmemInterface::SynapseAi, loom::hmem_iface::synapseai},
+};
+
+constexpr std::array hmem_allocation_values{
+    std::pair{HmemAllocation::Unspecified, loom::hmem_allocation_kind::unspecified},
+    std::pair{HmemAllocation::Device, loom::hmem_allocation_kind::device},
+    std::pair{HmemAllocation::Host, loom::hmem_allocation_kind::host},
 };
 
 }  // namespace
@@ -236,6 +251,22 @@ auto register_memory(const DomainHandle& dom,
                      std::uint64_t access) -> std::unique_ptr<MemoryRegionHandle> {
     auto span = std::span{reinterpret_cast<std::byte*>(ptr), len};
     auto result = loom::memory_region::register_memory(dom.get(), span, loom::mr_access{access});
+    return std::make_unique<MemoryRegionHandle>(unwrap_or_throw(std::move(result)));
+}
+
+auto register_memory_with_options(const DomainHandle& dom,
+                                  std::uintptr_t ptr,
+                                  std::size_t len,
+                                  const MemoryRegistrationAttributes& attributes)
+    -> std::unique_ptr<MemoryRegionHandle> {
+    loom::memory_registration registration{
+        .access = loom::mr_access{attributes.access},
+        .allocation = native_value(attributes.allocation, hmem_allocation_values),
+    };
+    registration.device.iface = native_value(attributes.interface, hmem_interface_values);
+    registration.device.device_id = attributes.device;
+    auto result = loom::memory_region::register_memory(
+        dom.get(), reinterpret_cast<void*>(ptr), len, registration);
     return std::make_unique<MemoryRegionHandle>(unwrap_or_throw(std::move(result)));
 }
 

@@ -85,6 +85,7 @@ struct FabricAttributesData;
 
 /// Memory region info returned after registration
 struct MrInfo;
+struct MemoryRegistrationAttributes;
 
 /// Remote memory descriptor for RMA operations
 struct RemoteMemory;
@@ -257,6 +258,12 @@ auto register_memory(const DomainHandle& dom,
                      std::uintptr_t ptr,
                      std::size_t len,
                      std::uint64_t access) -> std::unique_ptr<MemoryRegionHandle>;
+
+auto register_memory_with_options(const DomainHandle& dom,
+                                  std::uintptr_t ptr,
+                                  std::size_t len,
+                                  const MemoryRegistrationAttributes& attributes)
+    -> std::unique_ptr<MemoryRegionHandle>;
 
 // ============================================================================
 // Endpoint operations

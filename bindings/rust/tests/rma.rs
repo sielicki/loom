@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 use loom_fabric::{
     query_fabric_with_hints, AddressVector, Capabilities, CompletionQueue, CqBindFlags, Domain,
-    Endpoint, EndpointType, Error, Fabric, MemoryRegion, MrAccess, OperationContext, RemoteMemory,
-    Result, RmaCompletion, RmaOptions, RmaTarget,
+    Endpoint, EndpointType, Error, Fabric, HmemAllocationKind, HmemDevice, MemoryRegion,
+    MemoryRegistration, MrAccess, OperationContext, RemoteMemory, Result, RmaCompletion,
+    RmaOptions, RmaTarget,
 };
 use std::time::{Duration, Instant};
 
@@ -33,9 +34,15 @@ impl Node {
         let fabric = Fabric::new(&info).unwrap();
         let domain = Domain::new(&fabric, &info).unwrap();
         // The caller's buffer outlives this node and all its operations.
-        let region =
-            unsafe { MemoryRegion::register(&domain, buffer.as_mut_ptr(), buffer.len(), ACCESS) }
-                .unwrap();
+        let region = unsafe {
+            MemoryRegion::register_with_options(
+                &domain,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                MemoryRegistration::new(ACCESS),
+            )
+        }
+        .unwrap();
         let queue = CompletionQueue::with_options(&domain, 128, false).unwrap();
         let mut addresses = AddressVector::new(&domain).unwrap();
         let mut endpoint = Endpoint::new(&domain, &info).unwrap();
@@ -317,6 +324,52 @@ fn sockets_registered_reads_and_writes() {
 #[ignore = "requires the libfabric TCP/RxM provider"]
 fn rxm_registered_reads_and_writes() {
     registered_transfers("tcp;ofi_rxm");
+}
+
+#[test]
+#[ignore = "requires the libfabric sockets provider"]
+fn invalid_device_attributes_cannot_register_as_system_memory() {
+    let info = query_fabric_with_hints("sockets", Capabilities::RMA, EndpointType::Rdm).unwrap();
+    let fabric = Fabric::new(&info).unwrap();
+    let domain = Domain::new(&fabric, &info).unwrap();
+    let mut buffer = [0; 64];
+    for (device, allocation) in [
+        (HmemDevice::System, HmemAllocationKind::Device),
+        (HmemDevice::System, HmemAllocationKind::Host),
+        (HmemDevice::Cuda(-1), HmemAllocationKind::Unspecified),
+        (HmemDevice::Rocr(-1), HmemAllocationKind::Unspecified),
+        (HmemDevice::LevelZero(-1), HmemAllocationKind::Device),
+        (HmemDevice::Neuron(-1), HmemAllocationKind::Device),
+        (HmemDevice::SynapseAi(-1), HmemAllocationKind::Host),
+    ] {
+        // Invalid attributes must be rejected before consulting a device API or
+        // calling the provider. They cannot turn into ordinary host registration.
+        assert!(matches!(
+            unsafe {
+                MemoryRegion::register_with_options(
+                    &domain,
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    MemoryRegistration {
+                        access: ACCESS,
+                        device,
+                        allocation,
+                    },
+                )
+            },
+            Err(Error::InvalidArgument(_))
+        ));
+    }
+    let valid = unsafe {
+        MemoryRegion::register_with_options(
+            &domain,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            MemoryRegistration::new(ACCESS),
+        )
+    }
+    .unwrap();
+    assert_eq!(valid.remote_memory().length, buffer.len());
 }
 
 #[test]

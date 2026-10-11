@@ -203,6 +203,35 @@ pub mod ffi {
         pub max_message_size: usize,
     }
 
+    /// Memory interfaces mapped explicitly to Loom's native registration types.
+    #[repr(u32)]
+    #[derive(Debug, Clone, Copy)]
+    pub enum HmemInterface {
+        System,
+        Cuda,
+        Rocr,
+        LevelZero,
+        Neuron,
+        SynapseAi,
+    }
+
+    /// Exclusive allocation hints, never inferred from a pointer value.
+    #[repr(u32)]
+    #[derive(Debug, Clone, Copy)]
+    pub enum HmemAllocation {
+        Unspecified,
+        Device,
+        Host,
+    }
+
+    /// Registration attributes passed together through the native bridge.
+    pub struct MemoryRegistrationAttributes {
+        pub access: u64,
+        pub interface: HmemInterface,
+        pub device: i32,
+        pub allocation: HmemAllocation,
+    }
+
     /// Memory region info after registration.
     #[derive(Debug, Clone, Copy)]
     pub struct MrInfo {
@@ -319,6 +348,14 @@ pub mod ffi {
             ptr: usize,
             len: usize,
             access: u64,
+        ) -> Result<UniquePtr<MemoryRegionHandle>>;
+
+        /// Register memory with explicit device and allocation attributes.
+        fn register_memory_with_options(
+            dom: &DomainHandle,
+            ptr: usize,
+            len: usize,
+            attributes: &MemoryRegistrationAttributes,
         ) -> Result<UniquePtr<MemoryRegionHandle>>;
 
         // ====================================================================

@@ -147,7 +147,21 @@ checks range and address arithmetic before narrowing the exported view.
 constructing a Rust reference to the allocation. They preserve the same
 bounds, domain, completion, and lifetime rules as the slice methods. This
 allows callers to represent device addresses without treating them as host
-memory; registration and GPU visibility still require separate support.
+memory. GPU visibility remains the caller's responsibility.
+
+`MemoryRegion::register_with_options` accepts a `MemoryRegistration` with
+typed `HmemDevice` and `HmemAllocationKind` attributes. Device variants carry
+the actual CUDA, ROCm, Level Zero, Neuron, or SynapseAI ordinal. Device and
+host allocation flags describe allocations made through that interface;
+ordinary system memory uses `Unspecified`. Negative ordinals and device
+allocation flags on the system interface are rejected before registration.
+Provider errors never trigger a fallback to system memory.
+
+Negotiate `Capabilities::HMEM` and satisfy the returned MR requirements
+before registering accelerator memory. Retain the allocation through all
+registration clones and accepted operations. Registration does not synchronize
+device producers, establish completion visibility, or enable endpoint-bound
+registrations. Those obligations remain with the consumer.
 
 Each operation checks that the local registration belongs to the endpoint's
 domain and covers the submitted range, and that the remote view is large
@@ -166,7 +180,8 @@ reads prohibit local buffer access, and writes prohibit local mutation,
 until the accepted operation retires. Dropping an observer is not cancellation.
 
 The provider tests exercise host-memory scalar transfers on sockets and
-TCP/RxM. GPU registration, endpoint-bound registration setup, owned allocation
+TCP/RxM and reject invalid device attributes. GPU hardware validation,
+endpoint-bound registration setup, DMA-BUF registration, owned allocation
 leases, immediate data, and vectored RMA remain additional Rust frontend work.
 
 ### Submission errors and backpressure
