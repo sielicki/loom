@@ -233,10 +233,12 @@ TEST_CASE("device registration combines allocation and DMA-BUF metadata", "[memo
                                      hmem_allocation_kind::device,
                                      hmem_allocation_kind::host);
     const auto dma = GENERATE(false, true);
+    const auto rma_events = GENERATE(false, true);
     memory_registration attributes{
         .access = mr_access_flags::send | mr_access_flags::recv,
         .device = hmem_device::cuda(3),
         .allocation = allocation,
+        .rma_events = rma_events,
     };
     if (dma)
         attributes.dmabuf = dmabuf_registration{17, 4096};
@@ -245,7 +247,8 @@ TEST_CASE("device registration combines allocation and DMA-BUF metadata", "[memo
     const auto expected = allocation == hmem_allocation_kind::device ? FI_HMEM_DEVICE_ONLY
                           : allocation == hmem_allocation_kind::host ? FI_HMEM_HOST_ALLOC
                                                                      : 0;
-    REQUIRE(provider.flags == (expected | (dma ? FI_MR_DMABUF : 0)));
+    REQUIRE(provider.flags ==
+            (expected | (dma ? FI_MR_DMABUF : 0) | (rma_events ? FI_RMA_EVENT : 0)));
     REQUIRE(provider.iface == FI_HMEM_CUDA);
     REQUIRE(provider.device_id == 3);
     REQUIRE(provider.access == (FI_SEND | FI_RECV));
@@ -259,6 +262,22 @@ TEST_CASE("device registration combines allocation and DMA-BUF metadata", "[memo
         REQUIRE(provider.dmabuf_fd == 17);
         REQUIRE(provider.dmabuf_offset == 4096);
     }
+}
+
+TEST_CASE("host registration requests remote events explicitly", "[memory][rma_event]") {
+    const auto mode = GENERATE(0, FI_MR_RMA_EVENT);
+    const auto events = GENERATE(false, true);
+    test::mock_domain provider{mode};
+    std::array<std::byte, 64> buffer{};
+    const memory_registration attributes{
+        .access = mr_access_flags::remote_write,
+        .rma_events = events,
+    };
+    auto region =
+        memory_region::register_memory(provider.dom, buffer.data(), buffer.size(), attributes);
+    REQUIRE(region);
+    CHECK(provider.access == FI_REMOTE_WRITE);
+    CHECK(provider.flags == (events ? FI_RMA_EVENT : 0));
 }
 
 TEST_CASE("invalid device registration metadata never reaches the provider", "[memory][hmem]") {

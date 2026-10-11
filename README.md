@@ -368,6 +368,16 @@ return `errc::invalid_argument`. An empty range at the parent's end is valid
 when its address is representable. Both helpers preserve the full remote key
 and work with virtual-address and offset-based registrations.
 
+To count remote writes and modifying atomics to a specific registration,
+request `memory_registration{.access = mr_access_flags::remote_write,
+.rma_events = true}` and call `mr.bind(counter)`. Accessing endpoints must
+have `capability::rma_event`. When the domain requires
+`mr_mode_flags::rma_event`, call `mr.enable()` after all bindings succeed.
+If it also requires `mr_mode_flags::endpoint`, bind the MR to its endpoint
+before enabling it. Bound counters and endpoints must outlive the MR, and
+further bindings are forbidden after enablement. Ordinary registrations do
+not need the event flag merely because their domain supports that mode.
+
 ### Allocator-Aware Design
 
 All loom objects support custom allocators via `std::pmr::memory_resource`,

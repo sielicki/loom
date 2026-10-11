@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "loom/core/allocator.hpp"
+#include "loom/core/counter.hpp"
 #include "loom/core/domain.hpp"
 #include "loom/core/endpoint.hpp"
 #include "loom/core/error.hpp"
@@ -20,6 +21,15 @@
 #include "loom/detail/unique_fid.hpp"
 
 namespace loom::detail {
+
+inline auto bind_memory_region(fid_mr& mr, fid& resource, std::uint64_t flags) -> void_result {
+    if (!FI_CHECK_OP(mr.fid.ops, fi_ops, bind))
+        return make_error_result<void>(errc::not_supported);
+    const auto ret = fi_mr_bind(&mr, &resource, flags);
+    if (ret != 0)
+        return make_error_result_from_fi_errno<void>(-ret);
+    return make_success();
+}
 
 inline auto dmabuf_local_address(void* allocation, std::uint64_t offset, std::size_t length)
     -> result<void*> {
@@ -233,6 +243,8 @@ auto memory_region::register_memory(const domain& dom,
     if (flags && attributes.device.iface == hmem_iface::system) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
+    if (attributes.rma_events)
+        flags |= FI_RMA_EVENT;
     const auto local_address =
         attributes.dmabuf ? detail::dmabuf_local_address(addr, attributes.dmabuf->offset, length)
                           : result<void*>{addr};
@@ -348,13 +360,14 @@ auto memory_region::bind(endpoint& ep) -> result<void> {
     }
 
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    auto ret = fi_mr_bind(impl_->mr, &fid_ep->fid, 0);
+    return detail::bind_memory_region(*impl_->mr, fid_ep->fid, 0);
+}
 
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<void>(-ret);
-    }
-
-    return make_success();
+auto memory_region::bind(counter& cntr) -> result<void> {
+    if (!impl_ || !impl_->mr || !cntr)
+        return make_error_result<void>(errc::invalid_argument);
+    auto* native = static_cast<fid_cntr*>(cntr.internal_ptr());
+    return detail::bind_memory_region(*impl_->mr, native->fid, FI_REMOTE_WRITE);
 }
 
 auto memory_region::enable() -> result<void> {
@@ -362,6 +375,8 @@ auto memory_region::enable() -> result<void> {
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->mr->fid.ops, fi_ops, control))
+        return make_error_result<void>(errc::not_supported);
     auto ret = fi_mr_enable(impl_->mr);
 
     if (ret != 0) {
@@ -376,6 +391,8 @@ auto memory_region::refresh() -> result<void> {
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->mr->fid.ops, fi_ops, control))
+        return make_error_result<void>(errc::not_supported);
     auto ret = fi_mr_refresh(impl_->mr, nullptr, 0, 0);
 
     if (ret != 0) {

@@ -140,6 +140,9 @@ struct memory_registration {
     hmem_device device{};
     hmem_allocation_kind allocation{hmem_allocation_kind::unspecified};
     std::optional<dmabuf_registration> dmabuf{};
+    /// Configure this MR for remote RMA events. Bind its counter before
+    /// enable() when the domain requires mr_mode_flags::rma_event.
+    bool rma_events{};
 };
 
 /**
@@ -251,6 +254,14 @@ public:
      */
     auto bind(class endpoint& ep) -> result<void>;
 
+    /// Count remote writes and modifying atomics to this MR. The counter must
+    /// outlive the MR, and accessing endpoints need capability::rma_event.
+    /// Set memory_registration::rma_events when required by the domain, bind
+    /// every resource, then enable the MR before exposing it to peers.
+    auto bind(class counter& cntr) -> result<void>;
+
+    /// Enable an MR created disabled by its registration mode. Complete all
+    /// endpoint and counter bindings first; no further bindings are permitted.
     auto enable() -> result<void>;
 
     auto refresh() -> result<void>;
