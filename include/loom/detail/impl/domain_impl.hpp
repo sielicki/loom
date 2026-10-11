@@ -13,6 +13,7 @@
 #include "loom/core/event_queue.hpp"
 #include "loom/core/fabric.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom::detail {
 
@@ -92,6 +93,8 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
         return make_error_result_from_fi_errno<domain>(-ret);
     }
 
+    detail::unique_fid<::fid_domain> pending{dom};
+
     auto threading = threading_mode::unspecified;
     auto control_prog = progress_mode::unspecified;
     auto data_prog = progress_mode::unspecified;
@@ -109,12 +112,14 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::domain_impl>(
             resource, dom, threading, control_prog, data_prog, format, domain_name);
+        (void)pending.release();
         return domain{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::domain_impl>(
         default_resource, dom, threading, control_prog, data_prog, format, domain_name);
+    (void)pending.release();
     return domain{std::move(impl)};
 }
 

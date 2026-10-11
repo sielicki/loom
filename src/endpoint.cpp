@@ -20,6 +20,7 @@
 #include "loom/detail/conversions.hpp"
 #include "loom/detail/impl/endpoint_impl.hpp"
 #include "loom/detail/native_address.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom {
 class completion_queue;
@@ -57,6 +58,8 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
         return make_error_result_from_fi_errno<endpoint>(-ret);
     }
 
+    detail::unique_fid<::fid_ep> pending{ep};
+
     auto ep_type = detail::from_fi_ep_type(info_ptr->ep_attr->type);
     auto addr_fmt = detail::from_fi_addr_format(info_ptr->addr_format);
     const auto max_msg_size = info_ptr->ep_attr->max_msg_size;
@@ -66,12 +69,14 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
             resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
+        (void)pending.release();
         return endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::endpoint_impl>(
         default_resource, ep, ep_type, addr_fmt, max_msg_size, inject_size, capabilities);
+    (void)pending.release();
     return endpoint{std::move(impl)};
 }
 

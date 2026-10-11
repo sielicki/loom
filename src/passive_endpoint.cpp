@@ -13,6 +13,7 @@
 #include "loom/core/event_queue.hpp"
 #include "loom/core/fabric.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom {
 
@@ -75,16 +76,20 @@ auto passive_endpoint::create(const fabric& fab, const fabric_info& info, memory
         return make_error_result_from_fi_errno<passive_endpoint>(-ret);
     }
 
+    detail::unique_fid<::fid_pep> pending{pep};
+
     auto addr_fmt = detail::from_fi_addr_format(info_ptr->addr_format);
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::passive_endpoint_impl>(resource, pep, addr_fmt);
+        (void)pending.release();
         return passive_endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl =
         detail::make_pmr_unique<detail::passive_endpoint_impl>(default_resource, pep, addr_fmt);
+    (void)pending.release();
     return passive_endpoint{std::move(impl)};
 }
 

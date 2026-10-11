@@ -12,6 +12,7 @@
 #include "loom/core/fabric.hpp"
 #include "loom/core/scalable_endpoint.hpp"
 #include "loom/detail/impl/endpoint_impl.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom::detail {
 
@@ -99,6 +100,8 @@ auto scalable_endpoint::create(const domain& dom,
         return make_error_result_from_fi_errno<scalable_endpoint>(-ret);
     }
 
+    detail::unique_fid<::fid_ep> pending{sep};
+
     std::size_t tx_ctx_cnt = 0;
     std::size_t rx_ctx_cnt = 0;
     const auto max_msg_size = info_ptr->ep_attr ? info_ptr->ep_attr->max_msg_size : 0;
@@ -122,6 +125,7 @@ auto scalable_endpoint::create(const domain& dom,
                                                                             max_msg_size,
                                                                             inject_size,
                                                                             capabilities);
+        (void)pending.release();
         return scalable_endpoint{std::move(impl)};
     }
 
@@ -135,6 +139,7 @@ auto scalable_endpoint::create(const domain& dom,
                                                                         max_msg_size,
                                                                         inject_size,
                                                                         capabilities);
+    (void)pending.release();
     return scalable_endpoint{std::move(impl)};
 }
 
@@ -187,6 +192,8 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
         return make_error_result_from_fi_errno<endpoint>(-ret);
     }
 
+    detail::unique_fid<::fid_ep> pending{tx_ep};
+
     auto* resource = std::pmr::get_default_resource();
     auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
                                                                   tx_ep,
@@ -195,6 +202,7 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
                                                                   impl_->max_msg_size,
                                                                   impl_->inject_size,
                                                                   impl_->capabilities);
+    (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }
 
@@ -214,6 +222,8 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
         return make_error_result_from_fi_errno<endpoint>(-ret);
     }
 
+    detail::unique_fid<::fid_ep> pending{rx_ep};
+
     auto* resource = std::pmr::get_default_resource();
     auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
                                                                   rx_ep,
@@ -222,6 +232,7 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
                                                                   impl_->max_msg_size,
                                                                   0UZ,
                                                                   impl_->capabilities);
+    (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }
 

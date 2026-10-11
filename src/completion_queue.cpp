@@ -16,6 +16,7 @@
 #include "loom/core/domain.hpp"
 #include "loom/core/error.hpp"
 #include "loom/core/fabric.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom {
 
@@ -87,16 +88,20 @@ auto completion_queue::create(const domain& dom,
         return make_error_result_from_fi_errno<completion_queue>(-ret);
     }
 
+    detail::unique_fid<::fid_cq> pending{cq};
+
     auto progress = dom.progress_policy();
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(resource, cq, progress);
+        (void)pending.release();
         return completion_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl =
         detail::make_pmr_unique<detail::completion_queue_impl>(default_resource, cq, progress);
+    (void)pending.release();
     return completion_queue{std::move(impl)};
 }
 

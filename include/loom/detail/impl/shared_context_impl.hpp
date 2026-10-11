@@ -12,6 +12,7 @@
 #include "loom/core/fabric.hpp"
 #include "loom/core/shared_context.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom::detail {
 
@@ -141,13 +142,17 @@ auto shared_tx_context::create(const domain& dom,
         return make_error_result_from_fi_errno<shared_tx_context>(-ret);
     }
 
+    detail::unique_fid<::fid_stx> pending{stx};
+
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::shared_tx_context_impl>(resource, stx);
+        (void)pending.release();
         return shared_tx_context{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::shared_tx_context_impl>(default_resource, stx);
+    (void)pending.release();
     return shared_tx_context{std::move(impl)};
 }
 
@@ -187,13 +192,17 @@ auto shared_rx_context::create(const domain& dom,
         return make_error_result_from_fi_errno<shared_rx_context>(-ret);
     }
 
+    detail::unique_fid<::fid_ep> pending{srx};
+
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::shared_rx_context_impl>(resource, srx);
+        (void)pending.release();
         return shared_rx_context{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::shared_rx_context_impl>(default_resource, srx);
+    (void)pending.release();
     return shared_rx_context{std::move(impl)};
 }
 

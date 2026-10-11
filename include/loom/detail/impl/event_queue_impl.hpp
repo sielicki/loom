@@ -13,6 +13,7 @@
 #include "loom/core/error.hpp"
 #include "loom/core/event_queue.hpp"
 #include "loom/core/fabric.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom::detail {
 
@@ -102,13 +103,17 @@ auto event_queue::create(const fabric& fab, const event_queue_attr& attr, memory
         return make_error_result_from_fi_errno<event_queue>(-ret);
     }
 
+    detail::unique_fid<::fid_eq> pending{eq};
+
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::event_queue_impl>(resource, eq);
+        (void)pending.release();
         return event_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::event_queue_impl>(default_resource, eq);
+    (void)pending.release();
     return event_queue{std::move(impl)};
 }
 

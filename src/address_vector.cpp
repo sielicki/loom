@@ -11,6 +11,7 @@
 #include "loom/core/endpoint.hpp"
 #include "loom/core/error.hpp"
 #include "loom/detail/native_address.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom {
 
@@ -109,15 +110,19 @@ auto address_vector::create(const domain& dom,
         return make_error_result_from_fi_errno<address_vector>(-ret);
     }
 
+    detail::unique_fid<::fid_av> pending{av};
+
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::address_vector_impl>(
             resource, av, static_cast<av_type>(av_attr.type), format);
+        (void)pending.release();
         return address_vector{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::address_vector_impl>(
         default_resource, av, static_cast<av_type>(av_attr.type), format);
+    (void)pending.release();
     return address_vector{std::move(impl)};
 }
 
