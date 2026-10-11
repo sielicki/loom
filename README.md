@@ -350,6 +350,13 @@ auto main() -> int {
 }
 ```
 
+`remote.subregion(offset, length)` and `remote.offset_by(offset)` return
+`result<remote_memory>`. Check the result before using the descriptor: ranges
+outside the parent or whose start or exclusive end address would overflow
+return `errc::invalid_argument`. An empty range at the parent's end is valid
+when its address is representable. Both helpers preserve the full remote key
+and work with virtual-address and offset-based registrations.
+
 ### Allocator-Aware Design
 
 All loom objects support custom allocators via `std::pmr::memory_resource`,

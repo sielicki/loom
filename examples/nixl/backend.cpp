@@ -1063,13 +1063,17 @@ public:
                             size) ||
                     !covers(target->base, target->region.length, remote[i].addr, size))
                     return NIXL_ERR_INVALID_PARAM;
+                const auto remote_region =
+                    target->region.subregion(remote[i].addr - target->base, size);
+                if (!remote_region)
+                    return NIXL_ERR_INVALID_PARAM;
                 auto part = std::make_unique<segment>();
                 part->owner = work.get();
                 part->memory = source->memory;
                 part->destination = target->destination;
                 part->buffer = {reinterpret_cast<std::byte*>(local[i].addr), size};
                 part->remote_id = target->id;
-                part->remote = target->region.subregion(remote[i].addr - target->base, size);
+                part->remote = *remote_region;
                 work->segments.push_back(std::move(part));
             }
             auto* handle = work.get();

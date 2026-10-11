@@ -3,15 +3,93 @@
 #include <loom/loom.hpp>
 
 #include <array>
+#include <limits>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "mock_domain.hpp"
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
 using namespace loom;
+
+TEMPLATE_TEST_CASE("remote memory containment checks address arithmetic",
+                   "[memory][remote_address]",
+                   remote_memory,
+                   efa_remote_memory) {
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    struct range {
+        std::uint64_t address;
+        std::size_t extent;
+        std::uint64_t offset;
+        std::size_t length;
+        bool valid;
+    };
+    constexpr std::array cases{
+        range{0x1000, 8, 0, 8, true},
+        range{0x1000, 8, 3, 5, true},
+        range{0x1000, 8, 8, 0, true},
+        range{0x1000, 8, 0, 0, true},
+        range{0x1000, 8, 9, 0, false},
+        range{0x1000, 8, 7, 2, false},
+        range{0x1000, 8, 1, std::numeric_limits<std::size_t>::max(), false},
+        range{0x1000, 8, maximum, 0, false},
+        range{maximum - 3, 8, 0, 3, true},
+        range{maximum - 3, 8, 1, 2, true},
+        range{maximum - 3, 8, 3, 0, true},
+        range{maximum - 3, 8, 0, 4, false},
+        range{maximum - 3, 8, 4, 0, false},
+        range{maximum - 3, 8, 0, 8, false},
+        range{maximum, 0, 0, 0, true},
+        range{0, 0, 0, 0, true},
+        range{0, 0, 1, 0, false},
+    };
+    for (const auto& test : cases) {
+        CAPTURE(test.address, test.extent, test.offset, test.length);
+        const TestType region{test.address, maximum - 7, test.extent};
+        CHECK(region.contains(test.offset, test.length) == test.valid);
+        const auto slice = region.subregion(test.offset, test.length);
+        REQUIRE(slice.has_value() == test.valid);
+        if (slice) {
+            CHECK(slice->addr == test.address + test.offset);
+            CHECK(slice->key == region.key);
+            CHECK(slice->length == test.length);
+        } else {
+            CHECK(slice.error() == errc::invalid_argument);
+        }
+    }
+}
+
+TEMPLATE_TEST_CASE("remote memory tails preserve bounds and keys",
+                   "[memory][remote_address]",
+                   remote_memory,
+                   efa_remote_memory) {
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    constexpr TestType region{0x1000, maximum - 7, 8};
+    constexpr auto tail = region.offset_by(3);
+    static_assert(tail && tail->addr == 0x1003 && tail->length == 5);
+    static_assert(tail->key == region.key);
+    constexpr auto end = region.offset_by(8);
+    static_assert(end && end->addr == 0x1008 && end->length == 0);
+    constexpr auto nested = tail->subregion(1, 4);
+    static_assert(nested && nested->addr == 0x1004 && nested->length == 4);
+    static_assert(nested->key == region.key);
+    constexpr TestType empty{maximum, maximum, 0};
+    static_assert(empty.offset_by(0)->addr == maximum);
+    for (const auto offset : std::array{std::uint64_t{9}, maximum}) {
+        const auto slice = region.offset_by(offset);
+        REQUIRE_FALSE(slice);
+        CHECK(slice.error() == errc::invalid_argument);
+    }
+    const TestType overflow{maximum - 3, region.key, 8};
+    for (std::uint64_t offset = 0; offset <= overflow.length; ++offset) {
+        const auto slice = overflow.offset_by(offset);
+        REQUIRE_FALSE(slice);
+        CHECK(slice.error() == errc::invalid_argument);
+    }
+}
 
 TEST_CASE("memory binding rejects empty endpoints before calling the provider", "[memory]") {
     test::mock_domain provider;

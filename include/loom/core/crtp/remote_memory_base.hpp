@@ -3,8 +3,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 #include "loom/core/crtp/crtp_tags.hpp"
+#include "loom/core/result.hpp"
 
 /**
  * @namespace loom
@@ -53,33 +55,42 @@ public:
      * @brief Checks if an offset and length are within bounds.
      * @param offset The byte offset from start.
      * @param len The length to access.
-     * @return True if the range is valid.
+     * @return True if the range lies within this descriptor and its start
+     * and exclusive end addresses are representable. Empty ranges at the
+     * end of the descriptor are permitted.
      */
     [[nodiscard]] constexpr auto contains(std::uint64_t offset, std::size_t len) const noexcept
         -> bool {
         auto* self = static_cast<const Derived*>(this);
-        return offset < self->length && len <= self->length - offset;
+        constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+        return offset <= self->length && len <= self->length - offset &&
+               offset <= maximum - self->addr && len <= maximum - (self->addr + offset);
     }
 
     /**
      * @brief Creates a new descriptor offset from this one.
      * @param offset The byte offset.
-     * @return A new descriptor at the offset.
+     * @return The remaining region, or invalid_argument for an out-of-bounds
+     * offset or unrepresentable address range.
      */
-    [[nodiscard]] constexpr auto offset_by(std::uint64_t offset) const noexcept -> Derived {
+    [[nodiscard]] constexpr auto offset_by(std::uint64_t offset) const noexcept -> result<Derived> {
         auto* self = static_cast<const Derived*>(this);
-        return Derived{
-            self->addr + offset, self->key, self->length - static_cast<std::size_t>(offset)};
+        if (offset > self->length)
+            return make_error_result<Derived>(errc::invalid_argument);
+        return subregion(offset, self->length - static_cast<std::size_t>(offset));
     }
 
     /**
      * @brief Creates a subregion descriptor.
      * @param offset The byte offset from start.
      * @param len The subregion length.
-     * @return A new descriptor for the subregion.
+     * @return The subregion, or invalid_argument for an out-of-bounds or
+     * unrepresentable address range. Empty ranges at the end are permitted.
      */
     [[nodiscard]] constexpr auto subregion(std::uint64_t offset, std::size_t len) const noexcept
-        -> Derived {
+        -> result<Derived> {
+        if (!contains(offset, len))
+            return make_error_result<Derived>(errc::invalid_argument);
         auto* self = static_cast<const Derived*>(this);
         return Derived{self->addr + offset, self->key, len};
     }
