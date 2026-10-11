@@ -64,6 +64,7 @@ loom_add_test(test_error)
 loom_add_test(test_memory)
 loom_add_test(test_memory_events)
 loom_add_test(test_raw_memory)
+loom_add_test(test_shared_receive TIMEOUT 30)
 loom_add_test(test_resource_allocations)
 loom_add_test(test_fabric_import)
 loom_add_test(test_mr_cache)
@@ -116,6 +117,7 @@ add_executable(test_implementation
     test_memory.cpp
     test_memory_events.cpp
     test_raw_memory.cpp
+    test_shared_receive.cpp
     test_resource_allocations.cpp
     test_empty_resources.cpp
     test_atomic.cpp

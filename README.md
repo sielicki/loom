@@ -319,6 +319,40 @@ auto main() -> int {
 }
 ```
 
+### Shared receive contexts
+
+Set `fabric_hints::shared_receive_context = true` when querying endpoints
+that will use an SRX. The returned endpoint attributes expose the same
+requirement. Create `shared_rx_context` in that domain, bind it to each
+endpoint with `ep.bind_srx(srx)`, then enable the endpoints. All bound RDM
+endpoints must share one address vector.
+
+The core `recv`, `recvv`, `tagged_recv`, `tagged_recvv`, and `msg` receive
+helpers accept either an endpoint or an SRX through the `receive_target`
+concept. They preserve source filters, descriptors, contexts, tag masks,
+and per-call flags. Message helpers also support explicit inheritance of
+the SRX's receive defaults. Provider operation support is checked at
+submission; a receive-capable object does not guarantee every operation.
+
+```cpp
+recv(srx, buffer, fabric_addrs::unspecified, mr.descriptor(), &context).value();
+// Poll the receiving endpoints' completion queues until this receive retires.
+```
+
+SRX receives complete on the CQ belonging to whichever bound endpoint
+receives the message. Bind CQs and counters to those endpoints. The former
+`shared_rx_context::bind_cq/bind_counter` methods have been removed because
+libfabric does not associate those resources with an SRX. Endpoint-oriented
+Asio and sender adapters do not yet route shared receives across these queues;
+use the core submission and polling interfaces.
+
+Keep receive buffers, registrations, and provider context storage alive until
+their operations retire. Multi-receive storage remains outstanding through
+the terminal buffer-release event. `srx.cancel(context)` requests cancellation;
+its return alone does not release the storage. Close bound endpoints before
+`srx.close()` and close the SRX before its domain. A failed explicit close
+retains the handle for retry; successful close releases remaining receives.
+
 ### RMA (Remote Memory Access)
 
 One-sided read/write operations that bypass the remote CPU:

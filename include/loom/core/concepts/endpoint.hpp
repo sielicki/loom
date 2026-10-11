@@ -17,6 +17,15 @@
  */
 namespace loom {
 
+class endpoint;
+class shared_rx_context;
+
+/// Native receive handles accepted by Loom's submission helpers. This names
+/// the supported object kinds, not a promise of provider operation support.
+/// In particular, STX handles and arbitrary fabric objects are not receivers.
+template <typename T>
+concept receive_target = std::same_as<T, endpoint> || std::same_as<T, shared_rx_context>;
+
 /**
  * @namespace loom::detail
  * @brief Internal implementation details.

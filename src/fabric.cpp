@@ -107,6 +107,7 @@ auto fabric_info::get_endpoint_attr() const -> std::optional<endpoint_attributes
             tx_attr ? detail::from_fi_comp_order(tx_attr->comp_order) : completion_ordering::none,
         .rx_comp_ordering =
             rx_attr ? detail::from_fi_comp_order(rx_attr->comp_order) : completion_ordering::none,
+        .shared_receive_context = attr->rx_ctx_cnt == FI_SHARED_CONTEXT,
     };
 }
 
@@ -252,6 +253,8 @@ auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> resul
     info_hints->addr_format = native_format;
     info_hints->ep_attr->type =
         hints.ep_type ? detail::to_fi_ep_type(*hints.ep_type) : FI_EP_UNSPEC;
+    if (hints.shared_receive_context)
+        info_hints->ep_attr->rx_ctx_cnt = FI_SHARED_CONTEXT;
 
     // fi_freeinfo owns these strings; copy bounded views into C allocations.
     const auto copy_name = [](std::optional<std::string_view> name, char*& output) {

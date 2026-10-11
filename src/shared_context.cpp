@@ -4,9 +4,7 @@
 #include <rdma/fabric.h>
 #include <rdma/fi_endpoint.h>
 
-#include "loom/async/completion_queue.hpp"
 #include "loom/core/allocator.hpp"
-#include "loom/core/counter.hpp"
 #include "loom/core/domain.hpp"
 #include "loom/core/error.hpp"
 #include "loom/core/fabric.hpp"
@@ -75,6 +73,7 @@ struct shared_tx_context_impl {
  */
 struct shared_rx_context_impl {
     ::fid_ep* srx{nullptr};  ///< Libfabric shared RX context handle
+    std::uint64_t rx_op_flags{};
 
     /**
      * @brief Default constructor.
@@ -84,7 +83,8 @@ struct shared_rx_context_impl {
      * @brief Constructs implementation from libfabric SRX handle.
      * @param srx_ The libfabric shared RX context handle.
      */
-    explicit shared_rx_context_impl(::fid_ep* srx_) : srx(srx_) {}
+    explicit shared_rx_context_impl(::fid_ep* srx_, std::uint64_t flags = 0)
+        : srx(srx_), rx_op_flags(flags) {}
 
     /**
      * @brief Destructor that closes the libfabric SRX handle.
@@ -190,6 +190,8 @@ auto shared_rx_context::create(const domain& dom,
     auto* dom_ptr = static_cast<::fid_domain*>(dom.internal_ptr());
     auto* info_ptr = static_cast<::fi_info*>(info.internal_ptr());
 
+    if (!FI_CHECK_OP(dom_ptr->ops, fi_ops_domain, srx_ctx))
+        return make_error_result<shared_rx_context>(errc::not_supported);
     ::fi_rx_attr* rx_attr = info_ptr->rx_attr;
     int ret = ::fi_srx_context(dom_ptr, rx_attr, &srx, nullptr);
 
@@ -198,56 +200,49 @@ auto shared_rx_context::create(const domain& dom,
     }
 
     detail::unique_fid<::fid_ep> pending{srx};
+    const auto rx_flags = rx_attr ? rx_attr->op_flags : 0;
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::shared_rx_context_impl>(resource, srx);
+        auto impl =
+            detail::make_pmr_unique<detail::shared_rx_context_impl>(resource, srx, rx_flags);
         (void)pending.release();
         return shared_rx_context{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::shared_rx_context_impl>(default_resource, srx);
+    auto impl =
+        detail::make_pmr_unique<detail::shared_rx_context_impl>(default_resource, srx, rx_flags);
     (void)pending.release();
     return shared_rx_context{std::move(impl)};
 }
 
-auto shared_rx_context::bind_cq(completion_queue& cq, cq_bind_flags flags) -> void_result {
-    if (!impl_ || !impl_->srx) {
+auto shared_rx_context::cancel(context_ptr<void> context) -> void_result {
+    if (!impl_ || !impl_->srx || !context)
         return make_error_result<void>(errc::invalid_argument);
-    }
-
-    if (!cq) {
-        return make_error_result<void>(errc::invalid_argument);
-    }
-
-    auto* cq_fid = static_cast<::fid*>(cq.internal_ptr());
-    auto fi_flags = detail::to_fi_cq_bind_flags(flags);
-    int ret = ::fi_ep_bind(impl_->srx, cq_fid, fi_flags);
-
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<void>(-ret);
-    }
-
+    if (!FI_CHECK_OP(impl_->srx->ops, fi_ops_ep, cancel))
+        return make_error_result<void>(errc::not_supported);
+    const auto status = ::fi_cancel(&impl_->srx->fid, context.get());
+    if (status != 0)
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
     return make_success();
 }
 
-auto shared_rx_context::bind_counter(counter& cntr, std::uint64_t flags) -> void_result {
-    if (!impl_ || !impl_->srx) {
-        return make_error_result<void>(errc::invalid_argument);
-    }
-
-    if (!cntr) {
-        return make_error_result<void>(errc::invalid_argument);
-    }
-
-    auto* cntr_fid = static_cast<::fid*>(cntr.internal_ptr());
-    int ret = ::fi_ep_bind(impl_->srx, cntr_fid, flags);
-
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<void>(-ret);
-    }
-
+auto shared_rx_context::close() -> void_result {
+    if (!impl_ || !impl_->srx)
+        return make_success();
+    if (!FI_CHECK_OP(impl_->srx->fid.ops, fi_ops, close))
+        return make_error_result<void>(errc::not_supported);
+    const auto status = ::fi_close(&impl_->srx->fid);
+    if (status != 0)
+        return make_error_result_from_fi_errno<void>(-status);
+    impl_->srx = nullptr;
     return make_success();
+}
+
+auto shared_rx_context::impl_operation_flags(completion_direction direction) const noexcept
+    -> std::uint64_t {
+    return impl_ && impl_->srx && direction == completion_direction::receive ? impl_->rx_op_flags
+                                                                             : 0;
 }
 
 auto shared_rx_context::impl_internal_ptr() const noexcept -> void* {

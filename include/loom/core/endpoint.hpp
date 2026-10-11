@@ -9,6 +9,7 @@
 
 #include "loom/core/address.hpp"
 #include "loom/core/allocator.hpp"
+#include "loom/core/concepts/endpoint.hpp"
 #include "loom/core/crtp/fabric_object_base.hpp"
 #include "loom/core/endpoint_types.hpp"
 #include "loom/core/result.hpp"
@@ -241,7 +242,7 @@ private:
 namespace detail {
 /// Preserve native bits when extending creation defaults for a message call.
 template <operation_defaults Defaults>
-[[nodiscard]] inline auto operation_flags(const endpoint& ep,
+[[nodiscard]] inline auto operation_flags(const receive_target auto& ep,
                                           completion_direction direction,
                                           std::uint64_t flags) noexcept -> std::uint64_t {
     static_assert(Defaults == operation_defaults::replace ||

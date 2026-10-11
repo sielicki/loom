@@ -17,6 +17,7 @@
 #include "loom/core/error.hpp"
 #include "loom/core/memory.hpp"
 #include "loom/core/result.hpp"
+#include "loom/core/shared_context.hpp"
 #include "loom/core/types.hpp"
 
 /**
@@ -275,7 +276,7 @@ template <context_like Ctx>
  * @return Success or error result.
  */
 template <operation_defaults Defaults, context_like Ctx>
-[[nodiscard]] auto recvmsg(endpoint& ep,
+[[nodiscard]] auto recvmsg(receive_target auto& ep,
                            const recv_message<Ctx>& msg,
                            recv_flags flags = recv_flag::none) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
@@ -312,7 +313,7 @@ template <operation_defaults Defaults, context_like Ctx>
 
 /// Per-call flags replace defaults unless an explicit inheritance policy is selected.
 template <context_like Ctx>
-[[nodiscard]] auto recvmsg(endpoint& ep,
+[[nodiscard]] auto recvmsg(receive_target auto& ep,
                            const recv_message<Ctx>& msg,
                            recv_flags flags = recv_flag::none) -> result<void> {
     return recvmsg<operation_defaults::replace>(ep, msg, flags);
@@ -388,7 +389,7 @@ template <context_like Ctx>
  * @return Success or error result.
  */
 template <operation_defaults Defaults, context_like Ctx>
-[[nodiscard]] auto tagged_recvmsg(endpoint& ep,
+[[nodiscard]] auto tagged_recvmsg(receive_target auto& ep,
                                   const tagged_recv_message<Ctx>& msg,
                                   recv_flags flags = recv_flag::none) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
@@ -422,7 +423,7 @@ template <operation_defaults Defaults, context_like Ctx>
 
 /// Per-call flags replace defaults unless an explicit inheritance policy is selected.
 template <context_like Ctx>
-[[nodiscard]] auto tagged_recvmsg(endpoint& ep,
+[[nodiscard]] auto tagged_recvmsg(receive_target auto& ep,
                                   const tagged_recv_message<Ctx>& msg,
                                   recv_flags flags = recv_flag::none) -> result<void> {
     return tagged_recvmsg<operation_defaults::replace>(ep, msg, flags);
@@ -469,7 +470,7 @@ send_to(endpoint& ep, std::span<const std::byte> data, fabric_addr dest_addr, Ct
  */
 template <context_like Ctx = void*>
 [[nodiscard]] auto
-recv_from(endpoint& ep, std::span<std::byte> buffer, fabric_addr src_addr, Ctx ctx = {})
+recv_from(receive_target auto& ep, std::span<std::byte> buffer, fabric_addr src_addr, Ctx ctx = {})
     -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
@@ -535,8 +536,9 @@ template <context_like Ctx = void*>
  * @return Success or error result.
  */
 template <context_like Ctx = void*>
-[[nodiscard]] auto post_multi_recv(endpoint& ep, std::span<std::byte> buffer, Ctx ctx = {})
-    -> result<void> {
+[[nodiscard]] auto post_multi_recv(receive_target auto& ep,
+                                   std::span<std::byte> buffer,
+                                   Ctx ctx = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
@@ -692,7 +694,7 @@ template <contiguous_byte_range Buf, context_like Ctx = void*>
  * @return Success or error result.
  */
 template <mutable_byte_range Buf, context_like Ctx = void*>
-[[nodiscard]] auto tagged_recv(endpoint& ep,
+[[nodiscard]] auto tagged_recv(receive_target auto& ep,
                                Buf&& buffer,
                                fabric_addr src,
                                std::uint64_t tag,
@@ -751,7 +753,7 @@ template <mutable_byte_range Buf, context_like Ctx = void*>
  * @return Success or error result.
  */
 template <mutable_byte_range Buf, context_like Ctx = void*>
-[[nodiscard]] auto tagged_recv(endpoint& ep,
+[[nodiscard]] auto tagged_recv(receive_target auto& ep,
                                Buf&& buffer,
                                fabric_addr src,
                                std::uint64_t tag,
@@ -888,9 +890,12 @@ send(endpoint& ep, Buf&& data, fabric_addr dest, mr_descriptor desc = {}, Ctx ct
  * @return Success or error result.
  */
 template <mutable_byte_range Buf, context_like Ctx = void*>
-[[nodiscard]] auto
-recv(endpoint& ep, Buf&& buffer, fabric_addr src, mr_descriptor desc, op_flags flags, Ctx ctx = {})
-    -> result<void> {
+[[nodiscard]] auto recv(receive_target auto& ep,
+                        Buf&& buffer,
+                        fabric_addr src,
+                        mr_descriptor desc,
+                        op_flags flags,
+                        Ctx ctx = {}) -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
@@ -939,7 +944,7 @@ recv(endpoint& ep, Buf&& buffer, fabric_addr src, mr_descriptor desc, op_flags f
  */
 template <mutable_byte_range Buf, context_like Ctx = void*>
 [[nodiscard]] auto
-recv(endpoint& ep, Buf&& buffer, fabric_addr src, mr_descriptor desc = {}, Ctx ctx = {})
+recv(receive_target auto& ep, Buf&& buffer, fabric_addr src, mr_descriptor desc = {}, Ctx ctx = {})
     -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {
@@ -1018,7 +1023,7 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
  * @return Success or error result.
  */
 template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
-[[nodiscard]] auto tagged_recvv(endpoint& ep,
+[[nodiscard]] auto tagged_recvv(receive_target auto& ep,
                                 Iov&& iov,
                                 Desc&& descriptors,
                                 fabric_addr src,
@@ -1106,7 +1111,8 @@ sendv(endpoint& ep, Iov&& iov, Desc&& descriptors, fabric_addr dest, Ctx ctx = {
  * @return Success or error result.
  */
 template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
-[[nodiscard]] auto recvv(endpoint& ep, Iov&& iov, Desc&& descriptors, fabric_addr src, Ctx ctx = {})
+[[nodiscard]] auto
+recvv(receive_target auto& ep, Iov&& iov, Desc&& descriptors, fabric_addr src, Ctx ctx = {})
     -> result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (fid_ep == nullptr) {

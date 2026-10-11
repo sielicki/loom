@@ -19,8 +19,6 @@ namespace loom {
 
 class domain;            ///< Forward declaration
 class fabric_info;       ///< Forward declaration
-class completion_queue;  ///< Forward declaration
-class counter;           ///< Forward declaration
 
 /**
  * @namespace detail
@@ -97,6 +95,12 @@ private:
  *
  * A shared receive context (SRX) allows multiple endpoints to share
  * receive resources, reducing memory usage when many endpoints are needed.
+ * Submit receives through the core messaging helpers. Completions belong to
+ * the endpoint that receives the message, using that endpoint's CQ/counters.
+ * All bound connectionless endpoints must share one address vector.
+ * Close bound endpoints before closing this context; keep receive buffers,
+ * registrations, and provider context storage alive until their operations
+ * retire or the context closes successfully. The domain must outlive it.
  */
 class shared_rx_context : public fabric_object_base<shared_rx_context> {
 public:
@@ -136,8 +140,14 @@ public:
     create(const domain& dom, const fabric_info& info, memory_resource* resource = nullptr)
         -> result<shared_rx_context>;
 
-    [[nodiscard]] auto bind_cq(completion_queue& cq, cq_bind_flags flags) -> void_result;
-    [[nodiscard]] auto bind_counter(counter& cntr, std::uint64_t flags = 0) -> void_result;
+    /// Request cancellation; success alone does not retire the receive storage.
+    [[nodiscard]] auto cancel(context_ptr<void> context) -> void_result;
+    /// Close after bound endpoints; failure retains the native handle for retry.
+    [[nodiscard]] auto close() -> void_result;
+
+    /// Native receive defaults captured at creation; transmit defaults are zero.
+    [[nodiscard]] auto impl_operation_flags(completion_direction direction) const noexcept
+        -> std::uint64_t;
 
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;
     [[nodiscard]] auto impl_valid() const noexcept -> bool;

@@ -88,6 +88,7 @@ struct endpoint_attributes {
     msg_order msg_ordering{ordering::none};               ///< Transmit message ordering guarantees
     comp_order comp_ordering{completion_ordering::none};  ///< Legacy transmit completion ordering
     comp_order rx_comp_ordering{completion_ordering::none};  ///< Legacy receive completion ordering
+    bool shared_receive_context{};                           ///< Requires an SRX binding
 };
 
 /**
@@ -229,6 +230,7 @@ struct fabric_hints {
     std::optional<progress_mode> control_progress;            ///< Required control progress mode
     std::optional<progress_mode> data_progress;               ///< Required data progress mode
     std::optional<mr_mode> memory_region_mode;                ///< Required memory region mode
+    bool shared_receive_context{};                            ///< Request FI_SHARED_CONTEXT for RX
 };
 
 /**
