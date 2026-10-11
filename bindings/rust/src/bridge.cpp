@@ -1,35 +1,148 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <rdma/fi_cm.h>
 
+#include <array>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include "loom-fabric/src/ffi.rs.h"
 #include "loom/core/rma.hpp"
+#include "loom/detail/conversions.hpp"
 
 namespace loom::cxx_bridge {
+
+namespace {
+
+template <typename Bridge, typename Native, std::size_t N>
+auto native_value(Bridge value, const std::array<std::pair<Bridge, Native>, N>& entries) -> Native {
+    for (const auto& [bridge, native] : entries)
+        if (bridge == value)
+            return native;
+    throw std::invalid_argument("unsupported discovery enum");
+}
+
+template <typename Bridge, typename Native, std::size_t N>
+auto bridge_value(Native value, const std::array<std::pair<Bridge, Native>, N>& entries) -> Bridge {
+    for (const auto& [bridge, native] : entries)
+        if (native == value)
+            return bridge;
+    throw std::invalid_argument("unsupported native discovery enum");
+}
+
+constexpr std::array threading_values{
+    std::pair{ThreadingMode::Unspecified, FI_THREAD_UNSPEC},
+    std::pair{ThreadingMode::Safe, FI_THREAD_SAFE},
+    std::pair{ThreadingMode::Fid, FI_THREAD_FID},
+    std::pair{ThreadingMode::Domain, FI_THREAD_DOMAIN},
+    std::pair{ThreadingMode::Completion, FI_THREAD_COMPLETION},
+    std::pair{ThreadingMode::Endpoint, FI_THREAD_ENDPOINT},
+};
+
+constexpr std::array progress_values{
+    std::pair{ProgressMode::Unspecified, FI_PROGRESS_UNSPEC},
+    std::pair{ProgressMode::Automatic, FI_PROGRESS_AUTO},
+    std::pair{ProgressMode::Manual, FI_PROGRESS_MANUAL},
+    std::pair{ProgressMode::ControlUnified, FI_PROGRESS_CONTROL_UNIFIED},
+};
+
+constexpr std::array address_values{
+    std::pair{AddressFormat::Unspecified, loom::address_format::unspecified},
+    std::pair{AddressFormat::Inet, loom::address_format::inet},
+    std::pair{AddressFormat::Inet6, loom::address_format::inet6},
+    std::pair{AddressFormat::Ib, loom::address_format::ib},
+    std::pair{AddressFormat::Psmx, loom::address_format::psmx},
+    std::pair{AddressFormat::Psmx2, loom::address_format::psmx2},
+    std::pair{AddressFormat::Gni, loom::address_format::gni},
+    std::pair{AddressFormat::Bgq, loom::address_format::bgq},
+    std::pair{AddressFormat::String, loom::address_format::str},
+    std::pair{AddressFormat::Sockaddr, loom::address_format::sockaddr},
+    std::pair{AddressFormat::SockaddrIp, loom::address_format::sockaddr_ip},
+    std::pair{AddressFormat::Mlx, loom::address_format::mlx},
+    std::pair{AddressFormat::IbUd, loom::address_format::ib_ud},
+    std::pair{AddressFormat::Efa, loom::address_format::efa},
+    std::pair{AddressFormat::Psmx3, loom::address_format::psmx3},
+    std::pair{AddressFormat::Opx, loom::address_format::opx},
+    std::pair{AddressFormat::Cxi, loom::address_format::cxi},
+    std::pair{AddressFormat::Ucx, loom::address_format::ucx},
+};
+
+static_assert(std::to_underlying(ModeBit::Context) == loom::mode_bits::context.get());
+static_assert(std::to_underlying(ModeBit::MsgPrefix) == loom::mode_bits::msg_prefix.get());
+static_assert(std::to_underlying(ModeBit::RxCqData) == loom::mode_bits::rx_cq_data.get());
+static_assert(std::to_underlying(ModeBit::LocalMr) == loom::mode_bits::local_mr.get());
+static_assert(std::to_underlying(ModeBit::Context2) == loom::mode_bits::context2.get());
+static_assert(std::to_underlying(MrModeBit::Scalable) == loom::mr_mode_flags::scalable.get());
+static_assert(std::to_underlying(MrModeBit::Local) == loom::mr_mode_flags::local.get());
+static_assert(std::to_underlying(MrModeBit::VirtAddr) == loom::mr_mode_flags::virt_addr.get());
+static_assert(std::to_underlying(MrModeBit::Allocated) == loom::mr_mode_flags::allocated.get());
+static_assert(std::to_underlying(MrModeBit::ProviderKey) == loom::mr_mode_flags::prov_key.get());
+static_assert(std::to_underlying(MrModeBit::Raw) == loom::mr_mode_flags::raw.get());
+static_assert(std::to_underlying(MrModeBit::Hmem) == loom::mr_mode_flags::hmem.get());
+static_assert(std::to_underlying(MrModeBit::Endpoint) == loom::mr_mode_flags::endpoint.get());
+static_assert(std::to_underlying(MrModeBit::Collective) == loom::mr_mode_flags::collective.get());
+static_assert(std::to_underlying(MrModeBit::Basic) == loom::mr_mode_flags::basic.get());
+static_assert(std::to_underlying(MrModeBit::MmuNotify) == loom::mr_mode_flags::mmu_notify.get());
+static_assert(std::to_underlying(MrModeBit::RmaEvent) == loom::mr_mode_flags::rma_event.get());
+static_assert(std::to_underlying(MrModeBit::XpuDesc) == loom::mr_mode_flags::xpu_desc.get());
+constexpr std::array endpoint_values{
+    std::pair{EndpointKind::Unspec, FI_EP_UNSPEC},
+    std::pair{EndpointKind::Msg, FI_EP_MSG},
+    std::pair{EndpointKind::Rdm, FI_EP_RDM},
+    std::pair{EndpointKind::Dgram, FI_EP_DGRAM},
+};
+
+}  // namespace
 
 auto query_fabric(const FabricHints& hints) -> std::unique_ptr<FabricInfoHandle> {
     loom::fabric_hints loom_hints{};
 
     const auto provider_name = std::string(hints.provider_name);
+    const auto fabric_name = std::string(hints.fabric_name);
+    const auto domain_name = std::string(hints.domain_name);
     if (!provider_name.empty()) {
         loom_hints.provider_name = provider_name;
     }
+    if (!fabric_name.empty())
+        loom_hints.fabric_name = fabric_name;
+    if (!domain_name.empty())
+        loom_hints.domain_name = domain_name;
 
     loom_hints.capabilities = loom::caps{hints.capabilities};
+    loom_hints.mode_bits = loom::mode{hints.supported_modes};
+    loom_hints.addr_format = native_value(hints.address_format, address_values);
+    const auto threading = native_value(hints.threading, threading_values);
+    loom_hints.threading = loom::detail::from_fi_threading(threading);
+    if (loom::detail::to_fi_threading(*loom_hints.threading) != threading)
+        throw std::invalid_argument("unsupported threading hint");
+    loom_hints.control_progress =
+        loom::detail::from_fi_progress(native_value(hints.control_progress, progress_values));
+    loom_hints.data_progress =
+        loom::detail::from_fi_progress(native_value(hints.data_progress, progress_values));
+    if (hints.has_mr_mode)
+        loom_hints.memory_region_mode = loom::mr_mode{hints.mr_mode};
+
+    // Unknown public bits must not silently weaken a requested contract.
+    if (loom::detail::from_fi_caps(loom::detail::to_fi_caps(loom_hints.capabilities)) !=
+            loom_hints.capabilities ||
+        loom::detail::from_fi_mode(loom::detail::to_fi_mode(loom_hints.mode_bits)) !=
+            loom_hints.mode_bits ||
+        (loom_hints.memory_region_mode &&
+         loom::detail::from_fi_mr_mode(loom::detail::to_fi_mr_mode(
+             *loom_hints.memory_region_mode)) != *loom_hints.memory_region_mode))
+        throw std::invalid_argument("unsupported discovery flag");
 
     switch (hints.ep_type) {
-        case 0:
+        case EndpointKind::Unspec:
             loom_hints.ep_type = std::nullopt;
             break;
-        case 1:
+        case EndpointKind::Msg:
             loom_hints.ep_type = loom::endpoint_types::msg;
             break;
-        case 2:
+        case EndpointKind::Rdm:
             loom_hints.ep_type = loom::endpoint_types::rdm;
             break;
-        case 3:
+        case EndpointKind::Dgram:
             loom_hints.ep_type = loom::endpoint_types::dgram;
             break;
         default:
@@ -42,6 +155,47 @@ auto query_fabric(const FabricHints& hints) -> std::unique_ptr<FabricInfoHandle>
     }
 
     return std::make_unique<FabricInfoHandle>(std::move(*result));
+}
+
+auto fabric_info_next(const FabricInfoHandle& info) -> std::unique_ptr<FabricInfoHandle> {
+    return info.next();
+}
+
+auto fabric_info_attributes(const FabricInfoHandle& info) -> FabricAttributesData {
+    const auto* native = static_cast<const ::fi_info*>(info.get().internal_ptr());
+    if (!native || !native->fabric_attr || !native->domain_attr || !native->ep_attr)
+        throw std::invalid_argument("incomplete discovery attributes");
+    const auto required = native->mode | (native->tx_attr ? native->tx_attr->mode : 0) |
+                          (native->rx_attr ? native->rx_attr->mode : 0);
+    const auto modes = loom::detail::from_fi_mode(required);
+    const auto mr_mode = loom::detail::from_fi_mr_mode(native->domain_attr->mr_mode);
+    const auto format = info.get().get_address_format();
+    // Losing an unknown obligation would let the consumer accept an invalid
+    // configuration. Reject this entry while leaving other entries usable.
+    if (loom::detail::to_fi_mode(modes) != required ||
+        loom::detail::to_fi_mr_mode(mr_mode) != native->domain_attr->mr_mode ||
+        loom::detail::to_fi_addr_format(format) != native->addr_format)
+        throw std::invalid_argument("unsupported native discovery requirements");
+    const auto own_name = [](const char* value) {
+        return rust::String{value ? value : ""};
+    };
+    return {
+        .provider_name = own_name(native->fabric_attr->prov_name),
+        .fabric_name = own_name(native->fabric_attr->name),
+        .domain_name = own_name(native->domain_attr->name),
+        .provider_version = native->fabric_attr->prov_version,
+        .endpoint_type = bridge_value(native->ep_attr->type, endpoint_values),
+        .protocol = native->ep_attr->protocol,
+        .protocol_version = native->ep_attr->protocol_version,
+        .address_format = bridge_value(format, address_values),
+        .threading = bridge_value(native->domain_attr->threading, threading_values),
+        .control_progress = bridge_value(native->domain_attr->control_progress, progress_values),
+        .data_progress = bridge_value(native->domain_attr->data_progress, progress_values),
+        .capabilities = info.get().get_caps().get(),
+        .required_modes = modes.get(),
+        .mr_mode = mr_mode.get(),
+        .max_message_size = native->ep_attr->max_msg_size,
+    };
 }
 
 auto create_fabric(const FabricInfoHandle& info) -> std::unique_ptr<FabricHandle> {

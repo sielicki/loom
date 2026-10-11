@@ -81,6 +81,7 @@ struct CqAttributes;
 
 /// Fabric query hints
 struct FabricHints;
+struct FabricAttributesData;
 
 /// Memory region info returned after registration
 struct MrInfo;
@@ -121,15 +122,23 @@ private:
 /// Wrapper around fabric_info that owns the data
 class FabricInfoHandle {
 public:
-    explicit FabricInfoHandle(loom::fabric_info info) : info_(std::move(info)) {}
+    explicit FabricInfoHandle(loom::fabric_info info)
+        : owner_(std::make_shared<loom::fabric_info>(std::move(info))), entry_(owner_.get()) {}
 
-    template <typename Self>
-    [[nodiscard]] auto get(this Self&& self) noexcept -> decltype(auto) {
-        return (std::forward<Self>(self).info_);
+    [[nodiscard]] auto get() const noexcept -> const loom::fabric_info& { return *entry_; }
+
+    [[nodiscard]] auto next() const -> std::unique_ptr<FabricInfoHandle> {
+        auto cursor = entry_->begin();
+        if (cursor == entry_->end() || ++cursor == entry_->end())
+            return {};
+        auto next = std::make_unique<FabricInfoHandle>(*this);
+        next->entry_ = std::addressof(*cursor);
+        return next;
     }
 
 private:
-    loom::fabric_info info_;
+    std::shared_ptr<const loom::fabric_info> owner_;
+    const loom::fabric_info* entry_;
 };
 
 /// Wrapper around fabric that owns the resource
@@ -222,6 +231,8 @@ private:
 
 /// Query for fabric providers matching the hints
 auto query_fabric(const FabricHints& hints) -> std::unique_ptr<FabricInfoHandle>;
+auto fabric_info_next(const FabricInfoHandle& info) -> std::unique_ptr<FabricInfoHandle>;
+auto fabric_info_attributes(const FabricInfoHandle& info) -> FabricAttributesData;
 
 /// Create a fabric instance from fabric_info
 auto create_fabric(const FabricInfoHandle& info) -> std::unique_ptr<FabricHandle>;

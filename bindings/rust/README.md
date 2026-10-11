@@ -102,6 +102,27 @@ async fn main() -> loom_fabric::Result<()> {
 }
 ```
 
+### Provider discovery
+
+`query_fabrics(&FabricHints)` enumerates matching configurations, including
+provider, fabric, and domain filters. Each `FabricInfo` retains its native
+discovery data independently; selecting a later entry and dropping the
+rest is safe. `FabricInfo::attributes()` returns an owned snapshot with
+typed endpoint, address, threading, progress, mode, and registration
+requirements, along with numeric protocol identity and provider limits.
+
+Names are selection filters and diagnostic identities. Validate the returned
+attributes before creating resources; names do not establish capabilities.
+Unknown native mode requirements cause `attributes()` to fail explicitly,
+so the caller can examine another entry. Device registration can still fail
+after discovery reports HMEM support. Endpoint threading can be reported,
+but requesting that threading hint is currently unsupported by the core.
+
+The existing `query_fabric` and `query_fabric_with_hints` functions continue
+to return the first result. Use enumeration when device or domain selection
+matters. Discovery does not yet expose NIC topology, tag layout, CQ data
+width, or the complete TX/RX attributes.
+
 ### Async progress
 
 Async CQs use native wait descriptors when available. If a provider cannot
@@ -193,6 +214,7 @@ cargo test --all-features receive_backpressure_survives_the_cpp_bridge -- --igno
 cargo test --all-features dropped_receives_retain_contexts_until_close -- --ignored
 cargo test --all-features completion_decoding_retires_only_its_native_context -- --ignored
 cargo test --all-features --test rma -- --include-ignored
+cargo test --all-features --test discovery -- --include-ignored
 ```
 
 ## License

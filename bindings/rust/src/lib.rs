@@ -41,12 +41,17 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+mod discovery;
 mod error;
 mod ffi;
 
 #[cfg(feature = "tokio")]
 mod async_cq;
 
+pub use discovery::{
+    query_fabrics, AddressFormat, FabricAttributes, FabricHints, Modes, MrMode, ProgressMode,
+    ThreadingMode,
+};
 pub use error::{Error, Result};
 pub use ffi::ffi::{RemoteMemory, RmaCompletion, RmaOptions, RmaTarget};
 
@@ -111,6 +116,12 @@ bitflags::bitflags! {
         const REMOTE_READ = 0x200;
         /// Remote write capability.
         const REMOTE_WRITE = 0x400;
+        /// Heterogeneous memory capability; registration may still fail for a device.
+        const HMEM = 0x10000;
+        /// Remote memory access events.
+        const RMA_EVENT = 0x10000000;
+        /// Completion source addresses.
+        const SOURCE = 0x20000000;
     }
 }
 
@@ -173,6 +184,11 @@ impl FabricInfo {
     fn new(inner: UniquePtr<ffi::ffi::FabricInfoHandle>) -> Self {
         Self { inner }
     }
+
+    /// Owned discovery facts for this entry; unknown native obligations fail explicitly.
+    pub fn attributes(&self) -> Result<FabricAttributes> {
+        ffi::ffi::fabric_info_attributes(&self.inner)?.try_into()
+    }
 }
 
 /// Query for fabric providers matching the specified capabilities.
@@ -197,7 +213,8 @@ pub fn query_fabric(capabilities: Capabilities) -> Result<FabricInfo> {
     query_fabric_with_hints("", capabilities, EndpointType::Unspec)
 }
 
-/// Query for fabric providers with full hints.
+/// Query for the first provider matching these basic filters.
+/// Use [`query_fabrics`] for domain selection and negotiated attributes.
 ///
 /// # Arguments
 ///
@@ -209,12 +226,13 @@ pub fn query_fabric_with_hints(
     capabilities: Capabilities,
     ep_type: EndpointType,
 ) -> Result<FabricInfo> {
-    let hints = ffi::FabricHints {
-        provider_name: provider.to_string(),
-        capabilities: capabilities.bits(),
-        ep_type: ep_type as u32,
-    };
-
+    let hints = FabricHints {
+        provider_name: Some(provider.to_owned()),
+        capabilities,
+        endpoint_type: ep_type,
+        ..FabricHints::default()
+    }
+    .to_ffi()?;
     let inner = ffi::ffi::query_fabric(&hints)?;
     Ok(FabricInfo::new(inner))
 }
