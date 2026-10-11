@@ -262,41 +262,30 @@ TEST_CASE("make_endpoint helper function", "[asio][endpoint][.provider]") {
     REQUIRE(ep_result->is_open());
 }
 
-TEST_CASE("async_send has correct initiation", "[asio][endpoint][.provider]") {
-    loom::fabric_hints hints{};
-    hints.ep_type = loom::endpoint_types::rdm;
-
-    auto info_result = loom::query_fabric(hints);
-    if (!info_result) {
-        SKIP("No fabric provider available");
-    }
-
-    auto fabric_result = loom::fabric::create(*info_result);
-    REQUIRE(fabric_result);
-
-    auto domain_result = loom::domain::create(*fabric_result, *info_result);
-    REQUIRE(domain_result);
-
-    auto cq_result =
-        loom::completion_queue::create(*domain_result, {.size = loom::queue_size{64UL}});
-    REQUIRE(cq_result);
-
-    auto av_result = loom::address_vector::create(*domain_result);
-    REQUIRE(av_result);
-
-    auto ep_result = loom::endpoint::create(*domain_result, *info_result);
-    REQUIRE(ep_result);
-
-    ep_result->bind_cq(*cq_result, loom::cq_bind::transmit | loom::cq_bind::recv).value();
-    ep_result->bind_av(*av_result).value();
-    ep_result->enable().value();
-
+TEST_CASE("Asio rejects an unavailable native send operation", "[asio][endpoint]") {
+    fi_ops ops{.size = sizeof(fi_ops),
+               .close = [](fid*) { return 0; },
+               .bind = [](fid*, fid*, std::uint64_t) { return 0; }};
+    fid_cq cq_handle{.fid = {.ops = &ops}};
+    loom::completion_queue cq{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
+        loom::get_default_resource(), &cq_handle)};
+    fid_ep native{.fid = {.ops = &ops}};
+    loom::endpoint fabric{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+        loom::get_default_resource(),
+        &native,
+        loom::endpoint_types::rdm,
+        loom::address_format::unspecified)};
+    REQUIRE(fabric.bind_cq(cq, loom::cq_bind::transmit));
     ::asio::io_context ioc;
-    loom::asio::endpoint ep{ioc.get_executor(), std::move(*ep_result)};
-
+    loom::asio::endpoint ep{ioc.get_executor(), std::move(fabric)};
     std::array<std::byte, 64> buffer{};
-    bool handler_invoked = false;
-
-    ep.async_send(::asio::buffer(buffer),
-                  [&](std::error_code, std::size_t) { handler_invoked = true; });
+    int callbacks{};
+    ep.async_send(::asio::buffer(buffer), [&](std::error_code error, std::size_t bytes) {
+        REQUIRE(error == loom::errc::not_supported);
+        REQUIRE(bytes == 0);
+        ++callbacks;
+    });
+    REQUIRE(callbacks == 0);
+    ioc.run();
+    REQUIRE(callbacks == 1);
 }

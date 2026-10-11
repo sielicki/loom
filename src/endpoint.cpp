@@ -124,6 +124,9 @@ auto endpoint::send(std::span<const std::byte> data, context_ptr<void> ctx) -> v
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(impl_->ep->msg, fi_ops_msg, send)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     ssize_t ret =
         ::fi_send(impl_->ep, data.data(), data.size(), nullptr, FI_ADDR_UNSPEC, ctx.get());
@@ -138,6 +141,9 @@ auto endpoint::send(std::span<const std::byte> data, context_ptr<void> ctx) -> v
 auto endpoint::recv(std::span<std::byte> buffer, context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(impl_->ep->msg, fi_ops_msg, recv)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ssize_t ret =
@@ -154,6 +160,9 @@ auto endpoint::sendv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(impl_->ep->msg, fi_ops_msg, sendv)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     ssize_t ret = ::fi_sendv(impl_->ep, iov.data(), nullptr, iov.size(), FI_ADDR_UNSPEC, ctx.get());
 
@@ -167,6 +176,9 @@ auto endpoint::sendv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_
 auto endpoint::recvv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(impl_->ep->msg, fi_ops_msg, recvv)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ssize_t ret = ::fi_recvv(impl_->ep, iov.data(), nullptr, iov.size(), FI_ADDR_UNSPEC, ctx.get());
@@ -183,6 +195,9 @@ auto endpoint::tagged_send(std::span<const std::byte> data,
                            context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(impl_->ep->tagged, fi_ops_tagged, send)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ssize_t ret =
@@ -202,6 +217,9 @@ auto endpoint::tagged_recv(std::span<std::byte> buffer,
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(impl_->ep->tagged, fi_ops_tagged, recv)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     ssize_t ret = ::fi_trecv(
         impl_->ep, buffer.data(), buffer.size(), nullptr, FI_ADDR_UNSPEC, tag, ignore, ctx.get());
@@ -216,6 +234,9 @@ auto endpoint::tagged_recv(std::span<std::byte> buffer,
 auto endpoint::inject(std::span<const std::byte> data, fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(impl_->ep->msg, fi_ops_msg, inject)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ssize_t ret = ::fi_inject(impl_->ep, data.data(), data.size(), dest_addr.get());
@@ -232,6 +253,9 @@ auto endpoint::inject_data(std::span<const std::byte> data,
                            fabric_addr dest_addr) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(impl_->ep->msg, fi_ops_msg, injectdata)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ssize_t ret =
@@ -250,6 +274,9 @@ auto endpoint::tagged_inject(std::span<const std::byte> data,
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(impl_->ep->tagged, fi_ops_tagged, inject)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     ssize_t ret = ::fi_tinject(impl_->ep, data.data(), data.size(), dest_addr.get(), tag);
 
@@ -267,6 +294,9 @@ auto endpoint::tagged_inject_data(std::span<const std::byte> data,
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(impl_->ep->tagged, fi_ops_tagged, injectdata)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     ssize_t ret =
         ::fi_tinjectdata(impl_->ep, data.data(), data.size(), immediate_data, dest_addr.get(), tag);
@@ -281,6 +311,9 @@ auto endpoint::tagged_inject_data(std::span<const std::byte> data,
 auto endpoint::cancel(context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(impl_->ep->ops, fi_ops_ep, cancel)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ssize_t ret = ::fi_cancel(&impl_->ep->fid, ctx.get());
@@ -366,6 +399,9 @@ auto endpoint::read(std::span<std::byte> local_buffer,
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
+    if (!FI_CHECK_OP(impl_->ep->rma, fi_ops_rma, read)) {
+        return make_error_result<void>(errc::not_supported);
+    }
 
     ssize_t ret = ::fi_read(impl_->ep,
                             local_buffer.data(),
@@ -389,6 +425,9 @@ auto endpoint::write(std::span<const std::byte> local_buffer,
                      context_ptr<void> ctx) -> void_result {
     if (!impl_ || !impl_->ep) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(impl_->ep->rma, fi_ops_rma, write)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     ssize_t ret = ::fi_write(impl_->ep,
