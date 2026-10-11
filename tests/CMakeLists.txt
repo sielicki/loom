@@ -66,6 +66,7 @@ loom_add_test(test_messaging_vectors)
 loom_add_test(test_atomic)
 loom_add_test(test_collective)
 loom_add_test(test_collective_join)
+loom_add_test(test_collective_transfers)
 loom_add_test(test_data_concepts)
 loom_add_test(test_callback_concepts)
 loom_add_test(test_submission_context)
@@ -103,6 +104,7 @@ add_executable(test_implementation
     test_atomic.cpp
     test_address_transport.cpp
     test_collective_join.cpp
+    test_collective_transfers.cpp
     test_completion_queue.cpp
     test_queue_wait.cpp
     test_counter.cpp

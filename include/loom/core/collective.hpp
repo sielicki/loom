@@ -16,12 +16,18 @@
 #include "loom/core/memory.hpp"
 #include "loom/core/result.hpp"
 #include "loom/core/types.hpp"
+#include "loom/detail/collective_traits.hpp"
 
 /**
  * @namespace loom::collective
  * @brief Collective communication operations.
  */
 namespace loom::collective {
+
+/// A mutable, unqualified element type with an explicit libfabric datatype mapping.
+/// This describes representation, not a provider's support for a particular operation.
+template <typename T>
+concept element = requires { typename detail::element_traits<T>::value_type; };
 
 /**
  * @enum operation
@@ -298,7 +304,7 @@ auto broadcast(endpoint& ep,
 
 /**
  * @brief Broadcasts typed data from root to all group members.
- * @tparam T The element type.
+ * @tparam T The element type (must satisfy collective::element).
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
@@ -308,15 +314,20 @@ auto broadcast(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <typename T, context_like Ctx = void*>
+template <element T, context_like Ctx = void*>
 auto broadcast(endpoint& ep,
                group& grp,
                std::span<T> data,
                memory_region* mr,
                fabric_addr root_addr,
                Ctx context = {}) -> result<void> {
-    return broadcast(
-        ep, grp, std::as_writable_bytes(data), mr, root_addr, atomic::get_datatype<T>(), context);
+    return broadcast(ep,
+                     grp,
+                     std::as_writable_bytes(data),
+                     mr,
+                     root_addr,
+                     detail::element_traits<T>::datatype,
+                     context);
 }
 
 /**
@@ -368,7 +379,7 @@ auto all_reduce(endpoint& ep,
 
 /**
  * @brief Performs a typed all-reduce operation.
- * @tparam T The element type.
+ * @tparam T The element type (must satisfy collective::element).
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
@@ -380,7 +391,7 @@ auto all_reduce(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <typename T, context_like Ctx = void*>
+template <element T, context_like Ctx = void*>
 auto all_reduce(endpoint& ep,
                 group& grp,
                 std::span<const T> send_data,
@@ -396,13 +407,13 @@ auto all_reduce(endpoint& ep,
                       send_mr,
                       recv_mr,
                       op,
-                      atomic::get_datatype<T>(),
+                      detail::element_traits<T>::datatype,
                       context);
 }
 
 /**
  * @brief Performs an in-place all-reduce operation.
- * @tparam T The element type.
+ * @tparam T The element type (must satisfy collective::element).
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
@@ -412,7 +423,7 @@ auto all_reduce(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <typename T, context_like Ctx = void*>
+template <element T, context_like Ctx = void*>
 auto all_reduce_inplace(endpoint& ep,
                         group& grp,
                         std::span<T> data,
@@ -426,7 +437,7 @@ auto all_reduce_inplace(endpoint& ep,
                       mr,
                       mr,
                       op,
-                      atomic::get_datatype<T>(),
+                      detail::element_traits<T>::datatype,
                       context);
 }
 
@@ -476,7 +487,7 @@ auto all_gather(endpoint& ep,
 
 /**
  * @brief Gathers typed data from all group members to all members.
- * @tparam T The element type.
+ * @tparam T The element type (must satisfy collective::element).
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
@@ -487,7 +498,7 @@ auto all_gather(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <typename T, context_like Ctx = void*>
+template <element T, context_like Ctx = void*>
 auto all_gather(endpoint& ep,
                 group& grp,
                 std::span<const T> send_data,
@@ -501,7 +512,7 @@ auto all_gather(endpoint& ep,
                       std::as_writable_bytes(recv_data),
                       send_mr,
                       recv_mr,
-                      atomic::get_datatype<T>(),
+                      detail::element_traits<T>::datatype,
                       context);
 }
 
@@ -551,7 +562,7 @@ auto all_to_all(endpoint& ep,
 
 /**
  * @brief Exchanges typed data between all group members.
- * @tparam T The element type.
+ * @tparam T The element type (must satisfy collective::element).
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
@@ -562,7 +573,7 @@ auto all_to_all(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <typename T, context_like Ctx = void*>
+template <element T, context_like Ctx = void*>
 auto all_to_all(endpoint& ep,
                 group& grp,
                 std::span<const T> send_data,
@@ -576,7 +587,7 @@ auto all_to_all(endpoint& ep,
                       std::as_writable_bytes(recv_data),
                       send_mr,
                       recv_mr,
-                      atomic::get_datatype<T>(),
+                      detail::element_traits<T>::datatype,
                       context);
 }
 
@@ -632,7 +643,7 @@ auto reduce(endpoint& ep,
 
 /**
  * @brief Reduces typed data from all group members to a root node.
- * @tparam T The element type.
+ * @tparam T The element type (must satisfy collective::element).
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
@@ -645,7 +656,7 @@ auto reduce(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <typename T, context_like Ctx = void*>
+template <element T, context_like Ctx = void*>
 auto reduce(endpoint& ep,
             group& grp,
             std::span<const T> send_data,
@@ -663,7 +674,7 @@ auto reduce(endpoint& ep,
                   recv_mr,
                   root_addr,
                   op,
-                  atomic::get_datatype<T>(),
+                  detail::element_traits<T>::datatype,
                   context);
 }
 
@@ -810,7 +821,7 @@ auto reduce_scatter(endpoint& ep,
 
 /**
  * @brief Reduces typed data and scatters the result to all members.
- * @tparam T The element type.
+ * @tparam T The element type (must satisfy collective::element).
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
@@ -822,7 +833,7 @@ auto reduce_scatter(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <typename T, context_like Ctx = void*>
+template <element T, context_like Ctx = void*>
 auto reduce_scatter(endpoint& ep,
                     group& grp,
                     std::span<const T> send_data,
@@ -838,7 +849,7 @@ auto reduce_scatter(endpoint& ep,
                           send_mr,
                           recv_mr,
                           op,
-                          atomic::get_datatype<T>(),
+                          detail::element_traits<T>::datatype,
                           context);
 }
 
@@ -882,10 +893,9 @@ template <atomic::datatype Dt, atomic::operation Op>
  * @param op The collective operation type.
  * @return True if the operation is supported.
  */
-template <typename T, atomic::operation Op>
-    requires atomic::atomic_type<T>
+template <element T, atomic::operation Op>
 [[nodiscard]] auto is_supported(domain& dom, operation op) -> bool {
-    return detail::is_supported_impl(dom, op, atomic::get_datatype<T>(), Op);
+    return detail::is_supported_impl(dom, op, detail::element_traits<T>::datatype, Op);
 }
 
 }  // namespace loom::collective
