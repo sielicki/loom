@@ -258,6 +258,8 @@ struct std::formatter<loom::threading_mode> : std::formatter<std::string_view> {
                     return "domain";
                 case loom::threading_mode::completion:
                     return "completion";
+                case loom::threading_mode::endpoint:
+                    return "endpoint";
                 default:
                     return "unknown";
             }

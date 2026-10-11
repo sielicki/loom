@@ -414,6 +414,8 @@ namespace loom::detail {
             return FI_THREAD_DOMAIN;
         case threading_mode::completion:
             return FI_THREAD_COMPLETION;
+        case threading_mode::endpoint:
+            return FI_THREAD_ENDPOINT;
         default:
             return FI_THREAD_UNSPEC;
     }
@@ -429,12 +431,13 @@ namespace loom::detail {
         case FI_THREAD_SAFE:
             return threading_mode::safe;
         case FI_THREAD_FID:
-        case FI_THREAD_ENDPOINT:
             return threading_mode::fid;
         case FI_THREAD_DOMAIN:
             return threading_mode::domain;
         case FI_THREAD_COMPLETION:
             return threading_mode::completion;
+        case FI_THREAD_ENDPOINT:
+            return threading_mode::endpoint;
         default:
             return threading_mode::unspecified;
     }

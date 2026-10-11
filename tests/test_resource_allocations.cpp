@@ -9,6 +9,7 @@
 
 #include <array>
 #include <memory_resource>
+#include <utility>
 
 #include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
@@ -147,6 +148,19 @@ struct default_resource_scope {
     ~default_resource_scope() { std::pmr::set_default_resource(previous); }
 };
 }  // namespace
+
+TEST_CASE("opened domains retain endpoint serialization requirements", "[domain][threading]") {
+    const auto [native_mode, expected] =
+        GENERATE(std::pair{FI_THREAD_FID, loom::threading_mode::fid},
+                 std::pair{FI_THREAD_ENDPOINT, loom::threading_mode::endpoint});
+    const auto explicit_resource = GENERATE(false, true);
+    opening_provider provider;
+    static_cast<fi_info*>(provider.info.internal_ptr())->domain_attr->threading = native_mode;
+    const auto domain = loom::domain::create(
+        provider.fabric, provider.info, explicit_resource ? loom::get_default_resource() : nullptr);
+    REQUIRE(domain);
+    CHECK(domain->get_threading() == expected);
+}
 
 TEST_CASE("resource factories close native handles exactly once", "[allocation]") {
     const auto kind = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8);

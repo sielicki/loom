@@ -9,6 +9,7 @@
 #include <span>
 #include <utility>
 
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -20,6 +21,11 @@ struct progress_profile : message_profile {
     static constexpr loom::threading_mode threading = loom::threading_mode::safe;
     static constexpr loom::progress_mode control_progress = loom::progress_mode::manual;
     static constexpr loom::progress_mode data_progress = loom::progress_mode::auto_progress;
+};
+
+template <loom::threading_mode Threading>
+struct threading_profile : message_profile {
+    static constexpr loom::threading_mode threading = Threading;
 };
 
 struct context_profile : message_profile {
@@ -298,6 +304,23 @@ TEST_CASE("domain policy requirements use the opened domain", "[provider_contrac
     REQUIRE(native.opened == (supported ? 1 : 0));
     if (!result)
         REQUIRE(result.error() == loom::errc::not_supported);
+}
+
+TEMPLATE_TEST_CASE("endpoint contracts distinguish endpoint and FID serialization",
+                   "[provider_contract][threading]",
+                   threading_profile<loom::threading_mode::fid>,
+                   threading_profile<loom::threading_mode::endpoint>) {
+    const auto native_mode = GENERATE(FI_THREAD_FID, FI_THREAD_ENDPOINT);
+    checked_provider native;
+    native.domain_state->threading = loom::detail::from_fi_threading(native_mode);
+    const bool matches = TestType::threading == loom::threading_mode::endpoint
+                             ? native_mode == FI_THREAD_ENDPOINT
+                             : native_mode == FI_THREAD_FID;
+    auto result = loom::contract_endpoint<TestType>::create(native.domain, native.info);
+    CHECK(result.has_value() == matches);
+    CHECK(native.opened == (matches ? 1 : 0));
+    if (!result)
+        CHECK(result.error() == loom::errc::not_supported);
 }
 
 TEST_CASE("provider construction requires discovery evidence", "[provider_contract]") {

@@ -115,6 +115,29 @@ TEST_CASE("manual-all progress requests retain the native manual requirement",
     REQUIRE(loom::detail::to_fi_progress(loom::progress_mode::manual_all) == FI_PROGRESS_MANUAL);
 }
 
+TEST_CASE("discovery preserves distinct native threading requirements",
+          "[fabric][attributes][threading]") {
+    const auto [native_mode, expected] =
+        GENERATE(std::pair{FI_THREAD_UNSPEC, loom::threading_mode::unspecified},
+                 std::pair{FI_THREAD_SAFE, loom::threading_mode::safe},
+                 std::pair{FI_THREAD_FID, loom::threading_mode::fid},
+                 std::pair{FI_THREAD_DOMAIN, loom::threading_mode::domain},
+                 std::pair{FI_THREAD_COMPLETION, loom::threading_mode::completion},
+                 std::pair{FI_THREAD_ENDPOINT, loom::threading_mode::endpoint});
+    CAPTURE(native_mode);
+    fi_domain_attr domain{.threading = native_mode};
+    fi_fabric_attr fabric{};
+    fi_info native{.domain_attr = &domain, .fabric_attr = &fabric};
+    const auto info = wrap(native);
+    const auto domain_attributes = info.get_domain_attr();
+    const auto fabric_attributes = info.get_fabric_attr();
+    REQUIRE(domain_attributes);
+    REQUIRE(fabric_attributes);
+    CHECK(domain_attributes->threading == expected);
+    CHECK(fabric_attributes->threading == expected);
+    CHECK(loom::detail::to_fi_threading(expected) == native_mode);
+}
+
 TEST_CASE("native progress modes round trip without changing manual requirements",
           "[fabric][attributes][progress]") {
     const auto native = GENERATE(

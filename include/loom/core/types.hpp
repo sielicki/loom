@@ -644,6 +644,7 @@ enum class threading_mode : std::uint32_t {
     fid = 2,          ///< Per-object serialization required
     domain = 3,       ///< Per-domain serialization required
     completion = 4,   ///< Completion serialization required
+    endpoint = 5,     ///< Legacy FID rules plus serialization across an endpoint's data flows
 };
 
 /**

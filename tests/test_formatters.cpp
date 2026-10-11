@@ -66,6 +66,7 @@ TEST_CASE("format threading_mode enum", "[formatters]") {
     REQUIRE(std::format("{}", loom::threading_mode::unspecified) == "unspecified");
     REQUIRE(std::format("{}", loom::threading_mode::safe) == "safe");
     REQUIRE(std::format("{}", loom::threading_mode::domain) == "domain");
+    REQUIRE(std::format("{}", loom::threading_mode::endpoint) == "endpoint");
 }
 
 TEST_CASE("format progress_mode enum", "[formatters]") {
