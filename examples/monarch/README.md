@@ -9,6 +9,10 @@ One build patch makes Monarch's private rdma-core source copy writable
 when its input comes from the read-only Nix store.
 The build also copies CXX's shared build script into its vendored member
 crates, preserving the behavior of Monarch's pinned CXX fork.
+Another source patch fixes a race in generic type-name interning: concurrent
+cache misses now retain one name without leaking the losing allocation.
+The build runs typeuri's three unit tests, including a deterministic race
+regression and its existing nested-type checks.
 
 Build the RDMA crate's test harness and run its host-memory checks on Linux:
 

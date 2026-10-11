@@ -33,7 +33,7 @@ rustPlatform.buildRustPackage {
   src = applyPatches {
     name = "monarch-consumer-source";
     inherit src;
-    patches = [ ./writable-rdma-source.patch ];
+    patches = [ ./writable-rdma-source.patch ./type-name-interning.patch ];
   };
 
   cargoHash = "sha256-ohkkPRh5HJ6KonAFzFPE4aj/HdJGzi3Ik0AEQ+SbwHQ=";
@@ -74,6 +74,7 @@ rustPlatform.buildRustPackage {
   doCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
   checkPhase = ''
     runHook preCheck
+    cargo test --offline --locked -p typeuri --lib -j "$NIX_BUILD_CORES"
     ./monarch-rdma-tests --list --format terse > tests.list
     for test in write_from_local read_into_local write_then_read_back \
       multi_chunk_write multi_chunk_read multi_chunk_round_trip \

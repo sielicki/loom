@@ -1,0 +1,48 @@
+--- a/typeuri/src/lib.rs
++++ b/typeuri/src/lib.rs
+@@ -112,15 +112,14 @@
+             static CACHE: std::sync::LazyLock<$crate::dashmap::DashMap<std::any::TypeId, &'static str>> =
+               std::sync::LazyLock::new($crate::dashmap::DashMap::new);
+
+-            // Don't use entry, because typename() might re-enter intern_typename
+-            // for nested types like Option<Option<T>>
++            // Format before taking the entry lock: typename() can re-enter
++            // this cache for nested types like Option<Option<T>>.
+             let typeid = std::any::TypeId::of::<$key>();
+             if let Some(value) = CACHE.get(&typeid) {
+                 *value
+             } else {
+-                let typename = format!($format_string, $(<$args>::typename()),+).leak();
+-                CACHE.insert(typeid, typename);
+-                typename
++                let typename = format!($format_string, $(<$args>::typename()),+);
++                *CACHE.entry(typeid).or_insert_with(|| typename.leak())
+             }
+         }
+     };
+@@ -182,6 +181,25 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++
++    #[test]
++    fn test_concurrent_interning() {
++        struct Concurrent;
++        static RENDEZVOUS: std::sync::Barrier = std::sync::Barrier::new(2);
++        impl Named for Concurrent {
++            fn typename() -> &'static str {
++                RENDEZVOUS.wait();
++                "Concurrent"
++            }
++        }
++        // Both callers must miss the cache before either can insert a name.
++        // Nested formatting must remain outside the cache entry lock.
++        std::thread::scope(|scope| {
++            let first = scope.spawn(Option::<Concurrent>::typename);
++            let second = scope.spawn(Option::<Concurrent>::typename);
++            assert!(std::ptr::eq(first.join().unwrap(), second.join().unwrap()));
++        });
++    }
+
+     #[test]
+     fn test_names() {
