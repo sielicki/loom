@@ -231,16 +231,18 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result = atomic::fetch(*ep_,
-                                    atomic::operation::sum,
-                                    atomic::get_datatype<T>(),
-                                    &operand_,
-                                    result_address_,
-                                    1,
-                                    nullptr,
-                                    result_mr_,
-                                    remote,
-                                    this->as_fi_context());
+        auto result = atomic::fetch_to<operation_defaults::inherit>(*ep_,
+                                                                    atomic::operation::sum,
+                                                                    atomic::get_datatype<T>(),
+                                                                    &operand_,
+                                                                    result_address_,
+                                                                    1,
+                                                                    nullptr,
+                                                                    result_mr_,
+                                                                    fabric_addrs::unspecified,
+                                                                    remote,
+                                                                    op_flag::completion,
+                                                                    this->as_fi_context());
 
         if (!result) {
             this->complete_error(result.error());
@@ -364,16 +366,20 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result = atomic::compare_swap(*ep_,
-                                           atomic::get_datatype<T>(),
-                                           &compare_value_,
-                                           &swap_value_,
-                                           result_address_,
-                                           1,
-                                           nullptr,
-                                           result_mr_,
-                                           remote,
-                                           this->as_fi_context());
+        auto result =
+            atomic::compare_swap_to<operation_defaults::inherit>(*ep_,
+                                                                 atomic::get_datatype<T>(),
+                                                                 &compare_value_,
+                                                                 &swap_value_,
+                                                                 result_address_,
+                                                                 1,
+                                                                 nullptr,
+                                                                 nullptr,
+                                                                 result_mr_,
+                                                                 fabric_addrs::unspecified,
+                                                                 remote,
+                                                                 op_flag::completion,
+                                                                 this->as_fi_context());
 
         if (!result) {
             this->complete_error(result.error());

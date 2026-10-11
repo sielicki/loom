@@ -43,6 +43,13 @@ struct receiver {
 };
 
 struct provider {
+    struct pending_atomic {
+        const std::uint64_t* input;
+        const std::uint64_t* comparison;
+        std::uint64_t* output;
+        void* context;
+    };
+    std::vector<pending_atomic> atomic_pending;
     std::vector<void*> pending;
     bool fail{};
     bool selective_completion{};
@@ -132,11 +139,11 @@ struct provider {
     fi_ops_atomic atomics{
         .size = sizeof(fi_ops_atomic),
         .readwrite = [](fid_ep* ep,
-                        const void*,
+                        const void* input,
                         std::size_t,
                         void*,
                         void* result,
-                        void* result_descriptor,
+                        void* descriptor,
                         fi_addr_t,
                         std::uint64_t,
                         std::uint64_t,
@@ -144,28 +151,54 @@ struct provider {
                         fi_op,
                         void* ctx) -> ssize_t {
             return static_cast<provider*>(ep->fid.context)
-                ->store_result(result, result_descriptor, ctx);
+                ->post_atomic(input, nullptr, result, descriptor, ctx);
+        },
+        .readwritemsg = [](fid_ep* ep,
+                           const fi_msg_atomic* message,
+                           fi_ioc* results,
+                           void** descriptors,
+                           std::size_t count,
+                           std::uint64_t flags) -> ssize_t {
+            REQUIRE(count == 1);
+            return static_cast<provider*>(ep->fid.context)
+                ->post_atomic_message(
+                    *message, nullptr, results[0], descriptors ? descriptors[0] : nullptr, flags);
         },
         .compwrite = [](fid_ep* ep,
-                        const void* value,
+                        const void* input,
                         std::size_t,
                         void*,
                         const void* compare,
                         void*,
                         void* result,
-                        void* result_descriptor,
+                        void* descriptor,
                         fi_addr_t,
                         std::uint64_t,
                         std::uint64_t,
                         fi_datatype,
                         fi_op,
                         void* ctx) -> ssize_t {
-            auto& self = *static_cast<provider*>(ep->fid.context);
-            const auto status = self.store_result(result, result_descriptor, ctx);
-            if (status == 0 && self.remote_value == *static_cast<const std::uint64_t*>(compare)) {
-                self.remote_value = *static_cast<const std::uint64_t*>(value);
-            }
-            return status;
+            return static_cast<provider*>(ep->fid.context)
+                ->post_atomic(input, compare, result, descriptor, ctx);
+        },
+        .compwritemsg = [](fid_ep* ep,
+                           const fi_msg_atomic* message,
+                           const fi_ioc* compare,
+                           void**,
+                           std::size_t compare_count,
+                           fi_ioc* results,
+                           void** descriptors,
+                           std::size_t count,
+                           std::uint64_t flags) -> ssize_t {
+            REQUIRE(compare_count == 1);
+            REQUIRE(compare[0].count == 1);
+            REQUIRE(count == 1);
+            return static_cast<provider*>(ep->fid.context)
+                ->post_atomic_message(*message,
+                                      compare[0].addr,
+                                      results[0],
+                                      descriptors ? descriptors[0] : nullptr,
+                                      flags);
         },
     };
     fi_ops_cq completions{
@@ -250,16 +283,54 @@ struct provider {
                         message.context,
                         flags);
     }
-    auto store_result(void* result, void* descriptor, void* ctx) -> ssize_t {
+    auto post_atomic(const void* input,
+                     const void* compare,
+                     void* result,
+                     void* descriptor,
+                     void* ctx,
+                     std::uint64_t flags = 0) -> ssize_t {
         if (expected_result &&
-            (result != expected_result || descriptor != expected_result_descriptor)) {
+            (result != expected_result || descriptor != expected_result_descriptor))
             return -FI_EINVAL;
-        }
-        *static_cast<std::uint64_t*>(result) = 42;
-        return post(ctx);
+        const auto status = post(ctx, flags);
+        if (!status)
+            atomic_pending.push_back({static_cast<const std::uint64_t*>(input),
+                                      static_cast<const std::uint64_t*>(compare),
+                                      static_cast<std::uint64_t*>(result),
+                                      ctx});
+        return status;
+    }
+    auto post_atomic_message(const fi_msg_atomic& message,
+                             const void* compare,
+                             fi_ioc result,
+                             void* descriptor,
+                             std::uint64_t flags) -> ssize_t {
+        submitted_flags = flags;
+        REQUIRE(message.iov_count == 1);
+        REQUIRE(message.msg_iov[0].count == 1);
+        REQUIRE(message.rma_iov_count == 1);
+        REQUIRE(message.rma_iov[0].count == 1);
+        REQUIRE(message.rma_iov[0].addr == 0x1000);
+        REQUIRE(message.rma_iov[0].key == 1);
+        REQUIRE(message.addr == FI_ADDR_UNSPEC);
+        REQUIRE(message.datatype == FI_UINT64);
+        REQUIRE(message.op == (compare ? FI_CSWAP : FI_SUM));
+        REQUIRE(result.count == 1);
+        return post_atomic(
+            message.msg_iov[0].addr, compare, result.addr, descriptor, message.context, flags);
     }
     auto take() -> void* {
         auto* ctx = pending.front();
+        const auto atomic = std::ranges::find(atomic_pending, ctx, &pending_atomic::context);
+        if (atomic != atomic_pending.end()) {
+            // The provider may first read operands after submission has returned.
+            *atomic->output = remote_value;
+            if (!atomic->comparison)
+                remote_value += *atomic->input;
+            else if (remote_value == *atomic->comparison)
+                remote_value = *atomic->input;
+            atomic_pending.erase(atomic);
+        }
         pending.erase(pending.begin());
         return ctx;
     }
@@ -524,6 +595,8 @@ TEST_CASE("execution progress delivers atomic results", "[execution][progress]")
 TEST_CASE("atomic senders store results in the supplied registration", "[execution][progress]") {
     const auto compare_swap = GENERATE(false, true);
     provider fabric;
+    fabric.selective_completion = GENERATE(false, true);
+    fabric.submission_status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
     completion_state state;
     std::uint64_t result{};
     int descriptor{};
@@ -535,12 +608,24 @@ TEST_CASE("atomic senders store results in the supplied registration", "[executi
     auto run = [&](auto sender) {
         auto operation = loom::execution::connect(std::move(sender), receiver{&state});
         loom::execution::start(operation);
+        CHECK(fabric.submitted_flags == (FI_COMPLETION | FI_FENCE));
+        REQUIRE(result == 0);
+        if (fabric.submission_status) {
+            REQUIRE(state.calls == 1);
+            REQUIRE(state.error == loom::make_error_code_from_fi_errno(-fabric.submission_status));
+            REQUIRE(fabric.pending.empty());
+            REQUIRE(fabric.atomic_pending.empty());
+            return;
+        }
         REQUIRE(state.calls == 0);
+        REQUIRE(fabric.atomic_pending.size() == 1);
         REQUIRE(loom::execution::poll_completions(fabric.cq).value().completed == 1);
         REQUIRE(state.calls == 1);
         REQUIRE_FALSE(state.error);
         REQUIRE(state.bytes == 42);
         REQUIRE(result == 42);
+        REQUIRE(fabric.remote_value == 43);
+        REQUIRE(fabric.atomic_pending.empty());
     };
     if (compare_swap) {
         run(loom::rma_async(fabric.ep).compare_swap<std::uint64_t>(

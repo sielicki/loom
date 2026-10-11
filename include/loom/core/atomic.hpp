@@ -12,6 +12,7 @@
 #include "loom/core/memory.hpp"
 #include "loom/core/result.hpp"
 #include "loom/core/types.hpp"
+#include "loom/detail/conversions.hpp"
 
 /**
  * @namespace loom::atomic
@@ -253,6 +254,46 @@ namespace detail {
  * @param context Optional user context.
  * @return Success or error result.
  */
+/// Explicit flags use the message interface; inheritance extends creation defaults.
+/// FI_INJECT releases constant inputs on return, while results remain borrowed.
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
+auto execute_to(endpoint& ep,
+                operation op,
+                datatype dt,
+                const void* buf,
+                std::size_t count,
+                memory_region* mr,
+                fabric_addr dest_addr,
+                remote_memory remote,
+                op_flags flags,
+                Ctx context = {}) -> loom::result<void> {
+    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (!fid_ep)
+        return make_error_result<void>(errc::invalid_argument);
+    if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, writemsg))
+        return make_error_result<void>(errc::not_supported);
+    void* input_desc = mr ? mr->descriptor().raw() : nullptr;
+    const ::fi_ioc input{const_cast<void*>(buf), count};
+    const ::fi_rma_ioc target{remote.addr, count, remote.key};
+    const ::fi_msg_atomic message{
+        .msg_iov = &input,
+        .desc = input_desc ? &input_desc : nullptr,
+        .iov_count = 1,
+        .addr = dest_addr.get(),
+        .rma_iov = &target,
+        .rma_iov_count = 1,
+        .datatype = detail::to_fi_datatype(dt),
+        .op = detail::to_fi_op(op),
+        .context = to_raw_context(context),
+    };
+    const auto native_flags = loom::detail::operation_flags<Defaults>(
+        ep, completion_direction::transmit, loom::detail::to_fi_op_flags(flags));
+    const auto status = ::fi_atomicmsg(fid_ep, &message, native_flags);
+    if (status)
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
+    return make_success();
+}
+
 template <context_like Ctx = void*>
 auto execute_to(endpoint& ep,
                 operation op,
@@ -345,6 +386,51 @@ auto inject_to(endpoint& ep,
  * @param context Optional user context.
  * @return Success or error result.
  */
+/// Explicit flags use the message interface; inheritance extends creation defaults.
+/// FI_INJECT releases constant inputs on return, while results remain borrowed.
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
+auto fetch_to(endpoint& ep,
+              operation op,
+              datatype dt,
+              const void* buf,
+              void* result,
+              std::size_t count,
+              memory_region* mr_buf,
+              memory_region* mr_result,
+              fabric_addr dest_addr,
+              remote_memory remote,
+              op_flags flags,
+              Ctx context = {}) -> loom::result<void> {
+    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (!fid_ep)
+        return make_error_result<void>(errc::invalid_argument);
+    if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, readwritemsg))
+        return make_error_result<void>(errc::not_supported);
+    void* input_desc = mr_buf ? mr_buf->descriptor().raw() : nullptr;
+    void* result_desc = mr_result ? mr_result->descriptor().raw() : nullptr;
+    const ::fi_ioc input{const_cast<void*>(buf), count};
+    const ::fi_rma_ioc target{remote.addr, count, remote.key};
+    ::fi_ioc output{result, count};
+    const ::fi_msg_atomic message{
+        .msg_iov = &input,
+        .desc = input_desc ? &input_desc : nullptr,
+        .iov_count = 1,
+        .addr = dest_addr.get(),
+        .rma_iov = &target,
+        .rma_iov_count = 1,
+        .datatype = detail::to_fi_datatype(dt),
+        .op = detail::to_fi_op(op),
+        .context = to_raw_context(context),
+    };
+    const auto native_flags = loom::detail::operation_flags<Defaults>(
+        ep, completion_direction::transmit, loom::detail::to_fi_op_flags(flags));
+    const auto status = ::fi_fetch_atomicmsg(
+        fid_ep, &message, &output, result_desc ? &result_desc : nullptr, 1, native_flags);
+    if (status)
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
+    return make_success();
+}
+
 template <context_like Ctx = void*>
 auto fetch_to(endpoint& ep,
               operation op,
@@ -429,6 +515,61 @@ auto fetch(endpoint& ep,
  * @param context Optional user context.
  * @return Success or error result.
  */
+/// Explicit flags use the message interface; inheritance extends creation defaults.
+/// FI_INJECT releases constant inputs on return, while results remain borrowed.
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
+auto compare_swap_to(endpoint& ep,
+                     datatype dt,
+                     const void* compare,
+                     const void* swap,
+                     void* result,
+                     std::size_t count,
+                     memory_region* mr_compare,
+                     memory_region* mr_swap,
+                     memory_region* mr_result,
+                     fabric_addr dest_addr,
+                     remote_memory remote,
+                     op_flags flags,
+                     Ctx context = {}) -> loom::result<void> {
+    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (!fid_ep)
+        return make_error_result<void>(errc::invalid_argument);
+    if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, compwritemsg))
+        return make_error_result<void>(errc::not_supported);
+    void* input_desc = mr_swap ? mr_swap->descriptor().raw() : nullptr;
+    void* compare_desc = mr_compare ? mr_compare->descriptor().raw() : nullptr;
+    void* result_desc = mr_result ? mr_result->descriptor().raw() : nullptr;
+    const ::fi_ioc input{const_cast<void*>(swap), count};
+    const ::fi_rma_ioc target{remote.addr, count, remote.key};
+    const ::fi_ioc comparison{const_cast<void*>(compare), count};
+    ::fi_ioc output{result, count};
+    const ::fi_msg_atomic message{
+        .msg_iov = &input,
+        .desc = input_desc ? &input_desc : nullptr,
+        .iov_count = 1,
+        .addr = dest_addr.get(),
+        .rma_iov = &target,
+        .rma_iov_count = 1,
+        .datatype = detail::to_fi_datatype(dt),
+        .op = FI_CSWAP,
+        .context = to_raw_context(context),
+    };
+    const auto native_flags = loom::detail::operation_flags<Defaults>(
+        ep, completion_direction::transmit, loom::detail::to_fi_op_flags(flags));
+    const auto status = ::fi_compare_atomicmsg(fid_ep,
+                                               &message,
+                                               &comparison,
+                                               compare_desc ? &compare_desc : nullptr,
+                                               1,
+                                               &output,
+                                               result_desc ? &result_desc : nullptr,
+                                               1,
+                                               native_flags);
+    if (status)
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
+    return make_success();
+}
+
 template <context_like Ctx = void*>
 auto compare_swap_to(endpoint& ep,
                      datatype dt,

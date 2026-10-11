@@ -15,6 +15,7 @@ namespace {
 struct atomic_peer_provider {
     int calls{};
     ssize_t status{};
+    std::uint64_t flags{};
     fi_addr_t peer{};
     const void* input{};
     const void* comparison{};
@@ -58,6 +59,38 @@ struct atomic_peer_provider {
         return self.status;
     }
 
+    static auto record_message(fid_ep* ep,
+                               const fi_msg_atomic* message,
+                               const fi_ioc* compare,
+                               void** compare_desc,
+                               fi_ioc* output,
+                               void** output_desc,
+                               std::uint64_t flags) -> ssize_t {
+        static_cast<atomic_peer_provider*>(ep->fid.context)->flags = flags;
+        REQUIRE(message->iov_count == 1);
+        REQUIRE(message->rma_iov_count == 1);
+        const auto count = message->msg_iov[0].count;
+        REQUIRE(message->rma_iov[0].count == count);
+        if (compare)
+            REQUIRE(compare->count == count);
+        if (output)
+            REQUIRE(output->count == count);
+        return record(ep,
+                      message->msg_iov[0].addr,
+                      count,
+                      message->desc ? message->desc[0] : nullptr,
+                      compare ? compare->addr : nullptr,
+                      compare_desc ? compare_desc[0] : nullptr,
+                      output ? output->addr : nullptr,
+                      output_desc ? output_desc[0] : nullptr,
+                      message->addr,
+                      message->rma_iov[0].addr,
+                      message->rma_iov[0].key,
+                      message->datatype,
+                      message->op,
+                      message->context);
+    }
+
     fi_ops lifetime{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_atomic operations{
         .size = sizeof(fi_ops_atomic),
@@ -86,6 +119,10 @@ struct atomic_peer_provider {
                               datatype,
                               operation,
                               context);
+            },
+        .writemsg =
+            [](fid_ep* ep, const fi_msg_atomic* message, std::uint64_t flags) {
+                return record_message(ep, message, nullptr, nullptr, nullptr, nullptr, flags);
             },
         .inject =
             [](fid_ep* ep,
@@ -139,14 +176,43 @@ struct atomic_peer_provider {
                               operation,
                               context);
             },
+        .readwritemsg =
+            [](fid_ep* ep,
+               const fi_msg_atomic* message,
+               fi_ioc* output,
+               void** output_desc,
+               std::size_t count,
+               std::uint64_t flags) {
+                REQUIRE(count == 1);
+                return record_message(ep, message, nullptr, nullptr, output, output_desc, flags);
+            },
         .compwrite = record,
+        .compwritemsg =
+            [](fid_ep* ep,
+               const fi_msg_atomic* message,
+               const fi_ioc* compare,
+               void** compare_desc,
+               std::size_t compare_count,
+               fi_ioc* output,
+               void** output_desc,
+               std::size_t count,
+               std::uint64_t flags) {
+                REQUIRE(compare_count == 1);
+                REQUIRE(count == 1);
+                return record_message(
+                    ep, message, compare, compare_desc, output, output_desc, flags);
+            },
     };
     fid_ep handle{.fid = {.context = this, .ops = &lifetime}, .atomic = &operations};
-    loom::endpoint ep{
-        loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
-                                                                   &handle,
-                                                                   loom::endpoint_types::rdm,
-                                                                   loom::address_format::inet)};
+    loom::endpoint ep{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+        loom::get_default_resource(),
+        &handle,
+        loom::endpoint_types::rdm,
+        loom::address_format::inet,
+        0UZ,
+        0UZ,
+        loom::caps{},
+        FI_FENCE | FI_DELIVERY_COMPLETE)};
 };
 }  // namespace
 
@@ -299,6 +365,31 @@ TEST_CASE("atomic peer submissions reject unavailable endpoints and operations",
                                 peer,
                                 remote),
         atomic::inject_to(provider.ep, op, type, &input, 1, peer, remote),
+        atomic::execute_to(
+            provider.ep, op, type, &input, 1, nullptr, peer, remote, op_flag::completion),
+        atomic::fetch_to(provider.ep,
+                         op,
+                         type,
+                         &input,
+                         &output,
+                         1,
+                         nullptr,
+                         nullptr,
+                         peer,
+                         remote,
+                         op_flag::completion),
+        atomic::compare_swap_to(provider.ep,
+                                type,
+                                &comparison,
+                                &input,
+                                &output,
+                                1,
+                                nullptr,
+                                nullptr,
+                                nullptr,
+                                peer,
+                                remote,
+                                op_flag::completion),
     };
     for (const auto& result : results) {
         REQUIRE_FALSE(result);
@@ -309,6 +400,11 @@ TEST_CASE("atomic peer submissions reject unavailable endpoints and operations",
 
 TEST_CASE("registered RDM atomics select the destination peer", "[atomic][peer][sockets]") {
     using namespace loom;
+    enum class submission { scalar, message, injected };
+    const auto mode = GENERATE(submission::scalar, submission::message, submission::injected);
+    const bool selective = mode != submission::scalar;
+    const auto flags =
+        op_flag::completion | (mode == submission::injected ? op_flag::inject : op_flag::none);
     fabric_hints hints{};
     hints.provider_name = "sockets";
     hints.ep_type = endpoint_types::rdm;
@@ -316,6 +412,8 @@ TEST_CASE("registered RDM atomics select the destination peer", "[atomic][peer][
     auto info = query_fabric(hints);
     if (!info)
         SKIP("Sockets provider unavailable");
+    auto* native_info = static_cast<fi_info*>(info->internal_ptr());
+    native_info->tx_attr->op_flags = FI_DELIVERY_COMPLETE;
     auto fabric = fabric::create(*info);
     REQUIRE(fabric);
     auto dom = domain::create(*fabric, *info);
@@ -329,7 +427,9 @@ TEST_CASE("registered RDM atomics select the destination peer", "[atomic][peer][
     REQUIRE(source);
     REQUIRE(target);
     for (auto* ep : {&*source, &*target}) {
-        REQUIRE(ep->bind_cq(*cq, cq_bind::transmit | cq_bind::recv));
+        REQUIRE(ep->bind_cq(*cq,
+                            cq_bind::transmit | cq_bind::recv |
+                                (selective ? cq_bind::selective_completion : cq_bind_flags{})));
         REQUIRE(ep->bind_av(*av));
         REQUIRE(ep->enable());
     }
@@ -367,30 +467,66 @@ TEST_CASE("registered RDM atomics select the destination peer", "[atomic][peer][
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
         result<void> submitted;
         do {
-            submitted = compare ? atomic::cas_to(*source,
-                                                 comparison,
-                                                 input,
-                                                 &output,
-                                                 &*comparison_mr,
-                                                 &*input_mr,
-                                                 &*output_mr,
-                                                 destination,
-                                                 remote,
-                                                 &context)
-                                : atomic::fetch_add_to(*source,
-                                                       input,
-                                                       &output,
-                                                       &*input_mr,
-                                                       &*output_mr,
-                                                       destination,
-                                                       remote,
-                                                       &context);
+            if (selective) {
+                submitted =
+                    compare
+                        ? atomic::compare_swap_to<operation_defaults::inherit>(
+                              *source,
+                              atomic::datatype::uint64,
+                              &comparison,
+                              &input,
+                              &output,
+                              1,
+                              &*comparison_mr,
+                              &*input_mr,
+                              &*output_mr,
+                              destination,
+                              remote,
+                              flags,
+                              &context)
+                        : atomic::fetch_to<operation_defaults::inherit>(*source,
+                                                                        atomic::operation::sum,
+                                                                        atomic::datatype::uint64,
+                                                                        &input,
+                                                                        &output,
+                                                                        1,
+                                                                        &*input_mr,
+                                                                        &*output_mr,
+                                                                        destination,
+                                                                        remote,
+                                                                        flags,
+                                                                        &context);
+            } else {
+                submitted = compare ? atomic::cas_to(*source,
+                                                     comparison,
+                                                     input,
+                                                     &output,
+                                                     &*comparison_mr,
+                                                     &*input_mr,
+                                                     &*output_mr,
+                                                     destination,
+                                                     remote,
+                                                     &context)
+                                    : atomic::fetch_add_to(*source,
+                                                           input,
+                                                           &output,
+                                                           &*input_mr,
+                                                           &*output_mr,
+                                                           destination,
+                                                           remote,
+                                                           &context);
+            }
             if (submitted || submitted.error() != errc::again)
                 break;
             REQUIRE(cq->progress());
             std::this_thread::yield();
         } while (std::chrono::steady_clock::now() < deadline);
         REQUIRE(submitted);
+        if (mode == submission::injected) {
+            // Constant inputs may be reused, but output must survive until completion.
+            input = 0;
+            comparison = 0;
+        }
         std::optional<completion_event> completion;
         do {
             completion = cq->poll();
@@ -402,6 +538,96 @@ TEST_CASE("registered RDM atomics select the destination peer", "[atomic][peer][
         REQUIRE_FALSE(completion->error);
         REQUIRE(completion->context.get() == &context);
         REQUIRE(output == (compare ? 45 : 42));
+        input = 3;
+        comparison = 45;
     }
     REQUIRE(target_value == 3);
+}
+
+TEST_CASE("atomic flags preserve peers counts and independent registrations", "[atomic][flags]") {
+    using namespace loom;
+    enum class kind { update, fetch, compare };
+    const auto operation = GENERATE(kind::update, kind::fetch, kind::compare);
+    const auto inherit = GENERATE(false, true);
+    const auto count = GENERATE(1UZ, 2UZ);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
+    atomic_peer_provider native;
+    native.status = status;
+    std::array<std::uint64_t, 2> input{3, 4}, compare{42, 43}, output{};
+    fid_mr input_handle{.fid = {.ops = &native.lifetime}, .mem_desc = &input_handle};
+    fid_mr compare_handle{.fid = {.ops = &native.lifetime}, .mem_desc = &compare_handle};
+    fid_mr output_handle{.fid = {.ops = &native.lifetime}, .mem_desc = &output_handle};
+    const auto make_mr = [](fid_mr& handle, auto& storage) {
+        return memory_region{detail::make_pmr_unique<detail::memory_region_impl>(
+            get_default_resource(), &handle, storage.data(), sizeof(storage))};
+    };
+    auto input_mr = make_mr(input_handle, input);
+    auto compare_mr = make_mr(compare_handle, compare);
+    auto output_mr = make_mr(output_handle, output);
+    const fabric_addr peer{19};
+    const remote_memory remote{24, 0x123456789abcdef0ULL, sizeof(output)};
+    fi_context2 context{};
+    const auto flags = op_flag::completion | op_flag::inject;
+    auto submit = [&]<operation_defaults Defaults>() -> void_result {
+        switch (operation) {
+            case kind::update:
+                return atomic::execute_to<Defaults>(native.ep,
+                                                    atomic::operation::sum,
+                                                    atomic::datatype::uint64,
+                                                    input.data(),
+                                                    count,
+                                                    &input_mr,
+                                                    peer,
+                                                    remote,
+                                                    flags,
+                                                    &context);
+            case kind::fetch:
+                return atomic::fetch_to<Defaults>(native.ep,
+                                                  atomic::operation::sum,
+                                                  atomic::datatype::uint64,
+                                                  input.data(),
+                                                  output.data(),
+                                                  count,
+                                                  &input_mr,
+                                                  &output_mr,
+                                                  peer,
+                                                  remote,
+                                                  flags,
+                                                  &context);
+            case kind::compare:
+                return atomic::compare_swap_to<Defaults>(native.ep,
+                                                         atomic::datatype::uint64,
+                                                         compare.data(),
+                                                         input.data(),
+                                                         output.data(),
+                                                         count,
+                                                         &compare_mr,
+                                                         &input_mr,
+                                                         &output_mr,
+                                                         peer,
+                                                         remote,
+                                                         flags,
+                                                         &context);
+        }
+        std::unreachable();
+    };
+    const auto result = inherit ? submit.template operator()<operation_defaults::inherit>()
+                                : submit.template operator()<operation_defaults::replace>();
+    REQUIRE(native.calls == 1);
+    REQUIRE(native.flags ==
+            (FI_COMPLETION | FI_INJECT | (inherit ? FI_FENCE | FI_DELIVERY_COMPLETE : 0)));
+    REQUIRE(native.peer == peer.get());
+    REQUIRE(native.count == count);
+    REQUIRE(native.input == input.data());
+    REQUIRE(native.input_desc == &input_handle);
+    REQUIRE(native.comparison == (operation == kind::compare ? compare.data() : nullptr));
+    REQUIRE(native.compare_desc == (operation == kind::compare ? &compare_handle : nullptr));
+    REQUIRE(native.output == (operation == kind::update ? nullptr : output.data()));
+    REQUIRE(native.output_desc == (operation == kind::update ? nullptr : &output_handle));
+    REQUIRE(native.context == &context);
+    REQUIRE(native.operation == (operation == kind::compare ? FI_CSWAP : FI_SUM));
+    if (status)
+        REQUIRE(result.error() == make_error_code_from_fi_errno(-status));
+    else
+        REQUIRE(result);
 }

@@ -161,6 +161,15 @@ does not extend its lifetime. `inject_to` releases its input on return and
 generates no success completion. Provider operation/type/count and inject
 limits still apply.
 
+`execute_to`, `fetch_to`, and `compare_swap_to` accept `op_flags` before
+the context. These overloads replace endpoint defaults unless called with
+`<operation_defaults::inherit>`, which preserves the transmit creation
+flags. `op_flag::completion` requests a CQ event under selective completion.
+`op_flag::inject` releases only constant input operands on return; result
+buffers and their registrations remain borrowed until completion.
+Atomic senders request CQ completions and inherit transmit defaults. They
+retain copies of their operands while borrowing any result registration.
+
 ```cpp
 // ep is bound to a dedicated cq and an AV containing peer_address.
 // remote is the target's exported remote_memory, exchanged with that peer.
