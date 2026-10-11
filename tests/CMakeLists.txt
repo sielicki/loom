@@ -70,6 +70,7 @@ loom_add_test(test_submission_context)
 loom_add_test(test_safe_context)
 loom_add_test(test_request_context)
 loom_add_test(test_completion_queue)
+loom_add_test(test_counter)
 loom_add_test(test_empty_resources)
 loom_add_test(test_formatters)
 loom_add_test(test_address)
@@ -97,6 +98,7 @@ add_executable(test_implementation
     test_atomic.cpp
     test_address_transport.cpp
     test_completion_queue.cpp
+    test_counter.cpp
     test_scalable_endpoint.cpp
     test_endpoint_limits.cpp
     test_trigger_transport.cpp

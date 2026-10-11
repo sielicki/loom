@@ -16,13 +16,15 @@ namespace loom::detail {
 /// @brief Internal implementation of the counter.
 struct counter_impl {
     ::fid_cntr* cntr{nullptr};  ///< Underlying libfabric counter handle.
+    std::uint64_t threshold{1};  ///< Configured threshold for waits and checks.
 
     /// @brief Default constructor.
     counter_impl() = default;
 
     /// @brief Constructs counter_impl with a libfabric counter handle.
     /// @param cntr_ptr The libfabric counter pointer.
-    explicit counter_impl(::fid_cntr* cntr_ptr) : cntr(cntr_ptr) {}
+    explicit counter_impl(::fid_cntr* cntr_ptr, std::uint64_t target = 1)
+        : cntr(cntr_ptr), threshold(target) {}
 
     /// @brief Destructor that closes the libfabric counter.
     ~counter_impl() {
@@ -86,12 +88,13 @@ auto counter::create(const domain& dom, const counter_attr& attr, memory_resourc
     }
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::counter_impl>(resource, cntr);
+        auto impl = detail::make_pmr_unique<detail::counter_impl>(resource, cntr, attr.threshold);
         return counter{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::counter_impl>(default_resource, cntr);
+    auto impl =
+        detail::make_pmr_unique<detail::counter_impl>(default_resource, cntr, attr.threshold);
     return counter{std::move(impl)};
 }
 
@@ -140,8 +143,7 @@ auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> void_res
         timeout_ms = static_cast<int>(timeout->count());
     }
 
-    std::uint64_t threshold = 1;
-    int ret = ::fi_cntr_wait(impl_->cntr, threshold, timeout_ms);
+    int ret = ::fi_cntr_wait(impl_->cntr, impl_->threshold, timeout_ms);
 
     if (ret == -FI_ETIMEDOUT) {
         return make_error_result<void>(errc::timeout);
@@ -160,7 +162,7 @@ auto counter::check_threshold() const -> bool {
     }
 
     std::uint64_t value = ::fi_cntr_read(impl_->cntr);
-    return value > 0;
+    return value >= impl_->threshold;
 }
 
 auto counter::get_error() const -> std::error_code {
