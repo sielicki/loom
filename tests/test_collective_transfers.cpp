@@ -88,6 +88,11 @@ struct transfer_provider : loom::test::collective_provider {
 
     fi_ops_collective transfers{
         .size = sizeof(fi_ops_collective),
+        .barrier =
+            [](fid_ep* ep, fi_addr_t address, void* context) {
+                return record(
+                    ep, operation::barrier, nullptr, nullptr, 0, FI_UINT8, address, context);
+            },
         .broadcast =
             [](fid_ep* ep,
                void* input,
@@ -202,6 +207,11 @@ struct transfer_provider : loom::test::collective_provider {
                void* context) {
                 return record(ep, operation::gather, input, output, count, type, address, context);
             },
+        .barrier2 =
+            [](fid_ep* ep, fi_addr_t address, std::uint64_t, void* context) {
+                return record(
+                    ep, operation::barrier, nullptr, nullptr, 0, FI_UINT8, address, context);
+            },
     };
 
     transfer_provider() { native_ep.collective = &transfers; }
@@ -222,11 +232,12 @@ auto submit(operation op,
             std::span<std::byte> input,
             std::span<std::byte> output,
             datatype type,
-            void* context = nullptr) -> loom::result<void> {
+            void* context = nullptr,
+            loom::endpoint* target = nullptr) -> loom::result<void> {
     namespace coll = loom::collective;
     const auto root = loom::fabric_addr{5};
     const auto sum = loom::atomic::operation::sum;
-    auto& ep = provider.ep;
+    auto& ep = target ? *target : provider.ep;
     switch (op) {
         case operation::broadcast:
             return coll::broadcast(ep, group, input, nullptr, root, type, context);
@@ -529,4 +540,133 @@ TEST_CASE("collectives preserve zero counts spare capacity and provider failures
     std::array<std::byte, 9> output{};
     REQUIRE(submit(operation::all_reduce, provider, group, input, output, datatype::uint32));
     REQUIRE(provider.count == 2);
+}
+
+TEST_CASE("collective transfers reject empty endpoints", "[collective][invalid]") {
+    const auto op = GENERATE(operation::broadcast,
+                             operation::all_reduce,
+                             operation::all_gather,
+                             operation::all_to_all,
+                             operation::reduce,
+                             operation::scatter,
+                             operation::gather,
+                             operation::reduce_scatter);
+    transfer_provider provider;
+    auto group = provider.join();
+    loom::endpoint empty;
+    const auto result = submit(op, provider, group, {}, {}, datatype::uint32, nullptr, &empty);
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == loom::errc::invalid_argument);
+    REQUIRE(provider.calls == 0);
+}
+
+TEST_CASE("collectives reject missing native operations", "[collective][invalid]") {
+    const auto op = GENERATE(operation::broadcast,
+                             operation::all_reduce,
+                             operation::all_gather,
+                             operation::all_to_all,
+                             operation::reduce,
+                             operation::scatter,
+                             operation::gather,
+                             operation::reduce_scatter);
+    const auto missing = GENERATE(0, 1, 2);
+    transfer_provider provider;
+    auto group = provider.join();
+    if (missing == 0) {
+        provider.native_ep.collective = nullptr;
+    } else if (missing == 1) {
+        provider.transfers.size = sizeof(std::size_t);
+    } else {
+        switch (op) {
+            case operation::broadcast:
+                provider.transfers.broadcast = nullptr;
+                break;
+            case operation::all_reduce:
+                provider.transfers.allreduce = nullptr;
+                break;
+            case operation::all_gather:
+                provider.transfers.allgather = nullptr;
+                break;
+            case operation::all_to_all:
+                provider.transfers.alltoall = nullptr;
+                break;
+            case operation::reduce:
+                provider.transfers.reduce = nullptr;
+                break;
+            case operation::scatter:
+                provider.transfers.scatter = nullptr;
+                break;
+            case operation::gather:
+                provider.transfers.gather = nullptr;
+                break;
+            case operation::reduce_scatter:
+                provider.transfers.reduce_scatter = nullptr;
+                break;
+            default:
+                FAIL("unexpected operation");
+        }
+    }
+    const auto result = submit(op, provider, group, {}, {}, datatype::uint32);
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == loom::make_error_code_from_fi_errno(FI_ENOSYS));
+    REQUIRE(provider.calls == 0);
+}
+
+TEST_CASE("collectives reject groups without published addresses", "[collective][invalid]") {
+    const auto op = GENERATE(operation::broadcast,
+                             operation::all_reduce,
+                             operation::all_gather,
+                             operation::all_to_all,
+                             operation::reduce,
+                             operation::scatter,
+                             operation::gather,
+                             operation::reduce_scatter);
+    const auto delayed = GENERATE(false, true);
+    transfer_provider provider;
+    provider.delayed = delayed;
+    auto group = provider.join();
+    if (!delayed)
+        group = {};
+    const auto result = submit(op, provider, group, {}, {}, datatype::uint32);
+    if (delayed) {
+        // Complete the mock join before releasing its borrowed output slot.
+        *provider.pending = &provider.native_group;
+        provider.pending = nullptr;
+    }
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == loom::errc::invalid_argument);
+    REQUIRE(provider.calls == 0);
+}
+
+TEST_CASE("collective barriers check their selected native operation", "[collective][invalid]") {
+    const auto flags = GENERATE(std::uint64_t{0}, std::uint64_t{FI_FENCE});
+    const auto missing = GENERATE(0, 1, 2, 3);
+    transfer_provider provider;
+    auto group = provider.join();
+    if (missing == 1)
+        provider.native_ep.collective = nullptr;
+    if (missing == 2)
+        provider.transfers.barrier = nullptr;
+    if (missing == 3)
+        provider.transfers.size = offsetof(fi_ops_collective, barrier2);
+    int context{};
+    const auto result = loom::collective::barrier(provider.ep, group, flags, &context);
+    const bool supported =
+        missing == 0 || (missing == 2 && flags != 0) || (missing == 3 && flags == 0);
+    REQUIRE(static_cast<bool>(result) == supported);
+    if (supported) {
+        REQUIRE(provider.calls == 1);
+        REQUIRE(provider.transfer_context == &context);
+        REQUIRE(provider.address == 999);
+    } else {
+        REQUIRE(provider.calls == 0);
+        REQUIRE(result.error() == loom::make_error_code_from_fi_errno(FI_ENOSYS));
+    }
+    const auto direct = loom::collective::barrier(provider.ep, group.address());
+    REQUIRE(static_cast<bool>(direct) == (missing == 0 || missing == 3));
+    loom::endpoint empty;
+    REQUIRE(loom::collective::barrier(empty, group.address()).error() ==
+            loom::errc::invalid_argument);
+    REQUIRE(loom::collective::barrier(provider.ep, loom::fabric_addrs::unspecified).error() ==
+            loom::errc::invalid_argument);
 }

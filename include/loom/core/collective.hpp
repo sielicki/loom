@@ -194,7 +194,11 @@ auto group::join(endpoint& ep,
  */
 template <context_like Ctx = void*>
 auto barrier(endpoint& ep, fabric_addr coll_addr, Ctx context = {}) -> result<void> {
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    const auto native = detail::checked_endpoint<FI_BARRIER>(ep, coll_addr);
+    if (!native) {
+        return std::unexpected(native.error());
+    }
+    auto* fid_ep = *native;
 
     auto ret = ::fi_barrier(fid_ep, coll_addr.get(), to_raw_context(context));
 
@@ -216,7 +220,11 @@ auto barrier(endpoint& ep, fabric_addr coll_addr, Ctx context = {}) -> result<vo
  */
 template <context_like Ctx = void*>
 auto barrier(endpoint& ep, group& grp, std::uint64_t flags, Ctx context = {}) -> result<void> {
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    const auto native = detail::checked_endpoint<FI_BARRIER>(ep, grp.address(), flags);
+    if (!native) {
+        return std::unexpected(native.error());
+    }
+    auto* fid_ep = *native;
 
     auto ret = ::fi_barrier2(fid_ep, grp.address().get(), flags, to_raw_context(context));
 
@@ -247,12 +255,16 @@ auto broadcast(endpoint& ep,
                fabric_addr root_addr,
                atomic::datatype dt,
                Ctx context = {}) -> result<void> {
+    const auto native = detail::checked_endpoint<FI_BROADCAST>(ep, grp.address());
+    if (!native) {
+        return std::unexpected(native.error());
+    }
     const auto transfer =
         detail::checked_transfer<FI_BROADCAST>(buffer.size(), 0, dt, grp.member_count());
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* fid_ep = *native;
     void* desc = mr ? mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_broadcast(fid_ep,
@@ -324,12 +336,16 @@ auto all_reduce(endpoint& ep,
                 atomic::operation op,
                 atomic::datatype dt,
                 Ctx context = {}) -> result<void> {
+    const auto native = detail::checked_endpoint<FI_ALLREDUCE>(ep, grp.address());
+    if (!native) {
+        return std::unexpected(native.error());
+    }
     const auto transfer = detail::checked_transfer<FI_ALLREDUCE>(
         send_buf.size(), recv_buf.size(), dt, grp.member_count());
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* fid_ep = *native;
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
@@ -438,12 +454,16 @@ auto all_gather(endpoint& ep,
                 memory_region* recv_mr,
                 atomic::datatype dt,
                 Ctx context = {}) -> result<void> {
+    const auto native = detail::checked_endpoint<FI_ALLGATHER>(ep, grp.address());
+    if (!native) {
+        return std::unexpected(native.error());
+    }
     const auto transfer = detail::checked_transfer<FI_ALLGATHER>(
         send_buf.size(), recv_buf.size(), dt, grp.member_count());
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* fid_ep = *native;
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
@@ -518,12 +538,16 @@ auto all_to_all(endpoint& ep,
                 memory_region* recv_mr,
                 atomic::datatype dt,
                 Ctx context = {}) -> result<void> {
+    const auto native = detail::checked_endpoint<FI_ALLTOALL>(ep, grp.address());
+    if (!native) {
+        return std::unexpected(native.error());
+    }
     const auto transfer = detail::checked_transfer<FI_ALLTOALL>(
         send_buf.size(), recv_buf.size(), dt, grp.member_count());
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* fid_ep = *native;
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
@@ -602,12 +626,16 @@ auto reduce(endpoint& ep,
             atomic::operation op,
             atomic::datatype dt,
             Ctx context = {}) -> result<void> {
+    const auto native = detail::checked_endpoint<FI_REDUCE>(ep, grp.address());
+    if (!native) {
+        return std::unexpected(native.error());
+    }
     const auto transfer = detail::checked_transfer<FI_REDUCE>(
         send_buf.size(), recv_buf.size(), dt, grp.member_count());
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* fid_ep = *native;
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
@@ -692,12 +720,16 @@ auto scatter(endpoint& ep,
              fabric_addr root_addr,
              atomic::datatype dt,
              Ctx context = {}) -> result<void> {
+    const auto native = detail::checked_endpoint<FI_SCATTER>(ep, grp.address());
+    if (!native) {
+        return std::unexpected(native.error());
+    }
     const auto transfer = detail::checked_transfer<FI_SCATTER>(
         send_buf.size(), recv_buf.size(), dt, grp.member_count());
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* fid_ep = *native;
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
@@ -744,12 +776,16 @@ auto gather(endpoint& ep,
             fabric_addr root_addr,
             atomic::datatype dt,
             Ctx context = {}) -> result<void> {
+    const auto native = detail::checked_endpoint<FI_GATHER>(ep, grp.address());
+    if (!native) {
+        return std::unexpected(native.error());
+    }
     const auto transfer = detail::checked_transfer<FI_GATHER>(
         send_buf.size(), recv_buf.size(), dt, grp.member_count());
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* fid_ep = *native;
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
@@ -796,12 +832,16 @@ auto reduce_scatter(endpoint& ep,
                     atomic::operation op,
                     atomic::datatype dt,
                     Ctx context = {}) -> result<void> {
+    const auto native = detail::checked_endpoint<FI_REDUCE_SCATTER>(ep, grp.address());
+    if (!native) {
+        return std::unexpected(native.error());
+    }
     const auto transfer = detail::checked_transfer<FI_REDUCE_SCATTER>(
         send_buf.size(), recv_buf.size(), dt, grp.member_count());
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
-    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    auto* fid_ep = *native;
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 

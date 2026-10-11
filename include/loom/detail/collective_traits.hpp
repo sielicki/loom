@@ -135,28 +135,81 @@ struct transfer_traits;
 
 template <>
 struct transfer_traits<FI_BROADCAST>
-    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::unused> {};
+    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::unused> {
+    static auto available(fi_ops_collective* ops, std::uint64_t = 0) noexcept -> bool {
+        return FI_CHECK_OP(ops, fi_ops_collective, broadcast);
+    }
+};
 template <>
 struct transfer_traits<FI_ALLREDUCE>
-    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::single> {};
+    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::single> {
+    static auto available(fi_ops_collective* ops, std::uint64_t = 0) noexcept -> bool {
+        return FI_CHECK_OP(ops, fi_ops_collective, allreduce);
+    }
+};
 template <>
 struct transfer_traits<FI_ALLGATHER>
-    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::group> {};
+    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::group> {
+    static auto available(fi_ops_collective* ops, std::uint64_t = 0) noexcept -> bool {
+        return FI_CHECK_OP(ops, fi_ops_collective, allgather);
+    }
+};
 template <>
 struct transfer_traits<FI_ALLTOALL>
-    : transfer_shape<count_basis::partitioned_input, buffer_extent::group, buffer_extent::group> {};
+    : transfer_shape<count_basis::partitioned_input, buffer_extent::group, buffer_extent::group> {
+    static auto available(fi_ops_collective* ops, std::uint64_t = 0) noexcept -> bool {
+        return FI_CHECK_OP(ops, fi_ops_collective, alltoall);
+    }
+};
 template <>
 struct transfer_traits<FI_REDUCE>
-    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::root_single> {};
+    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::root_single> {
+    static auto available(fi_ops_collective* ops, std::uint64_t = 0) noexcept -> bool {
+        return FI_CHECK_OP(ops, fi_ops_collective, reduce);
+    }
+};
 template <>
 struct transfer_traits<FI_SCATTER>
-    : transfer_shape<count_basis::output, buffer_extent::root_group, buffer_extent::single> {};
+    : transfer_shape<count_basis::output, buffer_extent::root_group, buffer_extent::single> {
+    static auto available(fi_ops_collective* ops, std::uint64_t = 0) noexcept -> bool {
+        return FI_CHECK_OP(ops, fi_ops_collective, scatter);
+    }
+};
 template <>
 struct transfer_traits<FI_GATHER>
-    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::root_group> {};
+    : transfer_shape<count_basis::input, buffer_extent::single, buffer_extent::root_group> {
+    static auto available(fi_ops_collective* ops, std::uint64_t = 0) noexcept -> bool {
+        return FI_CHECK_OP(ops, fi_ops_collective, gather);
+    }
+};
 template <>
 struct transfer_traits<FI_REDUCE_SCATTER>
-    : transfer_shape<count_basis::output, buffer_extent::group, buffer_extent::single> {};
+    : transfer_shape<count_basis::output, buffer_extent::group, buffer_extent::single> {
+    static auto available(fi_ops_collective* ops, std::uint64_t = 0) noexcept -> bool {
+        return FI_CHECK_OP(ops, fi_ops_collective, reduce_scatter);
+    }
+};
+
+template <>
+struct transfer_traits<FI_BARRIER> {
+    static auto available(fi_ops_collective* ops, std::uint64_t flags = 0) noexcept -> bool {
+        return flags ? FI_CHECK_OP(ops, fi_ops_collective, barrier2)
+                     : FI_CHECK_OP(ops, fi_ops_collective, barrier);
+    }
+};
+
+template <fi_collective_op Operation>
+auto checked_endpoint(endpoint& ep, fabric_addr address, std::uint64_t flags = 0)
+    -> result<fid_ep*> {
+    if (!ep || address == fabric_addrs::unspecified) {
+        return make_error_result<fid_ep*>(errc::invalid_argument);
+    }
+    auto* native = static_cast<fid_ep*>(ep.internal_ptr());
+    if (!transfer_traits<Operation>::available(native->collective, flags)) {
+        return make_error_result_from_fi_errno<fid_ep*>(FI_ENOSYS);
+    }
+    return native;
+}
 
 struct element_count {
     std::size_t value;
