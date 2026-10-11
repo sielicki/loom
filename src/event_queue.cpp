@@ -35,7 +35,9 @@ auto event_queue::impl_valid() const noexcept -> bool {
 
 auto event_queue::create(const fabric& fab, const event_queue_attr& attr, memory_resource* resource)
     -> result<event_queue> {
-    if (!fab) {
+    if (!fab ||
+        attr.event_buffer_size < std::max(sizeof(::fi_eq_entry), sizeof(::fi_eq_cm_entry)) ||
+        attr.event_buffer_size > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())) {
         return make_error_result<event_queue>(errc::invalid_argument);
     }
 
@@ -58,14 +60,14 @@ auto event_queue::create(const fabric& fab, const event_queue_attr& attr, memory
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::event_queue_impl>(
-            resource, eq, attr.wait_obj, attr.size.get());
+            resource, eq, attr.wait_obj, attr.size.get(), attr.event_buffer_size);
         (void)pending.release();
         return event_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::event_queue_impl>(
-        default_resource, eq, attr.wait_obj, attr.size.get());
+        default_resource, eq, attr.wait_obj, attr.size.get(), attr.event_buffer_size);
     (void)pending.release();
     return event_queue{std::move(impl)};
 }
@@ -76,9 +78,12 @@ auto event_queue::poll() -> std::optional<fabric_event> {
     }
 
     std::uint32_t event_type = 0;
-    alignas(::fi_eq_entry)
-        std::array<std::byte, std::max(sizeof(::fi_eq_entry), sizeof(::fi_eq_cm_entry))>
-            buffer{};
+    const auto units = impl_->event_buffer_size / sizeof(std::max_align_t) +
+                       (impl_->event_buffer_size % sizeof(std::max_align_t) != 0);
+    auto* allocator = impl_.get_deleter().resource;
+    std::pmr::vector<std::max_align_t> storage(units,
+                                               allocator ? allocator : get_default_resource());
+    const auto buffer = std::as_writable_bytes(std::span{storage}).first(impl_->event_buffer_size);
     std::uint64_t flags = 0;
 
     ssize_t ret = ::fi_eq_read(impl_->eq, &event_type, buffer.data(), buffer.size(), flags);
@@ -127,9 +132,6 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
     }
 
     std::uint32_t event_type = 0;
-    alignas(::fi_eq_entry)
-        std::array<std::byte, std::max(sizeof(::fi_eq_entry), sizeof(::fi_eq_cm_entry))>
-            buffer{};
     std::uint64_t flags = 0;
 
     int timeout_ms = -1;
@@ -139,6 +141,13 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
         }
         timeout_ms = static_cast<int>(timeout->count());
     }
+
+    const auto units = impl_->event_buffer_size / sizeof(std::max_align_t) +
+                       (impl_->event_buffer_size % sizeof(std::max_align_t) != 0);
+    auto* allocator = impl_.get_deleter().resource;
+    std::pmr::vector<std::max_align_t> storage(units,
+                                               allocator ? allocator : get_default_resource());
+    const auto buffer = std::as_writable_bytes(std::span{storage}).first(impl_->event_buffer_size);
 
     ssize_t ret =
         ::fi_eq_sread(impl_->eq, &event_type, buffer.data(), buffer.size(), timeout_ms, flags);
@@ -176,7 +185,7 @@ auto event_queue::read() -> result<fabric_event> {
     if (!event) {
         return make_error_result<fabric_event>(errc::again);
     }
-    return *event;
+    return std::move(*event);
 }
 
 auto event_queue::write_error(const fabric_event&) -> void_result {

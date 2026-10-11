@@ -5,8 +5,10 @@
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -24,6 +26,7 @@ struct queue_provider {
     bool short_entry{};
     fi_info* accepted_info{};
     int freed_infos{};
+    std::vector<std::byte> private_data;
 
     auto read_event(fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t length) -> ssize_t {
         ++calls;
@@ -47,7 +50,10 @@ struct queue_provider {
         };
         const auto count = short_entry ? sizeof(entry) - 1 : sizeof(entry);
         std::memcpy(buffer, &entry, count);
-        return static_cast<ssize_t>(count);
+        const auto payload = short_entry ? 0 : std::min(private_data.size(), length - count);
+        if (payload)
+            std::memcpy(static_cast<std::byte*>(buffer) + count, private_data.data(), payload);
+        return static_cast<ssize_t>(count + payload);
     }
     fi_ops info_ops{.size = sizeof(fi_ops), .close = [](fid* handle) {
                         ++static_cast<queue_provider*>(handle->context)->freed_infos;
@@ -430,13 +436,14 @@ TEST_CASE("connection events own their native request information", "[queue][con
 
 TEST_CASE("connection information is released after allocation failures", "[queue][connreq]") {
     const auto waiting = GENERATE(false, true);
-    const auto remaining = GENERATE(0, 1);
+    const auto remaining = GENERATE(1, 2, 3);
     limited_resource resource;
     queue_provider provider;
     provider.native_event = FI_CONNREQ;
     provider.connection_request.reset(fi_allocinfo());
     REQUIRE(provider.connection_request);
     provider.connection_request->nic = &provider.native_nic;
+    provider.private_data.assign(64, std::byte{0x42});
     auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting}, &resource);
     REQUIRE(queue);
     const auto before = resource.live;
@@ -451,4 +458,96 @@ TEST_CASE("connection information is released after allocation failures", "[queu
     REQUIRE(provider.freed_infos == 1);
     *queue = {};
     REQUIRE(resource.live == 0);
+}
+
+TEST_CASE("connection payloads survive copies and subsequent queue reads", "[queue][payload]") {
+    const auto waiting = GENERATE(false, true);
+    const auto type = GENERATE(
+        std::uint32_t{FI_CONNREQ}, std::uint32_t{FI_CONNECTED}, std::uint32_t{FI_SHUTDOWN});
+    const auto size = GENERATE(std::size_t{0}, std::size_t{1}, std::size_t{9}, std::size_t{128});
+    queue_provider provider;
+    provider.native_event = type;
+    provider.private_data.resize(size);
+    for (std::size_t i = 0; i < size; ++i)
+        provider.private_data[i] = static_cast<std::byte>(i);
+    const auto expected = provider.private_data;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
+    REQUIRE(queue);
+    auto event = waiting ? std::optional{queue->wait().value()} : queue->poll();
+    REQUIRE(event);
+    REQUIRE_FALSE(event->error);
+    REQUIRE(std::ranges::equal(event->info, expected));
+    REQUIRE(event->info_len == size);
+    auto copy = *event;
+    event.reset();
+    provider.private_data.assign(size, std::byte{0xff});
+    REQUIRE(queue->poll());
+    *queue = {};
+    REQUIRE(std::ranges::equal(copy.info, expected));
+    REQUIRE(copy.info_len == size);
+}
+
+TEST_CASE("event read buffers use their configured size and allocator", "[queue][payload]") {
+    const auto method = GENERATE(0, 1, 2);
+    const auto size = GENERATE(std::size_t{2048}, std::size_t{8192});
+    limited_resource resource;
+    queue_provider provider;
+    provider.private_data.assign(size, std::byte{0x53});
+    auto queue = loom::event_queue::create(
+        provider.fabric,
+        {.wait_obj = method == 1, .event_buffer_size = sizeof(fi_eq_cm_entry) + size},
+        &resource);
+    REQUIRE(queue);
+    auto event = method == 0 ? queue->poll()
+                             : std::optional{(method == 1 ? queue->wait() : queue->read()).value()};
+    REQUIRE(event);
+    REQUIRE_FALSE(event->error);
+    REQUIRE(event->info.get_allocator().resource() == &resource);
+    REQUIRE(std::ranges::equal(event->info, provider.private_data));
+    REQUIRE(event->info_len == size);
+    auto moved = std::move(*event);
+    event.reset();
+    *queue = {};
+    REQUIRE(std::ranges::equal(moved.info, provider.private_data));
+}
+
+TEST_CASE("event read allocation failure leaves the native event queued", "[queue][payload]") {
+    const auto waiting = GENERATE(false, true);
+    limited_resource resource;
+    queue_provider provider;
+    provider.native_event = FI_CONNREQ;
+    provider.connection_request.reset(fi_allocinfo());
+    REQUIRE(provider.connection_request);
+    provider.connection_request->nic = &provider.native_nic;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting}, &resource);
+    REQUIRE(queue);
+    resource.remaining = 0;
+    if (waiting) {
+        REQUIRE_THROWS_AS(queue->wait(), std::bad_alloc);
+    } else {
+        REQUIRE_THROWS_AS(queue->poll(), std::bad_alloc);
+    }
+    REQUIRE(provider.calls == 0);
+    REQUIRE(provider.connection_request);
+    REQUIRE(provider.freed_infos == 0);
+}
+
+TEST_CASE("invalid event timeouts fail before allocating a read buffer", "[queue][payload]") {
+    limited_resource resource;
+    queue_provider provider;
+    auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = true}, &resource);
+    REQUIRE(queue);
+    resource.remaining = 0;
+    const auto event = queue->wait(std::chrono::milliseconds::max());
+    REQUIRE_FALSE(event);
+    REQUIRE(event.error() == loom::errc::invalid_argument);
+    REQUIRE(provider.calls == 0);
+}
+
+TEST_CASE("event buffers must accommodate native headers", "[queue][payload]") {
+    const auto size = GENERATE(std::size_t{0}, sizeof(fi_eq_entry) - 1, SIZE_MAX);
+    queue_provider provider;
+    const auto queue = loom::event_queue::create(provider.fabric, {.event_buffer_size = size});
+    REQUIRE_FALSE(queue);
+    REQUIRE(queue.error() == loom::errc::invalid_argument);
 }

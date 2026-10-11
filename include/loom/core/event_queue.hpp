@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "loom/core/allocator.hpp"
 #include "loom/core/crtp/event_base.hpp"
@@ -53,7 +54,8 @@ enum class event_type : std::uint32_t {
  * @struct fabric_event
  * @brief Fabric event structure for event queue notifications.
  *
- * Contains event type, context, and associated data.
+ * Contains event type, context, and associated data. The queue's memory
+ * resource must outlive events retaining allocations from that resource.
  */
 struct fabric_event : event_base<fabric_event> {
     event_type type{event_type::unknown};  ///< The event type
@@ -61,7 +63,7 @@ struct fabric_event : event_base<fabric_event> {
     void* context{nullptr};     ///< User context pointer
     std::error_code error;      ///< Error code if event indicates failure
     std::uint64_t data{0};      ///< Event-specific data
-    std::span<std::byte> info;  ///< Additional event information
+    std::pmr::vector<std::byte> info;  ///< Owned connection data, including any protocol padding
     std::size_t info_len{0};    ///< Length of info data
 
     /// Incoming connection metadata, usable with endpoint::create. Event copies
@@ -84,6 +86,10 @@ struct event_queue_attr {
     std::uint64_t flags{0};             ///< Configuration flags
     bool wait_obj{false};               ///< Enable wait object support
     std::uint64_t signaling_vector{0};  ///< Signaling vector for interrupts
+    /// Bytes available for one native event, including its header. Size this
+    /// for the largest expected connection payload; providers may truncate
+    /// data that does not fit. The queue's memory resource backs each read.
+    std::size_t event_buffer_size{1024};
 };
 
 /**
