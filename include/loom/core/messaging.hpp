@@ -140,6 +140,18 @@ namespace detail {
     return raw;
 }
 
+/// The caller validates the endpoint and its tagged recvmsg entry. Descriptor
+/// storage belongs to the caller, allowing persistent, allocation-free inputs.
+[[nodiscard]] inline auto submit_tagged_receive(::fid_ep& ep,
+                                                const ::fi_msg_tagged& message,
+                                                std::uint64_t flags) -> result<void> {
+    const auto status = ::fi_trecvmsg(&ep, &message, flags);
+    if (status != 0) {
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
+    }
+    return make_success();
+}
+
 }  // namespace detail
 
 /**
@@ -405,12 +417,7 @@ template <operation_defaults Defaults, context_like Ctx>
 
     const auto native_flags = loom::detail::operation_flags<Defaults>(
         ep, completion_direction::receive, detail::translate_recv_flags(flags));
-    auto ret = ::fi_trecvmsg(fid_ep, &fi_m, native_flags);
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
-    }
-
-    return make_success();
+    return detail::submit_tagged_receive(*fid_ep, fi_m, native_flags);
 }
 
 /// Per-call flags replace defaults unless an explicit inheritance policy is selected.

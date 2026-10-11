@@ -433,15 +433,21 @@ TEST_CASE("tagged probe flags and context reach the provider", "[message][probe]
     }
 }
 
-TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe][loopback]") {
+TEST_CASE("tagged probes reserve receive and discard messages",
+          "[message][probe][claim][loopback]") {
     using namespace loom;
-    enum class disposition { receive, discard_claim, discard_peek };
-    const auto action =
-        GENERATE(disposition::receive, disposition::discard_claim, disposition::discard_peek);
+    enum class disposition { receive, truncate, empty, discard_claim, discard_peek };
+    const auto action = GENERATE(disposition::receive,
+                                 disposition::truncate,
+                                 disposition::empty,
+                                 disposition::discard_claim,
+                                 disposition::discard_peek);
     const auto provider = GENERATE("sockets", "tcp;ofi_rxm");
     const auto with_source = GENERATE(false, true);
     const auto with_data = GENERATE(false, true);
-    CAPTURE(provider, action, with_source, with_data);
+    const auto typed = GENERATE(false, true);
+    CAPTURE(provider, action, with_source, with_data, typed);
+    constexpr std::uint64_t sent_tag = 0xaa, match_tag = 0x2a, ignored_bits = 0x80;
     fabric_hints hints{};
     hints.provider_name = provider;
     hints.ep_type = endpoint_types::rdm;
@@ -466,8 +472,11 @@ TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe
     REQUIRE(send_mr);
     auto recv_mr = memory_region::register_memory(*dom, incoming, mr_access_flags::recv);
     REQUIRE(recv_mr);
-    const std::array send_iov{iovec{outgoing.data(), outgoing.size()}};
-    const std::array recv_iov{iovec{incoming.data(), incoming.size()}};
+    const auto sent_size = action == disposition::empty ? 0UZ : outgoing.size();
+    const auto received_size = action == disposition::truncate ? 4UZ : sent_size;
+    const auto received_buffer = std::span{incoming}.first(received_size);
+    const std::array send_iov{iovec{outgoing.data(), sent_size}};
+    const std::array recv_iov{iovec{incoming.data(), received_size}};
     const std::array send_desc{send_mr->descriptor()}, recv_desc{recv_mr->descriptor()};
     auto other_ep = endpoint::create(*dom, *info);
     REQUIRE(other_ep);
@@ -488,6 +497,12 @@ TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe
     auto peer = av->insert(*address);
     REQUIRE(peer);
     REQUIRE(peer->value != other_peer->value);
+
+    msg::tagged_claim reservation{*ep};
+    struct close_on_exit {
+        endpoint& ep;
+        ~close_on_exit() { (void)ep.close(); }
+    } close_guard{*ep};
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
     auto post = [&](auto submit) {
@@ -516,20 +531,27 @@ TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe
     auto peek = [&](fi_context2* context, msg::recv_flags flags) {
         post([&] {
             return msg::tagged_recvmsg(*ep,
-                                       msg::tagged_recv_message<>{.tag = 42, .context = context},
+                                       msg::tagged_recv_message<>{.tag = match_tag,
+                                                                  .ignore = ignored_bits,
+                                                                  .context = context},
                                        flags | msg::recv_flag::peek | msg::recv_flag::completion);
         });
         return completion(context);
     };
 
     REQUIRE(peek(&probe_context, msg::recv_flag::none).error == errc::no_message);
+    if (typed) {
+        post([&] { return reservation.probe(match_tag, ignored_bits); });
+        REQUIRE(reservation.observe(completion(reservation.context().get())) ==
+                msg::tagged_claim_result::no_match);
+    }
     post([&] {
         return msg::tagged_sendmsg(
             *ep,
             msg::tagged_send_message<>{.iov = send_iov,
                                        .desc = send_desc,
                                        .dest_addr = fabric_addr{peer->value},
-                                       .tag = 42,
+                                       .tag = sent_tag,
                                        .context = &send_context,
                                        .data = 73},
             msg::send_flag::completion |
@@ -542,8 +564,8 @@ TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe
         found = peek(&probe_context, msg::recv_flag::none);
     }
     REQUIRE_FALSE(found.has_error());
-    REQUIRE(found.tag == 42);
-    REQUIRE(found.bytes_transferred == outgoing.size());
+    REQUIRE(found.tag == sent_tag);
+    REQUIRE(found.bytes_transferred == sent_size);
     REQUIRE(found.has_immediate_data() == with_data);
     if (with_data) {
         REQUIRE(found.data == 73);
@@ -558,10 +580,18 @@ TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe
         REQUIRE_FALSE(
             peek(needs_context ? &probe_context : nullptr, msg::recv_flag::discard).has_error());
     } else {
-        const auto claimed = peek(&claim_context, msg::recv_flag::claim);
+        const auto claimed = [&] {
+            if (typed) {
+                post([&] { return reservation.probe(match_tag, ignored_bits); });
+                auto event = completion(reservation.context().get());
+                REQUIRE(reservation.observe(event) == msg::tagged_claim_result::reserved);
+                return event;
+            }
+            return peek(&claim_context, msg::recv_flag::claim);
+        }();
         REQUIRE_FALSE(claimed.has_error());
-        REQUIRE(claimed.tag == 42);
-        REQUIRE(claimed.bytes_transferred == outgoing.size());
+        REQUIRE(claimed.tag == sent_tag);
+        REQUIRE(claimed.bytes_transferred == sent_size);
         REQUIRE(claimed.has_immediate_data() == with_data);
         if (with_data) {
             REQUIRE(claimed.data == 73);
@@ -573,20 +603,41 @@ TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe
         REQUIRE(peek(&probe_context, msg::recv_flag::none).error == errc::no_message);
         post([&] {
             const auto discard = action == disposition::discard_claim;
+            if (typed) {
+                return discard ? reservation.discard()
+                               : reservation.receive(received_buffer, recv_mr->descriptor());
+            }
             return msg::tagged_recvmsg(
                 *ep,
                 msg::tagged_recv_message<>{.iov = discard ? std::span<const iovec>{} : recv_iov,
                                            .desc = discard ? std::span<const mr_descriptor>{}
                                                            : recv_desc,
-                                           .tag = 42,
+                                           .tag = match_tag,
+                                           .ignore = ignored_bits,
                                            .context = &claim_context},
                 msg::recv_flag::claim | msg::recv_flag::completion |
                     (discard ? msg::recv_flag::discard : msg::recv_flag::none));
         });
-        const auto consumed = completion(&claim_context);
-        REQUIRE_FALSE(consumed.has_error());
-        if (action == disposition::receive) {
-            REQUIRE(consumed.bytes_transferred == incoming.size());
+        const auto consumed = completion(typed ? reservation.context().get() : &claim_context);
+        if (action == disposition::truncate) {
+            REQUIRE(consumed.error == make_error_code_from_fi_errno(FI_ETRUNC));
+            if (typed) {
+                REQUIRE(reservation.observe(consumed).error() == consumed.error);
+            }
+        } else {
+            REQUIRE_FALSE(consumed.has_error());
+            if (typed) {
+                REQUIRE(reservation.observe(consumed) ==
+                        (action == disposition::discard_claim
+                             ? msg::tagged_claim_result::discarded
+                             : msg::tagged_claim_result::received));
+            }
+        }
+        if (typed) {
+            REQUIRE(reservation.state() == msg::tagged_claim_state::idle);
+        }
+        if (action != disposition::discard_claim && action != disposition::truncate) {
+            REQUIRE(consumed.bytes_transferred == received_size);
             REQUIRE(consumed.has_immediate_data() == with_data);
             if (with_data) {
                 REQUIRE(consumed.data == 73);
@@ -594,9 +645,11 @@ TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe
             if (with_source) {
                 REQUIRE(consumed.source.get() == peer->value);
             }
-            REQUIRE(incoming == outgoing);
-        } else {
-            REQUIRE(incoming == std::array<std::byte, 8>{});
+        }
+        for (std::size_t i = 0; i < incoming.size(); ++i) {
+            REQUIRE(incoming[i] == (action != disposition::discard_claim && i < received_size
+                                        ? outgoing[i]
+                                        : std::byte{}));
         }
     }
     REQUIRE(peek(&probe_context, msg::recv_flag::none).error == errc::no_message);

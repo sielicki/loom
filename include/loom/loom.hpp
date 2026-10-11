@@ -25,6 +25,7 @@
 #include "loom/core/rma.hpp"
 #include "loom/core/scalable_endpoint.hpp"
 #include "loom/core/shared_context.hpp"
+#include "loom/core/tagged_claim.hpp"
 #include "loom/core/trigger.hpp"
 #include "loom/core/types.hpp"
 #include "loom/fabric_query.hpp"

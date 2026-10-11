@@ -432,6 +432,7 @@ target_sources(loom PUBLIC
         include/loom/core/scalable_endpoint.hpp
         include/loom/core/shared_context.hpp
         include/loom/core/submission_context.hpp
+        include/loom/core/tagged_claim.hpp
         include/loom/core/trigger.hpp
         include/loom/core/types.hpp
 

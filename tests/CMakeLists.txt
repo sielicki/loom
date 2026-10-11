@@ -63,6 +63,7 @@ loom_add_test(test_mr_cache)
 loom_add_test(test_concepts)
 loom_add_test(test_rma)
 loom_add_test(test_messaging_vectors)
+loom_add_test(test_tagged_claim)
 loom_add_test(test_atomic)
 loom_add_test(test_atomic_peers)
 loom_add_test(test_collective)
@@ -112,6 +113,7 @@ add_executable(test_implementation
     test_atomic_peers.cpp
     test_rma.cpp
     test_messaging_vectors.cpp
+    test_tagged_claim.cpp
     test_address_transport.cpp
     test_collective_join.cpp
     test_collective_transfers.cpp

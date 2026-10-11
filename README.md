@@ -137,6 +137,29 @@ auto main() -> int {
 }
 ```
 
+### Tagged message reservations
+
+`msg::tagged_claim` keeps one native context stable from a matched probe
+through its receive or discard. Construct it with an enabled endpoint,
+then call `probe(tag, ignore, source)`. Route each CQ event matching
+`context()` to `observe()` exactly once. For a probe, `observe()` returns
+`no_match` or `reserved`; other completion errors remain errors. `completion()`
+retains the full event, including length, tag, source, immediate data and diagnostics.
+
+After `reserved`, submit `receive(buffer, descriptor)` or `discard()` and
+observe its terminal completion. Rejected submissions retain the reservation
+for retry. Duplicate or out-of-order submissions are rejected. These calls
+always request a completion and replace the endpoint's default operation flags.
+The receive buffer and registration remain borrowed until completion or
+successful endpoint close; requesting cancellation does not end that lifetime.
+
+The claim cannot be copied or moved. Its endpoint wrapper must outlive it
+and remain in place. Destroying an active claim terminates unless that endpoint
+has been successfully closed. There is no implicit discard or blocking wait.
+After closing the endpoint, `retire_after_close()` clears local state even when
+the provider discarded pending CQ entries. Do not access the claim concurrently.
+Serialize endpoint access and progress according to its threading requirements.
+
 ### Atomic Operations
 
 loom provides type-safe remote atomic operations with automatic datatype deduction:
