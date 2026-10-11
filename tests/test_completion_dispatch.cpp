@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <random>
 #include <thread>
 
 #include <catch2/catch_test_macros.hpp>
@@ -409,4 +410,116 @@ TEST_CASE("completion callback exceptions propagate after detachment", "[cq][dis
     // No lock or detached entry is left behind, and other work still completes.
     REQUIRE(fixture.queue.dispatch(completion(&other_context)));
     REQUIRE(receiver.calls == 1);
+}
+
+TEST_CASE("completion registry preserves ownership across mixed operations", "[cq][dispatch]") {
+    queue_fixture fixture;
+    constexpr std::size_t count = 193;
+    std::array<fi_context2, count> contexts{};
+    std::array<observer, count> receivers{};
+    std::array<loom::completion_registration, count> registrations;
+    std::array<bool, count> pending{};
+    std::array<int, count> completed{};
+    std::mt19937 random{1729};
+    for (int step = 0; step < 10000; ++step) {
+        const auto index = random() % count;
+        const auto action = random() % 5;
+        CAPTURE(step, index, action);
+        const auto context = loom::context_ptr<void>{&contexts[index]};
+        switch (action) {
+            case 0: {
+                const auto bound = registrations[index].bind(
+                    fixture.queue, context, &receivers[index], observer::complete);
+                CHECK(static_cast<bool>(bound) == !pending[index]);
+                if (pending[index])
+                    CHECK(bound.error() == loom::errc::busy);
+                pending[index] = true;
+                break;
+            }
+            case 1:
+                CHECK(fixture.queue.dispatch(completion(context.get())) == pending[index]);
+                completed[index] += pending[index];
+                pending[index] = false;
+                break;
+            case 2:
+                registrations[index].reset();
+                pending[index] = false;
+                break;
+            case 3: {
+                loom::completion_registration duplicate;
+                const auto bound =
+                    duplicate.bind(fixture.queue, context, &receivers[index], observer::complete);
+                CHECK(static_cast<bool>(bound) == !pending[index]);
+                if (pending[index])
+                    CHECK(bound.error() == loom::errc::address_in_use);
+                break;
+            }
+            default:
+                CHECK_FALSE(fixture.queue.dispatch(
+                    completion(reinterpret_cast<std::byte*>(&contexts[index]) + 1)));
+                break;
+        }
+        CHECK(receivers[index].calls == completed[index]);
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        CHECK(fixture.queue.dispatch(completion(&contexts[i])) == pending[i]);
+        completed[i] += pending[i];
+        CHECK(receivers[i].calls == completed[i]);
+    }
+}
+
+TEST_CASE("large completion registries detach without invoking callbacks", "[cq][dispatch]") {
+    constexpr std::size_t count = 4096;
+    std::array<fi_context2, count> contexts{};
+    std::array<loom::completion_registration, count> registrations;
+    observer receiver;
+    {
+        queue_fixture fixture;
+        for (std::size_t i = 0; i < count; ++i)
+            REQUIRE(registrations[i].bind(fixture.queue,
+                                          loom::context_ptr<void>{&contexts[i]},
+                                          &receiver,
+                                          observer::complete));
+        // Misses and interior removals must not lose still-owned entries.
+        CHECK_FALSE(fixture.queue.dispatch(completion(reinterpret_cast<void*>(1))));
+        for (std::size_t i = 1; i < count; i += 2)
+            registrations[i].reset();
+        CHECK_FALSE(fixture.queue.dispatch(completion(reinterpret_cast<void*>(-1))));
+    }
+    CHECK(receiver.calls == 0);
+    queue_fixture replacement;
+    for (std::size_t i = 0; i < count; ++i)
+        REQUIRE(registrations[i].bind(replacement.queue,
+                                      loom::context_ptr<void>{&contexts[i]},
+                                      &receiver,
+                                      observer::complete));
+    for (std::size_t i = count; i > 0; --i)
+        REQUIRE(replacement.queue.dispatch(completion(&contexts[i - 1])));
+    CHECK(receiver.calls == count);
+}
+
+TEST_CASE("completion callback can immediately reuse its registration and context",
+          "[cq][dispatch]") {
+    queue_fixture fixture;
+    struct state {
+        loom::completion_queue* queue;
+        loom::completion_registration registration;
+        fi_context2 context{};
+        int calls{};
+        bool rebound{};
+        static void complete(void* object, const loom::completion_event&) {
+            auto& self = *static_cast<state*>(object);
+            if (++self.calls == 1)
+                self.rebound = static_cast<bool>(self.registration.bind(
+                    *self.queue, loom::context_ptr<void>{&self.context}, &self, complete));
+        }
+    } receiver{&fixture.queue};
+    REQUIRE(receiver.registration.bind(
+        fixture.queue, loom::context_ptr<void>{&receiver.context}, &receiver, state::complete));
+    REQUIRE(fixture.queue.dispatch(completion(&receiver.context)));
+    CHECK(receiver.calls == 1);
+    REQUIRE(receiver.rebound);
+    REQUIRE(fixture.queue.dispatch(completion(&receiver.context)));
+    CHECK(receiver.calls == 2);
+    CHECK_FALSE(fixture.queue.dispatch(completion(&receiver.context)));
 }

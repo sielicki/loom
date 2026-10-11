@@ -153,6 +153,7 @@ class endpoint;
 /// cancel native work. Do not race reset/destruction with dispatch of this entry.
 /// Separate entries may be registered and dispatched concurrently, subject to
 /// the provider's threading contract. Registration and dispatch do not allocate.
+/// Context lookup has amortized logarithmic cost in the outstanding registrations.
 class completion_registration {
 public:
     using callback = void (*)(void*, const completion_event&);
@@ -185,8 +186,8 @@ private:
                                callback complete) noexcept -> void_result;
     void unlink() noexcept;
     detail::completion_queue_impl* owner_{};
-    completion_registration* previous_{};
-    completion_registration* next_{};
+    completion_registration* left_{};
+    completion_registration* right_{};
     void* context_{};
     void* object_{};
     callback complete_{};

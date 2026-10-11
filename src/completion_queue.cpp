@@ -79,35 +79,43 @@ auto completion_registration::bind_to(detail::completion_queue_impl& owner,
         return make_error_result<void>(errc::busy);
     }
     const std::lock_guard lock{owner.registrations_mutex};
-    for (auto* entry = owner.registrations; entry; entry = entry->next_) {
-        if (entry->context_ == context.get()) {
-            return make_error_result<void>(errc::address_in_use);
-        }
-    }
+    auto* root = owner.splay_registration(context.get());
+    if (root && root->context_ == context.get())
+        return make_error_result<void>(errc::address_in_use);
     owner_ = &owner;
     context_ = context.get();
     object_ = object;
     complete_ = complete;
-    next_ = owner.registrations;
-    if (next_) {
-        next_->previous_ = this;
+    if (root) {
+        if (std::less<void*>{}(context_, root->context_)) {
+            left_ = root->left_;
+            right_ = root;
+            root->left_ = nullptr;
+        } else {
+            left_ = root;
+            right_ = root->right_;
+            root->right_ = nullptr;
+        }
     }
     owner.registrations = this;
     return make_success();
 }
 
 void completion_registration::unlink() noexcept {
-    if (previous_) {
-        previous_->next_ = next_;
+    if (owner_->registrations != this)
+        owner_->splay_registration(context_);
+    if (left_) {
+        owner_->registrations = left_;
+        // The removed key is greater than every key in the left subtree.
+        // Its last visited node is that subtree's maximum, with no right child.
+        auto* root = owner_->splay_registration(context_);
+        root->right_ = right_;
     } else {
-        owner_->registrations = next_;
-    }
-    if (next_) {
-        next_->previous_ = previous_;
+        owner_->registrations = right_;
     }
     owner_ = nullptr;
-    previous_ = nullptr;
-    next_ = nullptr;
+    left_ = nullptr;
+    right_ = nullptr;
     context_ = nullptr;
     object_ = nullptr;
     complete_ = nullptr;
@@ -128,13 +136,11 @@ auto completion_queue::dispatch(const completion_event& event) const -> bool {
     void* object{};
     {
         const std::lock_guard lock{impl_->registrations_mutex};
-        for (auto* entry = impl_->registrations; entry; entry = entry->next_) {
-            if (entry->context_ == event.context.get()) {
-                complete = entry->complete_;
-                object = entry->object_;
-                entry->unlink();
-                break;
-            }
+        auto* entry = impl_->splay_registration(event.context.get());
+        if (entry && entry->context_ == event.context.get()) {
+            complete = entry->complete_;
+            object = entry->object_;
+            entry->unlink();
         }
     }
     if (!complete) {

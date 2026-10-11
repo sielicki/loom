@@ -1022,6 +1022,10 @@ can call `cq.dispatch(event)` to deliver an event to its registered operation;
 its context storage can be reused. Native poll, batch and wait methods do not
 invoke receivers implicitly. Dispatch unlinks the registration before invoking
 the receiver, allowing it to destroy the completed state or submit more work.
+The completion registry uses an intrusive splay tree: registration, lookup,
+and reset have amortized logarithmic cost, allocate no storage, and compare
+context pointer values without dereferencing them. A single operation can
+still traverse a linear number of entries; queue locking serializes tree changes.
 Keep operation states, buffers and their queue alive until delivery. A queue
 error without an operation context does not authorize freeing pending states.
 When using `sync_wait`, progress must run on another thread, with a provider
