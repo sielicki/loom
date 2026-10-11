@@ -20,6 +20,7 @@
 #include "loom/core/error.hpp"
 #include "loom/core/event_queue.hpp"
 #include "loom/core/fabric.hpp"
+#include "loom/core/rma.hpp"
 #include "loom/core/shared_context.hpp"
 #include "loom/detail/conversions.hpp"
 #include "loom/detail/impl/completion_queue_impl.hpp"
@@ -517,27 +518,12 @@ auto endpoint::read(std::span<std::byte> local_buffer,
                     rma_addr remote_addr,
                     mr_key key,
                     context_ptr<void> ctx) -> void_result {
-    if (!impl_ || !impl_->ep) {
-        return make_error_result<void>(errc::invalid_argument);
-    }
-    if (!FI_CHECK_OP(impl_->ep->rma, fi_ops_rma, read)) {
-        return make_error_result<void>(errc::not_supported);
-    }
-
-    ssize_t ret = ::fi_read(impl_->ep,
-                            local_buffer.data(),
-                            local_buffer.size(),
-                            nullptr,
-                            FI_ADDR_UNSPEC,
-                            static_cast<std::uint64_t>(remote_addr),
-                            static_cast<std::uint64_t>(key),
-                            ctx.get());
-
-    if (ret < 0) {
-        return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
-    }
-
-    return make_success();
+    return rma::read_to(*this,
+                        local_buffer,
+                        mr_descriptor{},
+                        fabric_addrs::unspecified,
+                        remote_memory{remote_addr.get(), key.get(), local_buffer.size()},
+                        ctx.get());
 }
 
 auto endpoint::write(std::span<const std::byte> local_buffer,

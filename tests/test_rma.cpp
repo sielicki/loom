@@ -405,3 +405,85 @@ TEST_CASE("RMA flags preserve explicit overrides and inherited defaults", "[rma]
         REQUIRE(local == target);
     }
 }
+
+TEST_CASE("RMA reads reject explicit write-only flags", "[rma][flags]") {
+    const auto flag =
+        GENERATE(op_flag::inject, op_flag::transmit_complete, op_flag::delivery_complete);
+    const auto vector = GENERATE(false, true);
+    rma_provider native;
+    native.status = -FI_EAGAIN;
+    auto ep = native.endpoint();
+    std::array<std::byte, 8> local{};
+    const remote_memory remote{0x1000, 7, local.size()};
+    const std::array iov{iovec{local.data(), local.size()}};
+    const std::array remote_iov{rma::rma_iov{remote}};
+    const auto flags = flag | op_flag::completion;
+    const auto result =
+        vector ? rma::readv_to(ep, iov, {}, fabric_addr{19}, remote_iov, flags)
+               : rma::read_to(ep, local, mr_descriptor{}, fabric_addr{19}, remote, flags);
+    REQUIRE_FALSE(result);
+    CHECK(result.error() == errc::invalid_argument);
+    CHECK(native.calls == 0);
+}
+
+TEST_CASE("RMA reads filter write-only defaults", "[rma][flags]") {
+    const auto write_flag = GENERATE(FI_REMOTE_CQ_DATA,
+                                     FI_INJECT,
+                                     FI_INJECT_COMPLETE,
+                                     FI_TRANSMIT_COMPLETE,
+                                     FI_DELIVERY_COMPLETE,
+                                     FI_COMMIT_COMPLETE);
+    const auto defaults = GENERATE(operation_defaults::replace,
+                                   operation_defaults::inherit,
+                                   operation_defaults::inherit_without_more);
+    const auto vector = GENERATE(false, true);
+    rma_provider native;
+    native.status = -FI_EAGAIN;
+    native.defaults = FI_FENCE | FI_MORE | write_flag;
+    auto ep = native.endpoint();
+    std::array<std::byte, 8> local{};
+    const remote_memory remote{0x1000, 7, local.size()};
+    const std::array iov{iovec{local.data(), local.size()}};
+    const std::array remote_iov{rma::rma_iov{remote}};
+    const auto submit = [&]<operation_defaults Defaults>() {
+        return vector
+                   ? rma::readv_to<Defaults>(
+                         ep, iov, {}, fabric_addr{19}, remote_iov, op_flag::completion)
+                   : rma::read_to<Defaults>(
+                         ep, local, mr_descriptor{}, fabric_addr{19}, remote, op_flag::completion);
+    };
+    const auto result = [&] {
+        switch (defaults) {
+            case operation_defaults::replace:
+                return submit.template operator()<operation_defaults::replace>();
+            case operation_defaults::inherit:
+                return submit.template operator()<operation_defaults::inherit>();
+            case operation_defaults::inherit_without_more:
+                return submit.template operator()<operation_defaults::inherit_without_more>();
+        }
+        std::unreachable();
+    }();
+    REQUIRE_FALSE(result);
+    CHECK(result.error() == errc::again);
+    CHECK(native.calls == 1);
+    CHECK(native.flags ==
+          (FI_COMPLETION | (defaults == operation_defaults::replace ? 0 : FI_FENCE) |
+           (defaults == operation_defaults::inherit ? FI_MORE : 0)));
+
+    test::mock_domain domain;
+    auto mr = memory_region::register_memory(
+                  domain.dom, local, mr_access_flags::read | mr_access_flags::write)
+                  .value();
+    const auto check = [&](const auto& result) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == errc::again);
+        CHECK(native.flags == (FI_FENCE | FI_MORE));
+    };
+    check(rma::read(ep, local, mr, remote));
+    check(rma::read_to(ep, local, mr, fabric_addr{19}, remote));
+    check(ep.read(local, rma_addr{remote.addr}, mr_key{remote.key}));
+    CHECK(native.calls == 4);
+    native.rma_ops.readmsg = nullptr;
+    CHECK(rma::read_to(ep, local, mr, fabric_addr{19}, remote).error() == errc::not_supported);
+    CHECK(native.calls == 4);
+}

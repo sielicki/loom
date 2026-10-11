@@ -793,6 +793,7 @@ impl Endpoint {
 
     /// Submit a registered RMA read to an explicit peer, requesting a CQ completion.
     /// Local and remote bounds and registration-domain identity are checked.
+    /// Reads require `RmaCompletion::Local`; write-only completion options are rejected.
     ///
     /// # Safety
     ///
@@ -824,6 +825,7 @@ impl Endpoint {
     /// Submit a registered RMA read without constructing a host reference.
     /// Local and remote bounds and registration-domain identity are checked
     /// before submission, including for pointers into device memory.
+    /// Reads require `RmaCompletion::Local`; write-only completion options are rejected.
     ///
     /// # Safety
     ///

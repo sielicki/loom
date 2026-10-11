@@ -186,6 +186,36 @@ fn registered_transfers(provider: &str) {
         assert_eq!(byte, if (43..160).contains(&index) { 0x5a } else { 0 });
     }
 
+    for completion in [RmaCompletion::Transmit, RmaCompletion::Delivery] {
+        let options = RmaOptions {
+            completion,
+            fence: true,
+        };
+        for raw in [false, true] {
+            let result = unsafe {
+                if raw {
+                    sender.endpoint.read_raw(
+                        source.as_mut_ptr(),
+                        8,
+                        &sender.region,
+                        first_target,
+                        options,
+                        invalid.address(),
+                    )
+                } else {
+                    sender.endpoint.read(
+                        &mut source[..8],
+                        &sender.region,
+                        first_target,
+                        options,
+                        invalid.address(),
+                    )
+                }
+            };
+            assert!(matches!(result, Err(Error::Submission { code: -22 })));
+        }
+    }
+
     let mut outside = [1; 8];
     assert!(matches!(
         unsafe {

@@ -716,12 +716,11 @@ TEST_CASE("senders complete without a later batch submission", "[execution][prog
     native.selective_completion = true;
     std::array<std::byte, 16> storage{};
     completion_state state;
-    auto run = [&](auto sender, bool receive = false) {
+    auto run = [&](auto sender, std::uint64_t expected = FI_FENCE | FI_DELIVERY_COMPLETE) {
         auto operation = loom::execution::connect(std::move(sender), receiver{&state});
         loom::execution::start(operation);
         REQUIRE(state.calls == 0);
-        CHECK(native.submitted_flags ==
-              (FI_COMPLETION | (receive ? 0 : FI_FENCE | FI_DELIVERY_COMPLETE)));
+        CHECK(native.submitted_flags == (FI_COMPLETION | expected));
         CHECK(loom::execution::poll_completions(native.cq).value().completed == 1);
         CHECK(state.calls == 1);
         // Retire a deferred pre-fix operation before its storage goes away.
@@ -740,16 +739,16 @@ TEST_CASE("senders complete without a later batch submission", "[execution][prog
         run(messages.send(storage, &native.cq));
     }
     SECTION("receive") {
-        run(messages.recv(storage, &native.cq), true);
+        run(messages.recv(storage, &native.cq), 0);
     }
     SECTION("tagged send") {
         run(messages.tagged_send(storage, 42, &native.cq));
     }
     SECTION("tagged receive") {
-        run(messages.tagged_recv(storage, 42, 0x80, &native.cq), true);
+        run(messages.tagged_recv(storage, 42, 0x80, &native.cq), 0);
     }
     SECTION("read") {
-        run(rma.read(storage, loom::rma_addr{0x1000}, loom::mr_key{1}, &native.cq));
+        run(rma.read(storage, loom::rma_addr{0x1000}, loom::mr_key{1}, &native.cq), FI_FENCE);
     }
     SECTION("write") {
         run(rma.write(storage, loom::rma_addr{0x1000}, loom::mr_key{1}, &native.cq));
@@ -825,7 +824,7 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
     const auto range =
         GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
     const bool invalid_remote = range != remote_range::valid;
-    provider fabric;
+    provider fabric{FI_MORE, FI_FENCE | FI_MORE | FI_DELIVERY_COMPLETE};
     fabric.selective_completion = GENERATE(false, true);
     CAPTURE(fabric.selective_completion);
     fabric.submission_status = status;
@@ -847,7 +846,8 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
             REQUIRE(state.error == loom::errc::invalid_argument);
             REQUIRE(fabric.submitted_bytes == 0);
         } else {
-            REQUIRE(fabric.submitted_flags == (FI_COMPLETION | FI_FENCE));
+            REQUIRE(fabric.submitted_flags ==
+                    (FI_COMPLETION | FI_FENCE | (write ? FI_DELIVERY_COMPLETE : 0)));
             REQUIRE(fabric.submitted_bytes == storage.size());
             REQUIRE(fabric.peer == peer.get());
             REQUIRE(fabric.local_descriptor == &native_mr);
@@ -886,7 +886,7 @@ TEST_CASE("RMA senders complete sockets transfers with selective completion",
         SKIP("Sockets provider unavailable");
     auto* native_info = static_cast<fi_info*>(info->internal_ptr());
     // The frontend must add FI_COMPLETION without losing delivery semantics.
-    native_info->tx_attr->op_flags = write ? FI_DELIVERY_COMPLETE : 0;
+    native_info->tx_attr->op_flags = FI_DELIVERY_COMPLETE;
     auto fab = fabric::create(*info);
     REQUIRE(fab);
     auto dom = domain::create(*fab, *info);

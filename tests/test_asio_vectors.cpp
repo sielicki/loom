@@ -215,7 +215,10 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     vector_provider native;
     native.submission_status = status;
     ::asio::io_context ioc;
-    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    loom::asio::endpoint ep{ioc.get_executor(),
+                            native.endpoint(loom::cq_bind::transmit | loom::cq_bind::recv,
+                                            FI_MORE,
+                                            FI_FENCE | FI_MORE | FI_DELIVERY_COMPLETE)};
     std::array<std::byte, 8> storage{};
     fid_mr handle{.fid = {.ops = &native.ops}, .mem_desc = null_descriptor ? nullptr : &handle};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
@@ -261,7 +264,8 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     }
     REQUIRE(completed == 0);
     if (!invalid_remote) {
-        CHECK(native.submission_flags == (FI_COMPLETION | FI_FENCE));
+        CHECK(native.submission_flags ==
+              (FI_COMPLETION | FI_FENCE | (read ? 0 : FI_DELIVERY_COMPLETE)));
         REQUIRE(native.peer == peer.get());
         REQUIRE(native.remote_address == remote.addr);
         REQUIRE(native.remote_key == remote.key);
@@ -371,8 +375,8 @@ TEST_CASE("Asio operations register and complete without later submissions",
     const_buffers = {};
     REQUIRE(completions == 0);
     if (bound) {
-        CHECK(native.submission_flags ==
-              (FI_COMPLETION | (receive ? 0 : FI_FENCE | FI_DELIVERY_COMPLETE)));
+        CHECK(native.submission_flags == (FI_COMPLETION | (receive ? 0 : FI_FENCE) |
+                                          (!receive && operation != 5 ? FI_DELIVERY_COMPLETE : 0)));
     }
     if (bound && operation < 4) {
         CHECK(native.descriptors.empty());

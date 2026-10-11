@@ -267,9 +267,9 @@ pub mod ffi {
     pub enum RmaCompletion {
         /// Ordinary local completion permits reuse of the local buffer.
         Local,
-        /// Request FI_TRANSMIT_COMPLETE in addition to a CQ completion.
+        /// Writes only: request FI_TRANSMIT_COMPLETE and a CQ completion.
         Transmit,
-        /// Request FI_DELIVERY_COMPLETE in addition to a CQ completion.
+        /// Writes only: request FI_DELIVERY_COMPLETE and a CQ completion.
         Delivery,
     }
 
