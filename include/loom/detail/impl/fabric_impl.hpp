@@ -135,6 +135,8 @@ auto fabric_info::get_domain_attr() const -> std::optional<domain_attributes> {
         .memory_region_mode = detail::from_fi_mr_mode(attr->mr_mode),
         .max_ep_tx_ctx = attr->max_ep_tx_ctx,
         .max_ep_rx_ctx = attr->max_ep_rx_ctx,
+        .max_counter_value = detail::from_fi_counter_limit(attr->max_cntr_value),
+        .max_error_counter_value = detail::from_fi_counter_limit(attr->max_err_cntr_value),
     };
 }
 

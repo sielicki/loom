@@ -30,6 +30,8 @@ struct domain_impl {
     int mr_mode{};
     std::shared_ptr<mr_key_pool> mr_keys;
     std::size_t max_error_data{};  ///< Negotiated maximum CQ/EQ diagnostic size.
+    std::uint64_t max_counter_value{std::numeric_limits<std::uint64_t>::max()};
+    std::uint64_t max_error_counter_value{std::numeric_limits<std::uint64_t>::max()};
 
     /// @brief Default constructor.
     domain_impl() = default;
@@ -135,6 +137,10 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
                                                                  key_bytes,
                                                                  resource);
         impl->max_error_data = info_ptr->domain_attr ? info_ptr->domain_attr->max_err_data : 0;
+        impl->max_counter_value = detail::from_fi_counter_limit(
+            info_ptr->domain_attr ? info_ptr->domain_attr->max_cntr_value : 0);
+        impl->max_error_counter_value = detail::from_fi_counter_limit(
+            info_ptr->domain_attr ? info_ptr->domain_attr->max_err_cntr_value : 0);
         (void)pending.release();
         return domain{std::move(impl)};
     }
@@ -151,6 +157,10 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
                                                              key_bytes,
                                                              default_resource);
     impl->max_error_data = info_ptr->domain_attr ? info_ptr->domain_attr->max_err_data : 0;
+    impl->max_counter_value = detail::from_fi_counter_limit(
+        info_ptr->domain_attr ? info_ptr->domain_attr->max_cntr_value : 0);
+    impl->max_error_counter_value = detail::from_fi_counter_limit(
+        info_ptr->domain_attr ? info_ptr->domain_attr->max_err_cntr_value : 0);
     (void)pending.release();
     return domain{std::move(impl)};
 }

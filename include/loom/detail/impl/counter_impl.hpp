@@ -11,6 +11,7 @@
 #include "loom/core/allocator.hpp"
 #include "loom/core/counter.hpp"
 #include "loom/core/error.hpp"
+#include "loom/detail/impl/domain_impl.hpp"
 
 namespace loom::detail {
 
@@ -19,6 +20,8 @@ struct counter_impl {
     ::fid_cntr* cntr{nullptr};  ///< Underlying libfabric counter handle.
     std::uint64_t threshold{1};  ///< Configured threshold for waits and checks.
     bool wait_enabled{false};    ///< Whether creation requested a native wait object.
+    std::uint64_t max_value{std::numeric_limits<std::uint64_t>::max()};
+    std::uint64_t max_error_value{std::numeric_limits<std::uint64_t>::max()};
 
     /// @brief Default constructor.
     counter_impl() = default;
@@ -63,7 +66,8 @@ auto counter::impl_valid() const noexcept -> bool {
 
 auto counter::create(const domain& dom, const counter_attr& attr, memory_resource* resource)
     -> result<counter> {
-    if (!dom) {
+    if (!dom || attr.initial > dom.impl_->max_counter_value ||
+        attr.threshold > dom.impl_->max_counter_value) {
         return make_error_result<counter>(errc::invalid_argument);
     }
 
@@ -95,6 +99,8 @@ auto counter::create(const domain& dom, const counter_attr& attr, memory_resourc
 
     auto impl = detail::make_pmr_unique<detail::counter_impl>(
         resource ? resource : get_default_resource(), cntr, attr.threshold, attr.wait_obj);
+    impl->max_value = dom.impl_->max_counter_value;
+    impl->max_error_value = dom.impl_->max_error_counter_value;
     (void)pending.release();
     return counter{std::move(impl)};
 }
@@ -108,8 +114,16 @@ auto counter::read() const -> result<std::uint64_t> {
     return value;
 }
 
+auto counter::max_value() const noexcept -> std::uint64_t {
+    return impl_ && impl_->cntr ? impl_->max_value : 0;
+}
+
+auto counter::max_error_value() const noexcept -> std::uint64_t {
+    return impl_ && impl_->cntr ? impl_->max_error_value : 0;
+}
+
 auto counter::set(std::uint64_t value) -> void_result {
-    if (!impl_ || !impl_->cntr) {
+    if (!impl_ || !impl_->cntr || value > impl_->max_value) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
@@ -122,7 +136,7 @@ auto counter::set(std::uint64_t value) -> void_result {
 }
 
 auto counter::add(std::uint64_t value) -> void_result {
-    if (!impl_ || !impl_->cntr) {
+    if (!impl_ || !impl_->cntr || value > impl_->max_value) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
@@ -140,7 +154,7 @@ auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> void_res
 
 auto counter::wait_until(std::uint64_t threshold, std::optional<std::chrono::milliseconds> timeout)
     -> void_result {
-    if (!impl_ || !impl_->cntr || !impl_->wait_enabled) {
+    if (!impl_ || !impl_->cntr || !impl_->wait_enabled || threshold > impl_->max_value) {
         return make_error_result<void>(errc::invalid_argument);
     }
 

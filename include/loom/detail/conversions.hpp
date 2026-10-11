@@ -9,6 +9,8 @@
 
 #include <rdma/fabric.h>
 
+#include <limits>
+
 #include "loom/core/address.hpp"
 #include "loom/core/endpoint_types.hpp"
 #include "loom/core/types.hpp"
@@ -18,6 +20,10 @@
  * @brief Internal conversion utilities between loom types and libfabric types.
  */
 namespace loom::detail {
+
+[[nodiscard]] constexpr auto from_fi_counter_limit(std::uint64_t limit) noexcept -> std::uint64_t {
+    return limit ? limit : std::numeric_limits<std::uint64_t>::max();
+}
 
 /// Translate memory permissions independently of loom's public bit layout.
 [[nodiscard]] constexpr auto to_fi_mr_access(mr_access access) noexcept -> std::uint64_t {

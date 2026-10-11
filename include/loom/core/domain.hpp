@@ -112,6 +112,7 @@ private:
     impl_ptr impl_;
     friend class endpoint;
     friend class completion_queue;
+    friend class counter;
     friend class event_queue;
     friend class memory_region;
 };

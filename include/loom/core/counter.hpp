@@ -97,10 +97,17 @@ public:
 
     [[nodiscard]] auto read() const -> result<std::uint64_t>;
 
+    /// Negotiated maximum completion count, or zero for an empty counter.
+    [[nodiscard]] auto max_value() const noexcept -> std::uint64_t;
+    /// Negotiated maximum error count, or zero for an empty counter.
+    [[nodiscard]] auto max_error_value() const noexcept -> std::uint64_t;
+
     /// Replace a stable counter value after all previous updates are visible
     /// and no further updates can occur until this call completes.
     auto set(std::uint64_t value) -> void_result;
 
+    /// Add at most max_value(). The caller must ensure that this addition and
+    /// concurrent completions cannot carry the total beyond the provider limit.
     auto add(std::uint64_t value) -> void_result;
 
     /// Wait for the configured threshold. Requires counter_attr::wait_obj.
@@ -111,7 +118,7 @@ public:
 
     /// Wait for a cumulative completion count without modifying the counter.
     /// Successive targets may be used while operations continue completing.
-    /// The target must fit the provider's counter limit. Uses the same wait
+    /// Targets above max_value() are rejected. Uses the same wait
     /// object and timeout requirements as wait().
     [[nodiscard]] auto wait_until(std::uint64_t threshold,
                                   std::optional<std::chrono::milliseconds> timeout = std::nullopt)

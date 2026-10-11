@@ -309,3 +309,20 @@ TEST_CASE("negotiated memory registration requirements survive discovery",
     CHECK(loom::detail::to_fi_mr_mode(flag) == required);
     CHECK(loom::detail::to_fi_mr_mode(attributes->memory_region_mode) == domain.mr_mode);
 }
+
+TEST_CASE("domain attributes preserve independent counter limits", "[fabric][attributes][limits]") {
+    constexpr auto full_range = std::numeric_limits<std::uint64_t>::max();
+    const auto maximum =
+        GENERATE_COPY(std::uint64_t{0}, std::uint64_t{7}, full_range - 1, full_range);
+    const auto errors = GENERATE_COPY(std::uint64_t{0}, std::uint64_t{3}, full_range);
+    fi_domain_attr domain{};
+    domain.max_cntr_value = maximum;
+    domain.max_err_cntr_value = errors;
+    fi_info native{};
+    native.domain_attr = &domain;
+    const auto info = wrap(native);
+    const auto attributes = info.get_domain_attr();
+    REQUIRE(attributes);
+    REQUIRE(attributes->max_counter_value == (maximum ? maximum : full_range));
+    REQUIRE(attributes->max_error_counter_value == (errors ? errors : full_range));
+}

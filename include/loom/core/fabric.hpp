@@ -2,6 +2,7 @@
 #pragma once
 
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -67,6 +68,9 @@ struct domain_attributes {
     mr_mode memory_region_mode{0ULL};                            ///< Memory region mode flags
     std::size_t max_ep_tx_ctx{0};  ///< Maximum TX contexts per endpoint
     std::size_t max_ep_rx_ctx{0};  ///< Maximum RX contexts per endpoint
+    /// Negotiated counter limits; unspecified native limits mean the full range.
+    std::uint64_t max_counter_value{std::numeric_limits<std::uint64_t>::max()};
+    std::uint64_t max_error_counter_value{std::numeric_limits<std::uint64_t>::max()};
 };
 
 /**
