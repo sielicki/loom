@@ -30,6 +30,7 @@ enum class errc {
     busy = -FI_EBUSY,                           ///< Device or resource busy
     canceled = -FI_ECANCELED,                   ///< Operation canceled
     no_memory = -FI_ENOMEM,                     ///< Out of memory
+    other = -FI_EOTHER,                         ///< Native operation failed without an error code
     already = -FI_EALREADY,                     ///< Connection already in progress
     bad_flags = -FI_EBADFLAGS,                  ///< Invalid flags specified
     no_entry = -FI_ENOENT,                      ///< No such entry

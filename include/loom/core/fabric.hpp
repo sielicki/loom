@@ -16,6 +16,8 @@
 #include "loom/core/result.hpp"
 #include "loom/core/types.hpp"
 
+struct fi_info;
+
 /**
  * @namespace loom
  * @brief Core namespace for the loom libfabric bindings library.
@@ -128,6 +130,18 @@ public:
      */
     fabric_info(fabric_info&&) noexcept;
     auto operator=(fabric_info&&) noexcept -> fabric_info&;
+
+    /// Own a copy of one native discovery entry, excluding its next chain.
+    /// Uses fi_dupinfo to preserve attributes, addresses, keys, and NIC metadata.
+    /// The input must satisfy libfabric's fi_dupinfo contract. Referenced fabric,
+    /// domain, and context handles remain borrowed; copying does not extend their
+    /// lifetimes or validate that the returned configuration is usable.
+    /// Native failure returns errc::other because fi_dupinfo supplies no status.
+    /// The memory resource owns Loom's wrapper and must outlive the result;
+    /// native storage uses libfabric's allocator. PMR allocation errors propagate.
+    [[nodiscard]] static auto copy_native(const ::fi_info& info,
+                                          memory_resource* resource = nullptr)
+        -> result<fabric_info>;
 
     [[nodiscard]] auto get_fabric_attr() const -> std::optional<fabric_attributes>;
     [[nodiscard]] auto get_domain_attr() const -> std::optional<domain_attributes>;

@@ -59,6 +59,7 @@ loom_add_test(test_types)
 loom_add_test(test_error)
 loom_add_test(test_memory)
 loom_add_test(test_resource_allocations)
+loom_add_test(test_fabric_import)
 loom_add_test(test_mr_cache)
 loom_add_test(test_concepts)
 loom_add_test(test_rma)
@@ -130,6 +131,7 @@ add_executable(test_implementation
     test_trigger_transport.cpp
     test_fabric_iteration.cpp
     test_fabric_attributes.cpp
+    test_fabric_import.cpp
 )
 target_link_libraries(test_implementation PRIVATE
     loom_test_implementation

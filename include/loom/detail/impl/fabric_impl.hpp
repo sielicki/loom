@@ -95,6 +95,18 @@ fabric_info::fabric_info(fabric_info&&) noexcept = default;
 
 auto fabric_info::operator=(fabric_info&&) noexcept -> fabric_info& = default;
 
+auto fabric_info::copy_native(const ::fi_info& info, memory_resource* resource)
+    -> result<fabric_info> {
+    std::unique_ptr<::fi_info, decltype(&::fi_freeinfo)> copy{::fi_dupinfo(&info), &::fi_freeinfo};
+    if (!copy) {
+        return make_error_result<fabric_info>(errc::other);
+    }
+    auto* memory = resource ? resource : get_default_resource();
+    auto impl = detail::make_pmr_unique<detail::fabric_info_impl>(memory, copy.get());
+    (void)copy.release();
+    return fabric_info{std::move(impl)};
+}
+
 auto fabric_info::impl_valid() const noexcept -> bool {
     return impl_ && impl_->info != nullptr;
 }

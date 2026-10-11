@@ -137,6 +137,19 @@ auto main() -> int {
 }
 ```
 
+### Native discovery handoff
+
+`fabric_info::copy_native(native_info)` owns a copy of one selected libfabric
+discovery entry. It preserves native attributes, addresses, authentication
+keys, and NIC metadata without repeating discovery. The input's `next` chain
+is excluded. Referenced fabric, domain, and context handles remain borrowed;
+the copy does not extend their lifetimes or establish a checked endpoint contract.
+An optional memory resource allocates Loom's wrapper; libfabric allocates the
+native copy. Native duplication failures return `errc::other`, since
+`fi_dupinfo` returns no error code. PMR allocation exceptions propagate after
+releasing the native copy. The pinned libfabric also fixes failure cleanup
+that otherwise closes the source NIC when duplication fails.
+
 ### Tagged message reservations
 
 `msg::tagged_claim` keeps one native context stable from a matched probe
