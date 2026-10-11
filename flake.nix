@@ -82,6 +82,7 @@
           }).overrideAttrs (old: {
             patches = (old.patches or [ ]) ++ [
               ./nix/pkgs/libfabric/name-server-cleanup.patch
+              ./nix/pkgs/libfabric/psm3-endpoint-cleanup.patch
             ];
             doCheck = !isDarwin && pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
             checkPhase = ''
