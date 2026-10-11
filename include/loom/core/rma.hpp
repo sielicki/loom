@@ -16,12 +16,27 @@
 #include "loom/core/memory.hpp"
 #include "loom/core/result.hpp"
 #include "loom/core/types.hpp"
+#include "loom/detail/conversions.hpp"
 
 /**
  * @namespace loom::rma
  * @brief Remote Memory Access (RMA) operations.
  */
 namespace loom::rma {
+
+namespace detail {
+template <operation_defaults Defaults>
+[[nodiscard]] inline auto operation_flags(const endpoint& ep, op_flags flags) noexcept
+    -> std::uint64_t {
+    static_assert(Defaults == operation_defaults::replace ||
+                  Defaults == operation_defaults::inherit);
+    auto native = loom::detail::to_fi_op_flags(flags);
+    if constexpr (Defaults == operation_defaults::inherit) {
+        native |= ep.impl_operation_flags(completion_direction::transmit);
+    }
+    return native;
+}
+}  // namespace detail
 
 /**
  * @struct rma_iov
@@ -105,15 +120,17 @@ auto read(endpoint& ep,
  * @param desc Memory region descriptors for local buffers.
  * @param dest_addr Destination peer (ignored by connected endpoints).
  * @param remote_iov Remote I/O vectors specifying source.
+ * @param flags Per-call modifiers; Defaults selects replacement or inheritance.
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <context_like Ctx = void*>
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
 auto readv_to(endpoint& ep,
               std::span<const iovec> local_iov,
               std::span<const mr_descriptor> desc,
               fabric_addr dest_addr,
               std::span<const rma_iov> remote_iov,
+              op_flags flags,
               Ctx context = {}) -> result<void> {
     if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
@@ -147,13 +164,23 @@ auto readv_to(endpoint& ep,
         .rma_iov_count = raw_remote.size(),
         .context = to_raw_context(context),
     };
-    const auto ret = ::fi_readmsg(fid_ep, &message, 0);
+    const auto ret = ::fi_readmsg(fid_ep, &message, detail::operation_flags<Defaults>(ep, flags));
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
     }
 
     return make_success();
+}
+
+template <context_like Ctx = void*>
+auto readv_to(endpoint& ep,
+              std::span<const iovec> local_iov,
+              std::span<const mr_descriptor> desc,
+              fabric_addr dest_addr,
+              std::span<const rma_iov> remote_iov,
+              Ctx context = {}) -> result<void> {
+    return readv_to(ep, local_iov, desc, dest_addr, remote_iov, op_flag::none, context);
 }
 
 /// Connected-endpoint convenience for vectored RMA.
@@ -212,15 +239,17 @@ auto write(endpoint& ep,
  * @param desc Memory region descriptors for local buffers.
  * @param dest_addr Destination peer (ignored by connected endpoints).
  * @param remote_iov Remote I/O vectors specifying destination.
+ * @param flags Per-call modifiers; Defaults selects replacement or inheritance.
  * @param context Optional operation context.
  * @return Success or error result.
  */
-template <context_like Ctx = void*>
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
 auto writev_to(endpoint& ep,
                std::span<const iovec> local_iov,
                std::span<const mr_descriptor> desc,
                fabric_addr dest_addr,
                std::span<const rma_iov> remote_iov,
+               op_flags flags,
                Ctx context = {}) -> result<void> {
     if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
@@ -254,13 +283,23 @@ auto writev_to(endpoint& ep,
         .rma_iov_count = raw_remote.size(),
         .context = to_raw_context(context),
     };
-    const auto ret = ::fi_writemsg(fid_ep, &message, 0);
+    const auto ret = ::fi_writemsg(fid_ep, &message, detail::operation_flags<Defaults>(ep, flags));
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
     }
 
     return make_success();
+}
+
+template <context_like Ctx = void*>
+auto writev_to(endpoint& ep,
+               std::span<const iovec> local_iov,
+               std::span<const mr_descriptor> desc,
+               fabric_addr dest_addr,
+               std::span<const rma_iov> remote_iov,
+               Ctx context = {}) -> result<void> {
+    return writev_to(ep, local_iov, desc, dest_addr, remote_iov, op_flag::none, context);
 }
 
 /// Connected-endpoint convenience for vectored RMA.
@@ -348,6 +387,44 @@ auto inject_write_data(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
+/// Per-call flags use the native message interface. Inheritance extends the
+/// endpoint's creation defaults; raw native control changes are not tracked.
+/// Buffers and registrations remain borrowed until the requested completion.
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
+auto read_to(endpoint& ep,
+             std::span<std::byte> local_buffer,
+             mr_descriptor local_descriptor,
+             fabric_addr dest_addr,
+             remote_memory remote,
+             op_flags flags,
+             Ctx context = {}) -> result<void> {
+    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (!fid_ep || local_buffer.size() > remote.length) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, readmsg)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+    const ::iovec local{local_buffer.data(), local_buffer.size()};
+    auto* descriptor = local_descriptor.raw();
+    const ::fi_rma_iov target{remote.addr, local_buffer.size(), remote.key};
+    const ::fi_msg_rma message{
+        .msg_iov = &local,
+        .desc = descriptor ? &descriptor : nullptr,
+        .iov_count = 1,
+        .addr = dest_addr.get(),
+        .rma_iov = &target,
+        .rma_iov_count = 1,
+        .context = to_raw_context(context),
+    };
+    const auto status =
+        ::fi_readmsg(fid_ep, &message, detail::operation_flags<Defaults>(ep, flags));
+    if (status) {
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
+    }
+    return make_success();
+}
+
 template <context_like Ctx = void*>
 auto read_to(endpoint& ep,
              std::span<std::byte> local_buffer,
@@ -391,6 +468,19 @@ auto read_to(endpoint& ep,
     return read_to(ep, local_buffer, local_mr.descriptor(), dest_addr, remote, context);
 }
 
+/// Use a registration's descriptor for the local buffer.
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
+auto read_to(endpoint& ep,
+             std::span<std::byte> local_buffer,
+             memory_region& local_mr,
+             fabric_addr dest_addr,
+             remote_memory remote,
+             op_flags flags,
+             Ctx context = {}) -> result<void> {
+    return read_to<Defaults>(
+        ep, local_buffer, local_mr.descriptor(), dest_addr, remote, flags, context);
+}
+
 /**
  * @brief Writes data from a local buffer to a specific remote address.
  * @tparam Ctx The context type (must satisfy context_like).
@@ -402,6 +492,44 @@ auto read_to(endpoint& ep,
  * @param context Optional operation context.
  * @return Success or error result.
  */
+/// Per-call flags use the native message interface. Inheritance extends the
+/// endpoint's creation defaults; raw native control changes are not tracked.
+/// Buffers and registrations remain borrowed until the requested completion.
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
+auto write_to(endpoint& ep,
+              std::span<const std::byte> local_buffer,
+              mr_descriptor local_descriptor,
+              fabric_addr dest_addr,
+              remote_memory remote,
+              op_flags flags,
+              Ctx context = {}) -> result<void> {
+    auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
+    if (!fid_ep || local_buffer.size() > remote.length) {
+        return make_error_result<void>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, writemsg)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+    const ::iovec local{const_cast<std::byte*>(local_buffer.data()), local_buffer.size()};
+    auto* descriptor = local_descriptor.raw();
+    const ::fi_rma_iov target{remote.addr, local_buffer.size(), remote.key};
+    const ::fi_msg_rma message{
+        .msg_iov = &local,
+        .desc = descriptor ? &descriptor : nullptr,
+        .iov_count = 1,
+        .addr = dest_addr.get(),
+        .rma_iov = &target,
+        .rma_iov_count = 1,
+        .context = to_raw_context(context),
+    };
+    const auto status =
+        ::fi_writemsg(fid_ep, &message, detail::operation_flags<Defaults>(ep, flags));
+    if (status) {
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
+    }
+    return make_success();
+}
+
 template <context_like Ctx = void*>
 auto write_to(endpoint& ep,
               std::span<const std::byte> local_buffer,
@@ -443,6 +571,19 @@ auto write_to(endpoint& ep,
               remote_memory remote,
               Ctx context = {}) -> result<void> {
     return write_to(ep, local_buffer, local_mr.descriptor(), dest_addr, remote, context);
+}
+
+/// Use a registration's descriptor for the local buffer.
+template <operation_defaults Defaults = operation_defaults::replace, context_like Ctx = void*>
+auto write_to(endpoint& ep,
+              std::span<const std::byte> local_buffer,
+              memory_region& local_mr,
+              fabric_addr dest_addr,
+              remote_memory remote,
+              op_flags flags,
+              Ctx context = {}) -> result<void> {
+    return write_to<Defaults>(
+        ep, local_buffer, local_mr.descriptor(), dest_addr, remote, flags, context);
 }
 
 /**

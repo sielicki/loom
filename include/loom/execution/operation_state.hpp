@@ -396,8 +396,8 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result =
-            rma::read_to(*ep_, buffer_, descriptor_, peer_, remote_, this->as_fi_context());
+        auto result = rma::read_to<operation_defaults::inherit>(
+            *ep_, buffer_, descriptor_, peer_, remote_, op_flag::completion, this->as_fi_context());
         if (!result) {
             this->complete_error(result.error());
         }
@@ -462,8 +462,8 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result =
-            rma::write_to(*ep_, buffer_, descriptor_, peer_, remote_, this->as_fi_context());
+        auto result = rma::write_to<operation_defaults::inherit>(
+            *ep_, buffer_, descriptor_, peer_, remote_, op_flag::completion, this->as_fi_context());
         if (!result) {
             this->complete_error(result.error());
         }

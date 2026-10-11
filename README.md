@@ -873,6 +873,21 @@ storage. Buffers and registration remain borrowed until completion.
 Core `rma::readv_to` and `rma::writev_to` also accept a separate descriptor
 for each IOV and preserve multiple remote segments.
 
+The Asio and sender RMA paths explicitly request a CQ completion, including
+when the endpoint uses selective completion. They extend the endpoint's
+creation flags, preserving configured fence and delivery requirements.
+Configure those defaults before creating the endpoint or scalable context;
+subsequent raw `FI_SETOPSFLAG` changes are not tracked by Loom.
+
+Core `read_to`, `write_to`, `readv_to`, and `writev_to` accept an `op_flags`
+argument before the context. These overloads replace the defaults unless
+called with `<operation_defaults::inherit>`. For example:
+
+```cpp
+auto submitted = loom::rma::write_to<loom::operation_defaults::inherit>(
+    ep, buffer, local_mr, peer, remote, loom::op_flag::completion, context);
+```
+
 The original sender `read` and `write` overloads use an unspecified peer
 and no local descriptor, for configurations where those are valid:
 

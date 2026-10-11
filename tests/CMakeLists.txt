@@ -110,6 +110,7 @@ add_executable(test_implementation
     test_empty_resources.cpp
     test_atomic.cpp
     test_atomic_peers.cpp
+    test_rma.cpp
     test_address_transport.cpp
     test_collective_join.cpp
     test_collective_transfers.cpp

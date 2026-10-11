@@ -407,12 +407,13 @@ public:
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
                 if (result) {
-                    result = rma::writev_to(state->endpoint,
-                                            ctx->buffers().iov,
-                                            ctx->buffers().descriptors,
-                                            peer,
-                                            remote_iov,
-                                            ctx->as_fi_context());
+                    result = rma::writev_to<operation_defaults::inherit>(state->endpoint,
+                                                                         ctx->buffers().iov,
+                                                                         ctx->buffers().descriptors,
+                                                                         peer,
+                                                                         remote_iov,
+                                                                         op_flag::completion,
+                                                                         ctx->as_fi_context());
                 }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
@@ -476,12 +477,13 @@ public:
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
                 if (result) {
-                    result = rma::readv_to(state->endpoint,
-                                           ctx->buffers().iov,
-                                           ctx->buffers().descriptors,
-                                           peer,
-                                           remote_iov,
-                                           ctx->as_fi_context());
+                    result = rma::readv_to<operation_defaults::inherit>(state->endpoint,
+                                                                        ctx->buffers().iov,
+                                                                        ctx->buffers().descriptors,
+                                                                        peer,
+                                                                        remote_iov,
+                                                                        op_flag::completion,
+                                                                        ctx->as_fi_context());
                 }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },

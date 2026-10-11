@@ -26,9 +26,11 @@ struct vector_provider {
     std::uint64_t remote_key{};
     std::vector<void*> descriptors;
     int submission_status{};
+    std::uint64_t submission_flags{};
 
-    static auto capture_rma(fid_ep* ep, const fi_msg_rma* msg) -> ssize_t {
+    static auto capture_rma(fid_ep* ep, const fi_msg_rma* msg, std::uint64_t flags) -> ssize_t {
         auto& self = *static_cast<vector_provider*>(ep->fid.context);
+        self.submission_flags = flags;
         REQUIRE(msg->rma_iov_count == 1);
         self.remote_length = msg->rma_iov[0].len;
         self.remote_address = msg->rma_iov[0].addr;
@@ -114,10 +116,12 @@ struct vector_provider {
     };
     fi_ops_rma rma{
         .size = sizeof(fi_ops_rma),
-        .readmsg =
-            [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) { return capture_rma(ep, msg); },
-        .writemsg =
-            [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) { return capture_rma(ep, msg); },
+        .readmsg = [](fid_ep* ep,
+                      const fi_msg_rma* msg,
+                      std::uint64_t flags) { return capture_rma(ep, msg, flags); },
+        .writemsg = [](fid_ep* ep,
+                       const fi_msg_rma* msg,
+                       std::uint64_t flags) { return capture_rma(ep, msg, flags); },
     };
     fid_ep handle{
         .fid = {.context = this, .ops = &ops}, .msg = &messages, .rma = &rma, .tagged = &tags};
@@ -128,7 +132,11 @@ struct vector_provider {
             loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
                                                                        &handle,
                                                                        loom::endpoint_types::msg,
-                                                                       loom::address_format::inet)};
+                                                                       loom::address_format::inet,
+                                                                       0UZ,
+                                                                       0UZ,
+                                                                       loom::caps{},
+                                                                       FI_FENCE)};
         if (bindings.has(loom::cq_bind::transmit))
             REQUIRE(ep.bind_cq(tx, loom::cq_bind::transmit));
         if (bindings.has(loom::cq_bind::recv))
@@ -180,6 +188,7 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     }
     REQUIRE(completed == 0);
     if (!short_remote) {
+        CHECK(native.submission_flags == (FI_COMPLETION | FI_FENCE));
         REQUIRE(native.peer == peer.get());
         REQUIRE(native.remote_address == remote.addr);
         REQUIRE(native.remote_key == remote.key);

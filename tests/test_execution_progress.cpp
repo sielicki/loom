@@ -3,9 +3,12 @@
 #include <loom/detail/impl/endpoint_impl.hpp>
 #include <loom/detail/impl/memory_impl.hpp>
 #include <loom/execution.hpp>
+#include <loom/loom.hpp>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <thread>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -42,6 +45,8 @@ struct receiver {
 struct provider {
     std::vector<void*> pending;
     bool fail{};
+    bool selective_completion{};
+    std::uint64_t submitted_flags{};
     std::size_t completion_length{7};
     void* expected_result{};
     void* expected_result_descriptor{};
@@ -76,6 +81,9 @@ struct provider {
             return static_cast<provider*>(ep->fid.context)
                 ->post_rma(length, descriptor, peer, address, key, ctx);
         },
+        .readmsg = [](fid_ep* ep, const fi_msg_rma* message, std::uint64_t flags) -> ssize_t {
+            return static_cast<provider*>(ep->fid.context)->post_rma_message(*message, flags);
+        },
         .write = [](fid_ep* ep,
                     const void*,
                     std::size_t length,
@@ -86,6 +94,9 @@ struct provider {
                     void* ctx) -> ssize_t {
             return static_cast<provider*>(ep->fid.context)
                 ->post_rma(length, descriptor, peer, address, key, ctx);
+        },
+        .writemsg = [](fid_ep* ep, const fi_msg_rma* message, std::uint64_t flags) -> ssize_t {
+            return static_cast<provider*>(ep->fid.context)->post_rma_message(*message, flags);
         },
     };
     fi_ops_atomic atomics{
@@ -155,12 +166,17 @@ struct provider {
         loom::get_default_resource(),
         &ep_handle,
         loom::endpoint_types::rdm,
-        loom::address_format::unspecified)};
+        loom::address_format::unspecified,
+        0UZ,
+        0UZ,
+        loom::caps{},
+        FI_FENCE)};
 
-    auto post(void* ctx) -> ssize_t {
+    auto post(void* ctx, std::uint64_t flags = 0) -> ssize_t {
         // Exercise the provider's right to use all FI_CONTEXT2 storage.
         std::ranges::fill(static_cast<fi_context2*>(ctx)->internal, nullptr);
-        pending.push_back(ctx);
+        if (!selective_completion || (flags & FI_COMPLETION))
+            pending.push_back(ctx);
         return 0;
     }
     auto post_rma(std::size_t length,
@@ -168,14 +184,27 @@ struct provider {
                   fi_addr_t destination,
                   std::uint64_t address,
                   std::uint64_t key,
-                  void* ctx) -> ssize_t {
+                  void* ctx,
+                  std::uint64_t flags = 0) -> ssize_t {
         submitted_bytes = length;
         submitted_context = ctx;
         local_descriptor = descriptor;
         peer = destination;
         remote_address = address;
         remote_key = key;
-        return submission_status ? submission_status : post(ctx);
+        return submission_status ? submission_status : post(ctx, flags);
+    }
+    auto post_rma_message(const fi_msg_rma& message, std::uint64_t flags) -> ssize_t {
+        submitted_flags = flags;
+        REQUIRE(message.iov_count == 1);
+        REQUIRE(message.rma_iov_count == 1);
+        return post_rma(message.msg_iov[0].iov_len,
+                        message.desc ? message.desc[0] : nullptr,
+                        message.addr,
+                        message.rma_iov[0].addr,
+                        message.rma_iov[0].key,
+                        message.context,
+                        flags);
     }
     auto store_result(void* result, void* descriptor, void* ctx) -> ssize_t {
         if (expected_result &&
@@ -198,6 +227,8 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
     const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
     const auto short_remote = GENERATE(false, true);
     provider fabric;
+    fabric.selective_completion = GENERATE(false, true);
+    CAPTURE(fabric.selective_completion);
     fabric.submission_status = status;
     std::array<std::byte, 16> storage{};
     fid_mr native_mr{.fid = {.ops = &fabric.ops}, .mem_desc = &native_mr};
@@ -214,6 +245,7 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
             REQUIRE(state.error == loom::errc::invalid_argument);
             REQUIRE(fabric.submitted_bytes == 0);
         } else {
+            REQUIRE(fabric.submitted_flags == (FI_COMPLETION | FI_FENCE));
             REQUIRE(fabric.submitted_bytes == storage.size());
             REQUIRE(fabric.peer == peer.get());
             REQUIRE(fabric.local_descriptor == &native_mr);
@@ -237,6 +269,84 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
         run(operations.write_to(storage, mr, peer, remote, &fabric.cq));
     else
         run(operations.read_from(storage, mr, peer, remote, &fabric.cq));
+}
+
+TEST_CASE("RMA senders complete sockets transfers with selective completion",
+          "[execution][progress][rma][loopback]") {
+    using namespace loom;
+    const auto write = GENERATE(false, true);
+    fabric_hints hints{};
+    hints.provider_name = "sockets";
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg | capability::rma;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Sockets provider unavailable");
+    auto* native_info = static_cast<fi_info*>(info->internal_ptr());
+    // The frontend must add FI_COMPLETION without losing delivery semantics.
+    native_info->tx_attr->op_flags = write ? FI_DELIVERY_COMPLETE : 0;
+    auto fab = fabric::create(*info);
+    REQUIRE(fab);
+    auto dom = domain::create(*fab, *info);
+    REQUIRE(dom);
+    auto cq = completion_queue::create(*dom);
+    REQUIRE(cq);
+    auto av = address_vector::create(*dom);
+    REQUIRE(av);
+    auto ep = endpoint::create(*dom, *info);
+    REQUIRE(ep);
+    REQUIRE(ep->bind_cq(*cq, cq_bind::transmit | cq_bind::recv | cq_bind::selective_completion));
+    REQUIRE(ep->bind_av(*av));
+    REQUIRE(ep->enable());
+    auto address = ep->get_local_address();
+    REQUIRE(address);
+    auto peer = av->insert(*address);
+    REQUIRE(peer);
+    std::array<std::byte, 8> local{}, target{};
+    local.fill(std::byte{23});
+    target.fill(std::byte{42});
+    auto local_mr =
+        memory_region::register_memory(*dom, local, mr_access_flags::read | mr_access_flags::write);
+    REQUIRE(local_mr);
+    auto target_mr = memory_region::register_memory(
+        *dom, target, mr_access_flags::remote_read | mr_access_flags::remote_write);
+    REQUIRE(target_mr);
+    const auto remote = remote_memory::from_mr(*target_mr);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    completion_state state;
+    auto run = [&](auto sender) {
+        auto operation = execution::connect(std::move(sender), receiver{&state});
+        execution::start(operation);
+        while (state.calls == 0 && std::chrono::steady_clock::now() < deadline) {
+            const auto progress = execution::poll_completions(*cq);
+            if (!progress || progress->unhandled) {
+                REQUIRE(ep->close());
+                FAIL("Unexpected completion while progressing RMA");
+            }
+            std::this_thread::yield();
+        }
+        if (state.calls == 0) {
+            // Retire native work before a failing test destroys borrowed storage.
+            REQUIRE(ep->close());
+            FAIL("Selective-completion RMA timed out");
+        }
+        REQUIRE(state.calls == 1);
+    };
+    do {
+        state = {};
+        auto operations = rma_async(*ep);
+        if (write)
+            run(operations.write_to(local, *local_mr, fabric_addr{peer->value}, remote, &*cq));
+        else
+            run(operations.read_from(local, *local_mr, fabric_addr{peer->value}, remote, &*cq));
+        if (state.error != errc::again)
+            break;
+        (void)cq->poll();
+        std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    REQUIRE_FALSE(state.error);
+    REQUIRE(state.bytes == (write ? 0 : local.size()));
+    REQUIRE(local == target);
 }
 
 TEST_CASE("compare swap senders compare before replacing remote data", "[execution][progress]") {

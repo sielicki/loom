@@ -35,17 +35,21 @@ TEST_CASE("RMA operations reject an empty endpoint", "[rma]") {
 namespace {
 struct rma_provider {
     std::size_t calls{};
+    std::uint64_t flags{};
+    std::uint64_t defaults{};
+    fi_addr_t peer{};
+    int status{};
     void* context{};
     std::vector<void*> descriptors;
     std::vector<std::uint64_t> keys;
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_rma rma_ops{
         .size = sizeof(fi_ops_rma),
-        .readmsg = [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) -> ssize_t {
-            return static_cast<rma_provider*>(ep->fid.context)->transfer(*msg, false);
+        .readmsg = [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t flags) -> ssize_t {
+            return static_cast<rma_provider*>(ep->fid.context)->transfer(*msg, false, flags);
         },
-        .writemsg = [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) -> ssize_t {
-            return static_cast<rma_provider*>(ep->fid.context)->transfer(*msg, true);
+        .writemsg = [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t flags) -> ssize_t {
+            return static_cast<rma_provider*>(ep->fid.context)->transfer(*msg, true, flags);
         },
     };
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .rma = &rma_ops};
@@ -55,11 +59,19 @@ struct rma_provider {
             loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
                                                                        &handle,
                                                                        loom::endpoint_types::msg,
-                                                                       loom::address_format::inet)};
+                                                                       loom::address_format::inet,
+                                                                       0UZ,
+                                                                       0UZ,
+                                                                       loom::caps{},
+                                                                       defaults)};
     }
 
-    auto transfer(const fi_msg_rma& msg, bool write) -> ssize_t {
+    auto transfer(const fi_msg_rma& msg, bool write, std::uint64_t requested_flags) -> ssize_t {
         ++calls;
+        flags = requested_flags;
+        peer = msg.addr;
+        if (status)
+            return status;
         context = msg.context;
         if (msg.desc) {
             descriptors.assign(msg.desc, msg.desc + msg.iov_count);
@@ -116,6 +128,10 @@ TEST_CASE("explicit-peer RMA rejects unavailable native operations", "[rma]") {
         rma::write_to(ep, buffer, mr_descriptor{}, peer, remote),
         rma::readv_to(ep, iov, {}, peer, remote_iov),
         rma::writev_to(ep, iov, {}, peer, remote_iov),
+        rma::read_to(ep, buffer, mr_descriptor{}, peer, remote, op_flag::completion),
+        rma::write_to(ep, buffer, mr_descriptor{}, peer, remote, op_flag::completion),
+        rma::readv_to(ep, iov, {}, peer, remote_iov, op_flag::completion),
+        rma::writev_to(ep, iov, {}, peer, remote_iov, op_flag::completion),
     };
     for (const auto& result : results) {
         REQUIRE_FALSE(result);
@@ -261,4 +277,55 @@ TEST_CASE("inject write small data", "[rma][.provider]") {
     remote_memory remote{0x1000, 0xABCD, data.size()};
 
     [[maybe_unused]] auto result = rma::inject_write(ep, std::span{data}, remote);
+}
+
+TEST_CASE("RMA flags preserve explicit overrides and inherited defaults", "[rma][flags]") {
+    const auto write = GENERATE(false, true);
+    const auto vector = GENERATE(false, true);
+    const auto inherit = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
+    CAPTURE(write, vector, inherit, status);
+    rma_provider native;
+    native.defaults = FI_FENCE;
+    native.status = status;
+    auto ep = native.endpoint();
+    std::array<std::byte, 8> local{}, target{};
+    local.fill(std::byte{23});
+    target.fill(std::byte{42});
+    const remote_memory remote{reinterpret_cast<std::uintptr_t>(target.data()), 17, target.size()};
+    const fabric_addr peer{19};
+    const std::array iov{iovec{local.data(), 3}, iovec{local.data() + 3, 5}};
+    const std::array remote_iov{rma::rma_iov{remote}};
+    int descriptor{}, context{};
+    const mr_descriptor local_descriptor{&descriptor};
+    const std::array descriptors{local_descriptor, local_descriptor};
+    const auto flags = op_flag::completion | (write ? op_flag::delivery_complete : op_flag::none);
+    auto submit = [&]<operation_defaults Defaults>() -> void_result {
+        if (vector) {
+            return write ? rma::writev_to<Defaults>(
+                               ep, iov, descriptors, peer, remote_iov, flags, &context)
+                         : rma::readv_to<Defaults>(
+                               ep, iov, descriptors, peer, remote_iov, flags, &context);
+        }
+        return write ? rma::write_to<Defaults>(
+                           ep, local, local_descriptor, peer, remote, flags, &context)
+                     : rma::read_to<Defaults>(
+                           ep, local, local_descriptor, peer, remote, flags, &context);
+    };
+    const auto result = inherit ? submit.template operator()<operation_defaults::inherit>()
+                                : submit.template operator()<operation_defaults::replace>();
+    REQUIRE(native.calls == 1);
+    REQUIRE(native.peer == peer.get());
+    REQUIRE(native.flags ==
+            (FI_COMPLETION | (inherit ? FI_FENCE : 0) | (write ? FI_DELIVERY_COMPLETE : 0)));
+    if (status) {
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() == make_error_code_from_fi_errno(-status));
+    } else {
+        REQUIRE(result);
+        REQUIRE(native.context == &context);
+        REQUIRE(native.keys == std::vector<std::uint64_t>{remote.key});
+        REQUIRE(native.descriptors == std::vector<void*>(vector ? 2 : 1, &descriptor));
+        REQUIRE(local == target);
+    }
 }
