@@ -660,13 +660,21 @@ TEST_CASE("tagged probes reserve receive and discard messages",
 TEST_CASE("selective message completions accompany sockets transfers", "[message][loopback]") {
     using namespace loom;
     const auto tagged = GENERATE(false, true);
+    const auto progress = GENERATE(
+        progress_mode::auto_progress, progress_mode::manual, progress_mode::control_unified);
+    CAPTURE(tagged, progress);
     fabric_hints hints{};
     hints.provider_name = "sockets";
     hints.ep_type = endpoint_types::rdm;
     hints.capabilities = capability::msg | capability::tagged;
+    hints.threading = threading_mode::domain;
+    hints.control_progress = progress;
+    hints.data_progress = progress;
     auto info = query_fabric(hints);
     if (!info)
         SKIP("Sockets provider unavailable");
+    REQUIRE(info->get_domain_attr()->control_progress == progress);
+    REQUIRE(info->get_domain_attr()->data_progress == progress);
     auto* native_info = static_cast<fi_info*>(info->internal_ptr());
     native_info->tx_attr->op_flags = FI_DELIVERY_COMPLETE;
     native_info->rx_attr->op_flags = 0;
