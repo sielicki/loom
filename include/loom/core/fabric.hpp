@@ -206,7 +206,8 @@ struct fabric_hints {
     caps capabilities{0ULL};                                  ///< Required capabilities
     mode mode_bits{0ULL};                                     ///< Required mode bits
     address_format addr_format{address_format::unspecified};  ///< Preferred address format
-    endpoint_type ep_type{endpoint_types::msg};               ///< Preferred endpoint type
+    std::optional<endpoint_type> ep_type{
+        endpoint_types::msg};                                 ///< nullopt permits any endpoint type
     std::optional<std::string_view> fabric_name;              ///< Specific fabric name
     std::optional<std::string_view> domain_name;              ///< Specific domain name
     std::optional<std::string_view> provider_name;            ///< Specific provider name

@@ -238,7 +238,8 @@ auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> resul
     info_hints->caps = detail::to_fi_caps(hints.capabilities);
     info_hints->mode = detail::to_fi_mode(hints.mode_bits);
     info_hints->addr_format = native_format;
-    info_hints->ep_attr->type = detail::to_fi_ep_type(hints.ep_type);
+    info_hints->ep_attr->type =
+        hints.ep_type ? detail::to_fi_ep_type(*hints.ep_type) : FI_EP_UNSPEC;
 
     // fi_freeinfo owns these strings; copy bounded views into C allocations.
     const auto copy_name = [](std::optional<std::string_view> name, char*& output) {

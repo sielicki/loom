@@ -832,6 +832,14 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires the libfabric UDP provider"]
+    fn unspecified_discovery_accepts_datagram_only_providers() {
+        query_fabric_with_hints("udp", Capabilities::MSG, EndpointType::Unspec)
+            .expect("unspecified discovery must not require message endpoints");
+        assert!(query_fabric_with_hints("udp", Capabilities::MSG, EndpointType::Msg).is_err());
+    }
+
+    #[test]
     #[ignore = "requires the libfabric TCP provider"]
     fn receive_backpressure_survives_the_cpp_bridge() {
         #[repr(C)]

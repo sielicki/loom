@@ -84,6 +84,31 @@ TEST_CASE("query_fabric for msg endpoint type", "[fabric][integration]") {
     REQUIRE(info_result->impl_valid());
 }
 
+TEST_CASE("unspecified endpoint discovery admits datagram providers", "[fabric][integration]") {
+    fabric_hints hints{};
+    hints.provider_name = "udp";
+    hints.capabilities = capability::msg;
+    hints.ep_type = endpoint_types::dgram;
+    if (!query_fabric(hints)) {
+        SKIP("UDP provider not available");
+    }
+    hints.ep_type = std::nullopt;
+    const auto info = query_fabric(hints);
+    REQUIRE(info);
+    // Utility providers may add RDM entries before the native datagram
+    // entries; unspecified discovery must preserve every matching type.
+    bool found_datagram = false;
+    for (const auto& entry : *info) {
+        const auto attributes = entry.get_endpoint_attr();
+        REQUIRE(attributes);
+        found_datagram |= attributes->type == endpoint_types::dgram;
+    }
+    CHECK(found_datagram);
+
+    hints.ep_type = endpoint_types::msg;
+    CHECK_FALSE(query_fabric(hints));
+}
+
 TEST_CASE("query_fabric for rdm endpoint type", "[fabric][integration]") {
     fabric_hints hints{};
     hints.ep_type = endpoint_types::rdm;

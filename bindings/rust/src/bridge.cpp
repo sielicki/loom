@@ -20,6 +20,9 @@ auto query_fabric(const FabricHints& hints) -> std::unique_ptr<FabricInfoHandle>
     loom_hints.capabilities = loom::caps{hints.capabilities};
 
     switch (hints.ep_type) {
+        case 0:
+            loom_hints.ep_type = std::nullopt;
+            break;
         case 1:
             loom_hints.ep_type = loom::endpoint_types::msg;
             break;
@@ -30,7 +33,7 @@ auto query_fabric(const FabricHints& hints) -> std::unique_ptr<FabricInfoHandle>
             loom_hints.ep_type = loom::endpoint_types::dgram;
             break;
         default:
-            break;
+            throw std::invalid_argument("unknown endpoint type");
     }
 
     auto result = loom::query_fabric(loom_hints);
