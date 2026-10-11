@@ -1,0 +1,25 @@
+Preserve unexpected-message metadata when peeking or receiving a claim.
+The CQ data value is meaningful only with FI_REMOTE_CQ_DATA, and readfrom
+must report the message's source rather than the zero-initialized address.
+
+Based on ofiwg/libfabric v2.7.0.
+
+--- a/prov/sockets/src/sock_progress.c
++++ b/prov/sockets/src/sock_progress.c
+@@ -1095,6 +1095,8 @@
+ 		pe_entry.data_len = rx_buffered->total_len;
+ 		pe_entry.tag = rx_buffered->tag;
+ 		pe_entry.data = rx_buffered->data;
++		pe_entry.flags |= rx_buffered->flags & FI_REMOTE_CQ_DATA;
++		pe_entry.addr = rx_buffered->addr;
+ 		rx_buffered->context = (uintptr_t)context;
+ 		if (flags & FI_CLAIM)
+ 			rx_buffered->is_claimed = 1;
+@@ -1144,6 +1146,7 @@
+ 		pe_entry.data = rx_buffered->data;
+ 		pe_entry.context = rx_buffered->context;
+ 		pe_entry.flags = (flags | FI_MSG | FI_RECV);
++		pe_entry.flags |= rx_buffered->flags & FI_REMOTE_CQ_DATA;
+ 		pe_entry.addr = rx_buffered->addr;
+ 		if (is_tagged)
+ 			pe_entry.flags |= FI_TAGGED;

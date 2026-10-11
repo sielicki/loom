@@ -100,6 +100,7 @@
               ./nix/pkgs/libfabric/name-server-cleanup.patch
               ./nix/pkgs/libfabric/psm3-endpoint-cleanup.patch
               ./nix/pkgs/libfabric/psm3-discovery-cleanup.patch
+              ./nix/pkgs/libfabric/sockets-probe-metadata.patch
             ];
             doCheck = !isDarwin && pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
             checkPhase = ''
