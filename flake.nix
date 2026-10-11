@@ -17,6 +17,18 @@
       url = "github:ai-dynamo/nixl/b69182fe73ac64221dcdbeeee744161f76006dda";
       flake = false;
     };
+    openmpi-src = {
+      url = "github:open-mpi/ompi/873cd3a294c7194a5f88937de36d5bc0b1c18d88";
+      flake = false;
+    };
+    openmpi-oac-src = {
+      url = "github:open-mpi/oac/b36d918563b73a7deae2af7d174777ef75d5cb7c";
+      flake = false;
+    };
+    mpi-standard-src = {
+      url = "github:mpi-forum/pympistandard/195cf1f5f532319fc9ce828ceb0857ee3a85ace7";
+      flake = false;
+    };
     monarch-src = {
       url = "github:meta-pytorch/monarch/dd1bb6719b2cf2b6bdf8851df02f092a900e6f5e";
       flake = false;
@@ -340,6 +352,13 @@
                   };
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
+              openmpi-consumer = pkgs.callPackage ./examples/openmpi {
+                stdenv = pkgs.gcc15Stdenv;
+                inherit libfabric;
+                src = inputs.openmpi-src;
+                oacSource = inputs.openmpi-oac-src;
+                mpiStandardSource = inputs.mpi-standard-src;
+              };
               nixl-consumer = pkgs.callPackage ./examples/nixl/nixl.nix {
                 stdenv = pkgs.gcc15Stdenv;
                 src = inputs.nixl-src;
@@ -649,6 +668,15 @@
                 };
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
+              openmpi-consumer = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
+                inputsFrom = [ self'.packages.openmpi-consumer ];
+                OPENMPI_SOURCE = self'.packages.openmpi-consumer.src;
+                packages = [
+                  (pkgs.writeShellScriptBin "openmpi-configure" ''
+                    exec ./configure ${lib.escapeShellArgs self'.packages.openmpi-consumer.configureFlags} "$@"
+                  '')
+                ];
+              };
               monarch-consumer = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
                 inputsFrom = [ self'.packages.monarch-consumer ];
                 inherit (self'.packages.monarch-consumer)
@@ -722,6 +750,7 @@
 
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
+              openmpi-consumer = self'.packages.openmpi-consumer;
               nixl-consumer = self'.packages.nixl-consumer.tests.sdk;
               nixl-loom = self'.packages.nixl-loom;
               monarch-consumer = self'.packages.monarch-consumer;
