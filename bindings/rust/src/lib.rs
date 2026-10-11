@@ -287,7 +287,7 @@ pub struct CompletionQueue {
     inner: Rc<UniquePtr<ffi::ffi::CompletionQueueHandle>>,
     _domain: Domain,
     #[cfg(feature = "tokio")]
-    operation_contexts: Rc<async_cq::OperationContexts>,
+    router: Rc<async_cq::CompletionRouter>,
 }
 
 impl CompletionQueue {
@@ -315,48 +315,81 @@ impl CompletionQueue {
             inner: Rc::new(inner),
             _domain: domain.clone(),
             #[cfg(feature = "tokio")]
-            operation_contexts: Rc::new(async_cq::OperationContexts::default()),
+            router: Rc::new(async_cq::CompletionRouter::default()),
         })
     }
 
-    /// Poll for a completion (non-blocking).
+    /// Poll for an unclaimed completion (non-blocking).
     ///
-    /// Returns `None` if no completion is available.
+    /// Managed async operations receive their own completions, including when
+    /// another clone polls this queue. Unmatched events and completions whose
+    /// observers were dropped remain available here, in arrival order.
+    /// With Tokio enabled, each call reads at most 64 native entries; `None`
+    /// can also mean that this budget was spent routing managed completions.
     pub fn poll(&self) -> Option<CompletionEvent> {
+        #[cfg(feature = "tokio")]
+        {
+            if let Some(event) = self.router.pop_event() {
+                return Some(event);
+            }
+            self.progress(async_cq::PROGRESS_BUDGET);
+            self.router.pop_event()
+        }
+        #[cfg(not(feature = "tokio"))]
+        self.poll_native()
+    }
+
+    fn poll_native(&self) -> Option<CompletionEvent> {
         let read = ffi::ffi::cq_poll(&self.inner);
         match read.kind {
             ffi::CqReadKind::Empty => None,
-            ffi::CqReadKind::Event => Some(self.decode_completion(read.event)),
-            // Native poll encodes read errors as context-free events. Failure
-            // is used only by wait, whose public API returns Result.
+            ffi::CqReadKind::Event => Some(CompletionEvent::from_raw(read.event)),
             _ => unreachable!("invalid completion poll result"),
         }
     }
 
-    /// Wait for a completion with timeout.
+    /// Read and route at most `budget` native completions without blocking.
+    ///
+    /// Returns the number read. Reaching the budget requires another progress
+    /// call before assuming the CQ is drained. Unclaimed events are preserved
+    /// for [`Self::poll`] or [`Self::wait`]; managed observers are notified.
+    /// Callers must continue progress until accepted work retires, including
+    /// after a queue failure. Such a failure does not establish buffer reuse.
+    #[cfg(feature = "tokio")]
+    pub fn progress(&self, budget: usize) -> usize {
+        self.router.progress(budget, || self.poll_native())
+    }
+
+    /// Wait for an unclaimed completion with timeout.
     ///
     /// The queue must have been created with `wait_obj` enabled. An empty or
     /// timed-out wait does not report completion or retire an operation.
+    /// Managed async completions are routed to their observers without
+    /// restarting the timeout. Use async waits on a Tokio executor thread.
     ///
     /// * `timeout_ms` - Timeout in milliseconds, or `None` for infinite.
     pub fn wait(&self, timeout_ms: Option<i32>) -> Result<CompletionEvent> {
-        let read = ffi::ffi::cq_wait(&self.inner, timeout_ms.unwrap_or(-1));
-        self.decode_wait(read)
+        #[cfg(feature = "tokio")]
+        {
+            self.router.wait(timeout_ms, |timeout| {
+                self.decode_wait(ffi::ffi::cq_wait(&self.inner, timeout))
+            })
+        }
+
+        #[cfg(not(feature = "tokio"))]
+        {
+            let read = ffi::ffi::cq_wait(&self.inner, timeout_ms.unwrap_or(-1));
+            self.decode_wait(read)?.into_result()
+        }
     }
 
     fn decode_wait(&self, read: ffi::CqReadResult) -> Result<CompletionEvent> {
         match read.kind {
             ffi::CqReadKind::Empty => Err(Error::WouldBlock),
-            ffi::CqReadKind::Event => self.decode_completion(read.event).into_result(),
+            ffi::CqReadKind::Event => Ok(CompletionEvent::from_raw(read.event)),
             ffi::CqReadKind::Failure => Err(error::from_queue_status(read.error_code)),
             _ => unreachable!("invalid completion wait result"),
         }
-    }
-
-    fn decode_completion(&self, data: ffi::CompletionEventData) -> CompletionEvent {
-        #[cfg(feature = "tokio")]
-        self.operation_contexts.retire(data.context);
-        CompletionEvent::from_raw(data)
     }
 
     /// Get the wait file descriptor for async integration.
@@ -748,7 +781,7 @@ mod tests {
         read.error_code = -1_234_567;
         assert!(matches!(queue.decode_wait(read), Err(Error::Queue { code: -1_234_567 })));
         read.kind = ffi::CqReadKind::Event;
-        let error = queue.decode_wait(read).unwrap_err();
+        let error = queue.decode_wait(read).unwrap().into_result().unwrap_err();
         assert!(matches!(error, Error::Completion { context: 0, code } if code == ffi::ffi::error_timeout()));
         assert!(!error.is_timeout());
         read.kind = ffi::CqReadKind::Empty;

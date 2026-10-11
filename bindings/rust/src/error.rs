@@ -23,8 +23,8 @@ pub enum Error {
         /// The negative libfabric error code, preserved without message parsing.
         code: i32,
     },
-    /// A queue read failed without reporting an operation completion.
-    #[error("Fabric queue read failed with code {code}")]
+    /// The queue failed without an attributable operation completion.
+    #[error("Fabric completion queue failed with code {code}")]
     Queue {
         /// The negative libfabric error code.
         code: i32,
