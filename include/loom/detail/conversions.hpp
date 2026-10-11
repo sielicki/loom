@@ -365,6 +365,16 @@ namespace loom::detail {
     return result;
 }
 
+/// Converts legacy native completion ordering without confusing its bit encoding with Loom's.
+[[nodiscard]] constexpr auto from_fi_comp_order(std::uint64_t native) noexcept -> comp_order {
+    auto result = completion_ordering::none;
+    if ((native & FI_ORDER_STRICT) == FI_ORDER_STRICT)
+        result |= completion_ordering::strict;
+    if (native & FI_ORDER_DATA)
+        result |= completion_ordering::data;
+    return result;
+}
+
 /**
  * @brief Converts loom cq_bind_flags to libfabric CQ bind flags.
  * @param flags The loom CQ bind flags.

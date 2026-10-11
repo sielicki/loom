@@ -142,6 +142,7 @@ auto fabric_info::get_endpoint_attr() const -> std::optional<endpoint_attributes
     auto* attr = impl_->info->ep_attr;
 
     auto* tx_attr = impl_->info->tx_attr;
+    auto* rx_attr = impl_->info->rx_attr;
     return endpoint_attributes{
         .type = detail::from_fi_ep_type(attr->type),
         .protocol = protocol_version{attr->protocol},
@@ -149,7 +150,10 @@ auto fabric_info::get_endpoint_attr() const -> std::optional<endpoint_attributes
         .tx_ctx_cnt = queue_size{attr->tx_ctx_cnt},
         .rx_ctx_cnt = queue_size{attr->rx_ctx_cnt},
         .msg_ordering = tx_attr ? detail::from_fi_order(tx_attr->msg_order) : msg_order{0ULL},
-        .comp_ordering = tx_attr ? comp_order{tx_attr->comp_order} : comp_order{0ULL},
+        .comp_ordering =
+            tx_attr ? detail::from_fi_comp_order(tx_attr->comp_order) : completion_ordering::none,
+        .rx_comp_ordering =
+            rx_attr ? detail::from_fi_comp_order(rx_attr->comp_order) : completion_ordering::none,
     };
 }
 

@@ -76,8 +76,9 @@ struct endpoint_attributes {
     queue_size max_msg_size{0UL};                         ///< Maximum message size
     queue_size tx_ctx_cnt{0UL};                           ///< Transmit context count
     queue_size rx_ctx_cnt{0UL};                           ///< Receive context count
-    msg_order msg_ordering{ordering::none};               ///< Message ordering guarantees
-    comp_order comp_ordering{completion_ordering::none};  ///< Completion ordering guarantees
+    msg_order msg_ordering{ordering::none};               ///< Transmit message ordering guarantees
+    comp_order comp_ordering{completion_ordering::none};  ///< Legacy transmit completion ordering
+    comp_order rx_comp_ordering{completion_ordering::none};  ///< Legacy receive completion ordering
 };
 
 /**

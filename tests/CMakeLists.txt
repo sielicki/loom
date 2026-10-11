@@ -84,6 +84,7 @@ loom_add_test(test_endpoint_limits)
 loom_add_test(test_scalable_endpoint)
 loom_add_test(test_endpoint_options)
 loom_add_test(test_fabric_query)
+loom_add_test(test_fabric_attributes)
 loom_add_test(test_fabric_iteration)
 loom_add_test(test_provider_aware)
 loom_add_test(test_provider_atomic)
@@ -112,6 +113,7 @@ add_executable(test_implementation
     test_endpoint_limits.cpp
     test_trigger_transport.cpp
     test_fabric_iteration.cpp
+    test_fabric_attributes.cpp
 )
 target_link_libraries(test_implementation PRIVATE
     loom_test_implementation
