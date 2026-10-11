@@ -392,5 +392,6 @@ auto mr_access_remote_read() -> std::uint64_t;
 auto mr_access_remote_write() -> std::uint64_t;
 auto mr_access_send() -> std::uint64_t;
 auto mr_access_recv() -> std::uint64_t;
+auto mr_access_collective() -> std::uint64_t;
 
 }  // namespace loom::cxx_bridge

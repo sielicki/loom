@@ -32,7 +32,8 @@ namespace loom::detail {
            (access.has(mr_access_flags::remote_read) ? FI_REMOTE_READ : 0ULL) |
            (access.has(mr_access_flags::remote_write) ? FI_REMOTE_WRITE : 0ULL) |
            (access.has(mr_access_flags::send) ? FI_SEND : 0ULL) |
-           (access.has(mr_access_flags::recv) ? FI_RECV : 0ULL);
+           (access.has(mr_access_flags::recv) ? FI_RECV : 0ULL) |
+           (access.has(mr_access_flags::collective) ? FI_COLLECTIVE : 0ULL);
 }
 
 /**

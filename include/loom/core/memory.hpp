@@ -152,6 +152,8 @@ struct memory_registration {
  * allocated uniquely among live Loom registrations in the domain. The domain's
  * memory resource must outlive all registrations. Native registrations created
  * outside Loom must coordinate their keys separately.
+ * Collective buffers require mr_access_flags::collective together with send
+ * and/or recv access when the domain requires mr_mode_flags::collective.
  */
 class memory_region : public fabric_object_base<memory_region> {
 public:

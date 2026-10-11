@@ -578,4 +578,8 @@ auto mr_access_recv() -> std::uint64_t {
     return loom::mr_access_flags::recv.get();
 }
 
+auto mr_access_collective() -> std::uint64_t {
+    return loom::mr_access_flags::collective.get();
+}
+
 }  // namespace loom::cxx_bridge

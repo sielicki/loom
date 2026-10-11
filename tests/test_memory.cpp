@@ -121,7 +121,8 @@ TEST_CASE("memory registration rejects empty domains", "[memory]") {
 }
 
 TEST_CASE("registration translates access permissions", "[memory]") {
-    test::mock_domain provider;
+    const auto mode = GENERATE(0, FI_MR_COLLECTIVE);
+    test::mock_domain provider{mode};
     std::array<std::byte, 64> buffer{};
     constexpr std::array permissions{
         std::pair{mr_access_flags::read, FI_READ},
@@ -131,9 +132,14 @@ TEST_CASE("registration translates access permissions", "[memory]") {
         std::pair{mr_access_flags::send, FI_SEND},
         std::pair{mr_access_flags::recv, FI_RECV},
         std::pair{mr_access_flags::send | mr_access_flags::recv, FI_SEND | FI_RECV},
+        std::pair{mr_access_flags::collective | mr_access_flags::send, FI_COLLECTIVE | FI_SEND},
+        std::pair{mr_access_flags::collective | mr_access_flags::recv, FI_COLLECTIVE | FI_RECV},
+        std::pair{mr_access_flags::collective | mr_access_flags::send | mr_access_flags::recv,
+                  FI_COLLECTIVE | FI_SEND | FI_RECV},
     };
 
     for (const auto& [access, expected] : permissions) {
+        CAPTURE(mode, access.get(), expected);
         {
             auto region = memory_region::register_memory(provider.dom, buffer, access);
             REQUIRE(region);
@@ -151,6 +157,19 @@ TEST_CASE("registration translates access permissions", "[memory]") {
                 provider.dom, buffer.data(), buffer.size(), access, hmem_device::cuda(0));
             REQUIRE(region);
             REQUIRE(provider.access == expected);
+        }
+        {
+            const memory_registration attributes{
+                .access = access,
+                .device = hmem_device::cuda(0),
+                .allocation = hmem_allocation_kind::device,
+                .dmabuf = dmabuf_registration{7, 0},
+            };
+            auto region = memory_region::register_memory(
+                provider.dom, buffer.data(), buffer.size(), attributes);
+            REQUIRE(region);
+            REQUIRE(provider.access == expected);
+            REQUIRE(provider.flags == (FI_MR_DMABUF | FI_HMEM_DEVICE_ONLY));
         }
     }
 }

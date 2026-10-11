@@ -528,6 +528,8 @@ inline constexpr mr_access remote_read{0x4ULL};
 inline constexpr mr_access remote_write{0x8ULL};
 inline constexpr mr_access send{0x10ULL};
 inline constexpr mr_access recv{0x20ULL};
+/// Collective buffers; combine with send and/or recv access.
+inline constexpr mr_access collective{0x40ULL};
 }  // namespace mr_access_flags
 
 /**

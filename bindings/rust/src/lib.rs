@@ -154,6 +154,9 @@ bitflags::bitflags! {
         const SEND = 0x10;
         /// Receive access.
         const RECV = 0x20;
+        /// Collective access, combined with SEND and/or RECV. Required for
+        /// collective buffers when the domain requires collective registration.
+        const COLLECTIVE = 0x40;
     }
 }
 
@@ -972,6 +975,18 @@ pub use async_cq::{AsyncCompletionQueue, AsyncEndpoint};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collective_registration_permission_crosses_the_bridge() {
+        let access = MrAccess::COLLECTIVE | MrAccess::SEND | MrAccess::RECV;
+        let attributes = MemoryRegistration::new(access).bridge().unwrap();
+        assert_eq!(
+            attributes.access,
+            ffi::ffi::mr_access_collective()
+                | ffi::ffi::mr_access_send()
+                | ffi::ffi::mr_access_recv()
+        );
+    }
 
     #[test]
     #[ignore = "requires the libfabric UDP provider"]

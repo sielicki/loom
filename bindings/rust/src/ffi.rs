@@ -519,6 +519,7 @@ pub mod ffi {
         fn mr_access_remote_write() -> u64;
         fn mr_access_send() -> u64;
         fn mr_access_recv() -> u64;
+        fn mr_access_collective() -> u64;
     }
 }
 
