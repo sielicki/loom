@@ -48,9 +48,40 @@ mod ffi;
 mod async_cq;
 
 pub use error::{Error, Result};
+pub use ffi::ffi::{RemoteMemory, RmaCompletion, RmaOptions, RmaTarget};
 
 use cxx::UniquePtr;
 use std::rc::Rc;
+
+impl Default for RmaOptions {
+    fn default() -> Self {
+        Self {
+            completion: RmaCompletion::Local,
+            fence: false,
+        }
+    }
+}
+
+impl RemoteMemory {
+    /// Restrict an exported registration without changing its key or address model.
+    pub fn subregion(self, offset: usize, length: usize) -> Result<Self> {
+        if offset > self.length || length > self.length - offset {
+            return Err(Error::InvalidArgument(
+                "remote subregion exceeds registration".into(),
+            ));
+        }
+        let addr = self
+            .addr
+            .checked_add(offset as u64)
+            .filter(|addr| addr.checked_add(length as u64).is_some())
+            .ok_or_else(|| Error::InvalidArgument("remote address overflows".into()))?;
+        Ok(Self {
+            addr,
+            key: self.key,
+            length,
+        })
+    }
+}
 
 // ============================================================================
 // Capability flags
@@ -447,8 +478,10 @@ impl AddressVector {
 // ============================================================================
 
 /// A registered memory region for RDMA operations.
+/// Clones share the registration; deregistration follows the last retained clone.
+#[derive(Clone)]
 pub struct MemoryRegion {
-    inner: UniquePtr<ffi::ffi::MemoryRegionHandle>,
+    inner: Rc<UniquePtr<ffi::ffi::MemoryRegionHandle>>,
     _domain: Domain,
 }
 
@@ -458,7 +491,8 @@ impl MemoryRegion {
     /// # Safety
     ///
     /// The caller must ensure that the memory region pointed to by `ptr`
-    /// remains valid for the lifetime of the `MemoryRegion`.
+    /// remains valid until every clone and accepted operation retaining this
+    /// registration has retired. Registration does not own the allocation.
     ///
     /// # Arguments
     ///
@@ -473,7 +507,10 @@ impl MemoryRegion {
         access: MrAccess,
     ) -> Result<Self> {
         let inner = ffi::ffi::register_memory(&domain.inner, ptr as usize, len, access.bits())?;
-        Ok(Self { inner, _domain: domain.clone() })
+        Ok(Self {
+            inner: Rc::new(inner),
+            _domain: domain.clone(),
+        })
     }
 
     /// Get the memory region key for remote access.
@@ -485,11 +522,39 @@ impl MemoryRegion {
     pub fn descriptor(&self) -> usize {
         ffi::ffi::mr_descriptor(&self.inner)
     }
+
+    /// Export the negotiated remote address, 64-bit key and registered length.
+    /// Peers may use this metadata only while this registration remains alive.
+    pub fn remote_memory(&self) -> RemoteMemory {
+        ffi::ffi::mr_remote_memory(&self.inner)
+    }
 }
 
 // ============================================================================
 // Endpoint
 // ============================================================================
+
+/// Stable, zero-initialized provider scratch storage for one native operation.
+/// Moving this owner preserves its address. Keep it alive until the operation
+/// completes or its endpoint closes successfully; never share it between
+/// outstanding operations. A new context starts with fresh provider storage.
+pub struct OperationContext {
+    inner: UniquePtr<ffi::ffi::OperationContextHandle>,
+}
+
+impl OperationContext {
+    /// Allocate native FI_CONTEXT2 storage, also suitable for FI_CONTEXT.
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            inner: ffi::ffi::create_operation_context()?,
+        })
+    }
+
+    /// Native address to submit and match against a completion event's context.
+    pub fn address(&self) -> usize {
+        ffi::ffi::operation_context_address(&self.inner)
+    }
+}
 
 /// A fabric endpoint for communication.
 ///
@@ -661,6 +726,73 @@ impl Endpoint {
     /// completion notification.
     pub fn inject(&mut self, data: &[u8]) -> Result<()> {
         error::from_submission_status(ffi::ffi::endpoint_inject(self.inner.pin_mut(), data)?)
+    }
+
+    /// Submit a registered RMA read to an explicit peer, requesting a CQ completion.
+    /// Local and remote bounds and registration-domain identity are checked.
+    ///
+    /// # Safety
+    ///
+    /// The target must identify a live, readable remote registration and a peer
+    /// in this endpoint's bound address vector. Keep the local buffer, registration
+    /// and native context valid until completion or successful close. Do not access
+    /// the local buffer while the operation may write it. Success means acceptance,
+    /// not completion; a later error does not make other accepted work reusable.
+    pub unsafe fn read(
+        &mut self,
+        buffer: &mut [u8],
+        registration: &MemoryRegion,
+        target: RmaTarget,
+        options: RmaOptions,
+        context: usize,
+    ) -> Result<()> {
+        self.check_registration(registration)?;
+        error::from_submission_status(ffi::ffi::endpoint_read(
+            self.inner.pin_mut(),
+            buffer,
+            &registration.inner,
+            &target,
+            &options,
+            context,
+        )?)
+    }
+
+    /// Submit a registered RMA write to an explicit peer, requesting a CQ completion.
+    /// Local and remote bounds and registration-domain identity are checked.
+    ///
+    /// # Safety
+    ///
+    /// The target must identify a live, writable remote registration and a peer
+    /// in this endpoint's bound address vector. Keep the local buffer, registration
+    /// and native context valid until completion or successful close. Do not mutate
+    /// the local buffer while the operation may read it. Local completion permits
+    /// local reuse; it does not establish remote delivery or GPU visibility.
+    pub unsafe fn write(
+        &mut self,
+        buffer: &[u8],
+        registration: &MemoryRegion,
+        target: RmaTarget,
+        options: RmaOptions,
+        context: usize,
+    ) -> Result<()> {
+        self.check_registration(registration)?;
+        error::from_submission_status(ffi::ffi::endpoint_write(
+            self.inner.pin_mut(),
+            buffer,
+            &registration.inner,
+            &target,
+            &options,
+            context,
+        )?)
+    }
+
+    fn check_registration(&self, registration: &MemoryRegion) -> Result<()> {
+        if !Rc::ptr_eq(&self._domain.inner, &registration._domain.inner) {
+            return Err(Error::InvalidArgument(
+                "registration belongs to another domain".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Get the local address/name of the endpoint.

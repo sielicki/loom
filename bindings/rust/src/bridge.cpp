@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <rdma/fi_cm.h>
 
+#include <limits>
 #include <vector>
 
 #include "loom-fabric/src/ffi.rs.h"
+#include "loom/core/rma.hpp"
 
 namespace loom::cxx_bridge {
 
@@ -135,6 +137,76 @@ auto endpoint_inject(EndpointHandle& ep, rust::Slice<const std::uint8_t> data) -
     return submission_status(ep.get().inject(span));
 }
 
+namespace {
+auto rma_flags(const RmaOptions& options) -> std::optional<loom::op_flags> {
+    auto flags = loom::op_flag::completion;
+    switch (options.completion) {
+        case RmaCompletion::Local:
+            break;
+        case RmaCompletion::Transmit:
+            flags |= loom::op_flag::transmit_complete;
+            break;
+        case RmaCompletion::Delivery:
+            flags |= loom::op_flag::delivery_complete;
+            break;
+        default:
+            return std::nullopt;
+    }
+    if (options.fence)
+        flags |= loom::op_flag::fence;
+    return flags;
+}
+
+auto registered_range(const MemoryRegionHandle& mr,
+                      const void* buffer,
+                      std::size_t length,
+                      const RemoteMemory& remote) noexcept -> bool {
+    const auto base = reinterpret_cast<std::uintptr_t>(mr.get().address());
+    const auto address = reinterpret_cast<std::uintptr_t>(buffer);
+    return address >= base && address - base <= mr.get().length() &&
+           length <= mr.get().length() - (address - base) && length <= remote.length &&
+           length <= std::numeric_limits<std::uint64_t>::max() - remote.addr;
+}
+}  // namespace
+
+auto endpoint_read(EndpointHandle& ep,
+                   rust::Slice<std::uint8_t> buffer,
+                   const MemoryRegionHandle& mr,
+                   const RmaTarget& target,
+                   const RmaOptions& options,
+                   std::uintptr_t context) -> std::int32_t {
+    const auto flags = rma_flags(options);
+    if (!flags || !registered_range(mr, buffer.data(), buffer.size(), target.memory))
+        return std::to_underlying(loom::errc::invalid_argument);
+    return submission_status(loom::rma::read_to(
+        ep.get(),
+        std::as_writable_bytes(std::span{buffer.data(), buffer.size()}),
+        mr.get().descriptor(),
+        loom::fabric_addr{target.peer},
+        loom::remote_memory{target.memory.addr, target.memory.key, target.memory.length},
+        *flags,
+        reinterpret_cast<void*>(context)));
+}
+
+auto endpoint_write(EndpointHandle& ep,
+                    rust::Slice<const std::uint8_t> buffer,
+                    const MemoryRegionHandle& mr,
+                    const RmaTarget& target,
+                    const RmaOptions& options,
+                    std::uintptr_t context) -> std::int32_t {
+    const auto flags = rma_flags(options);
+    if (!flags || !registered_range(mr, buffer.data(), buffer.size(), target.memory))
+        return std::to_underlying(loom::errc::invalid_argument);
+    return submission_status(loom::rma::write_to(
+        ep.get(),
+        std::as_bytes(std::span{buffer.data(), buffer.size()}),
+        mr.get().descriptor(),
+        loom::fabric_addr{target.peer},
+        loom::remote_memory{target.memory.addr, target.memory.key, target.memory.length},
+        *flags,
+        reinterpret_cast<void*>(context)));
+}
+
 auto endpoint_get_name(const EndpointHandle& ep) -> rust::Vec<std::uint8_t> {
     if (!ep.get()) {
         throw std::runtime_error("invalid endpoint");
@@ -233,6 +305,10 @@ auto mr_key(const MemoryRegionHandle& mr) -> std::uint64_t {
 
 auto mr_descriptor(const MemoryRegionHandle& mr) -> std::uintptr_t {
     return std::bit_cast<std::uintptr_t>(mr.get().descriptor().raw());
+}
+
+auto mr_remote_memory(const MemoryRegionHandle& mr) -> RemoteMemory {
+    return {.addr = mr.get().remote_address(), .key = mr.get().key(), .length = mr.get().length()};
 }
 
 auto cap_msg() -> std::uint64_t {

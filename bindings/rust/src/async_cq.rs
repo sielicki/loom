@@ -6,9 +6,9 @@
 //! that integrate with the tokio runtime.
 
 use crate::{
-    ffi, CompletionEvent, CompletionQueue, CqBindFlags, Domain, Endpoint, Error, FabricInfo, Result,
+    CompletionEvent, CompletionQueue, CqBindFlags, Domain, Endpoint, Error, FabricInfo,
+    MemoryRegion, OperationContext, Result, RmaOptions, RmaTarget,
 };
-use cxx::UniquePtr;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -167,7 +167,8 @@ struct OperationResult {
 }
 
 struct PendingOperation {
-    _storage: UniquePtr<ffi::ffi::OperationContextHandle>,
+    _storage: OperationContext,
+    registration: Option<MemoryRegion>,
     result: Rc<OperationResult>,
 }
 
@@ -184,8 +185,8 @@ pub(crate) struct CompletionRouter {
 impl CompletionRouter {
     fn allocate(self: &Rc<Self>) -> Result<OperationTicket> {
         self.check_fault()?;
-        let storage = ffi::ffi::create_operation_context()?;
-        let address = ffi::ffi::operation_context_address(&storage);
+        let storage = OperationContext::new()?;
+        let address = storage.address();
         let result = Rc::new(OperationResult {
             state: RefCell::new(OperationState::Pending),
             changed: Notify::new(),
@@ -194,6 +195,7 @@ impl CompletionRouter {
             address,
             PendingOperation {
                 _storage: storage,
+                registration: None,
                 result: result.clone(),
             },
         );
@@ -358,6 +360,15 @@ struct OperationTicket {
 }
 
 impl OperationTicket {
+    fn retain_registration(&self, registration: &MemoryRegion) {
+        self.router
+            .pending
+            .borrow_mut()
+            .get_mut(&self.address)
+            .unwrap()
+            .registration = Some(registration.clone());
+    }
+
     fn take_result(&self) -> Option<Result<CompletionEvent>> {
         let state = {
             let mut state = self.result.state.borrow_mut();
@@ -409,7 +420,7 @@ pub(crate) const PROGRESS_BUDGET: usize = 64;
 // AsyncEndpoint
 // ============================================================================
 
-/// An async endpoint that provides async send/recv operations.
+/// An async endpoint that provides messaging and registered RMA operations.
 ///
 /// This wraps an [`Endpoint`] and uses an [`AsyncCompletionQueue`] to
 /// provide async operations that integrate with tokio.
@@ -605,6 +616,62 @@ impl AsyncEndpoint {
             .map(|event| event.bytes_transferred)
     }
 
+    /// Read registered remote memory and await its requested completion.
+    ///
+    /// # Safety
+    ///
+    /// The target and buffer obligations of [`Endpoint::read`] apply after this
+    /// future is polled, including after observer drop or a queue error. Native
+    /// context and registration storage survive until actual retirement or
+    /// successful endpoint close; the allocation is still borrowed. Dropping
+    /// the future does not cancel accepted work or permit buffer access.
+    pub async unsafe fn read(
+        &mut self,
+        buffer: &mut [u8],
+        registration: &MemoryRegion,
+        target: RmaTarget,
+        options: RmaOptions,
+    ) -> Result<()> {
+        let ticket = self.tx_cq.inner.router.allocate()?;
+        ticket.retain_registration(registration);
+        if let Err(error) = self
+            .inner
+            .read(buffer, registration, target, options, ticket.address)
+        {
+            ticket.reject();
+            return Err(error);
+        }
+        self.tx_cq.wait_operation(&ticket).await.map(|_| ())
+    }
+
+    /// Write registered remote memory and await its requested completion.
+    ///
+    /// # Safety
+    ///
+    /// The target and buffer obligations of [`Endpoint::write`] apply after this
+    /// future is polled, including after observer drop or a queue error. Native
+    /// context and registration storage survive until actual retirement or
+    /// successful endpoint close; the allocation is still borrowed. Dropping
+    /// the future does not cancel accepted work or permit buffer mutation.
+    pub async unsafe fn write(
+        &mut self,
+        buffer: &[u8],
+        registration: &MemoryRegion,
+        target: RmaTarget,
+        options: RmaOptions,
+    ) -> Result<()> {
+        let ticket = self.tx_cq.inner.router.allocate()?;
+        ticket.retain_registration(registration);
+        if let Err(error) = self
+            .inner
+            .write(buffer, registration, target, options, ticket.address)
+        {
+            ticket.reject();
+            return Err(error);
+        }
+        self.tx_cq.wait_operation(&ticket).await.map(|_| ())
+    }
+
     /// Get a reference to the transmit completion queue.
     pub fn tx_cq(&self) -> &AsyncCompletionQueue {
         &self.tx_cq
@@ -687,6 +754,45 @@ mod tests {
         let endpoint = AsyncEndpoint::with_polling(&domain, &info, 16).unwrap();
         assert!(endpoint.tx_cq().wait_fd().is_none());
         assert!(endpoint.rx_cq().wait_fd().is_none());
+    }
+
+    #[test]
+    #[ignore = "requires the libfabric sockets provider"]
+    fn detached_rma_keeps_registration_until_native_retirement() {
+        let mut buffer = [0_u8; 64];
+        let info = crate::query_fabric_with_hints(
+            "sockets",
+            crate::Capabilities::RMA,
+            crate::EndpointType::Rdm,
+        )
+        .unwrap();
+        let fabric = crate::Fabric::new(&info).unwrap();
+        let domain = Domain::new(&fabric, &info).unwrap();
+        let registration = unsafe {
+            MemoryRegion::register(
+                &domain,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                crate::MrAccess::READ | crate::MrAccess::WRITE,
+            )
+        }
+        .unwrap();
+        let weak = Rc::downgrade(&registration.inner);
+        let router = Rc::new(CompletionRouter::default());
+        let ticket = router.allocate().unwrap();
+        ticket.retain_registration(&registration);
+        let context = ticket.address;
+        drop(registration);
+        drop(ticket);
+        assert!(weak.upgrade().is_some());
+        router.fail(-5);
+        assert!(
+            weak.upgrade().is_some(),
+            "queue failure retired a live registration"
+        );
+        router.route(event(context, None));
+        assert!(weak.upgrade().is_none());
+        assert_eq!(router.pop_event().unwrap().context, context);
     }
 
     #[test]

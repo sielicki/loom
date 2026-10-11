@@ -76,12 +76,42 @@ pub mod ffi {
     /// Remote memory descriptor for RMA operations.
     #[derive(Debug, Clone, Copy)]
     pub struct RemoteMemory {
-        /// Remote virtual address.
+        /// Remote virtual address or MR-relative offset selected by registration.
         pub addr: u64,
         /// Remote memory region key.
         pub key: u64,
         /// Length of the remote region.
         pub length: usize,
+    }
+
+    /// A remote region addressed through the submitting endpoint's address vector.
+    #[derive(Debug, Clone, Copy)]
+    pub struct RmaTarget {
+        /// Local address-vector handle for the destination, not a wire identity.
+        pub peer: u64,
+        /// Exported remote registration, optionally restricted to a subregion.
+        pub memory: RemoteMemory,
+    }
+
+    /// Completion level requested for an RMA operation.
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum RmaCompletion {
+        /// Ordinary local completion permits reuse of the local buffer.
+        Local,
+        /// Request FI_TRANSMIT_COMPLETE in addition to a CQ completion.
+        Transmit,
+        /// Request FI_DELIVERY_COMPLETE in addition to a CQ completion.
+        Delivery,
+    }
+
+    /// Per-operation RMA completion and ordering requirements.
+    #[derive(Debug, Clone, Copy)]
+    pub struct RmaOptions {
+        /// Completion level; unsupported levels produce a submission error.
+        pub completion: RmaCompletion,
+        /// Order this operation after earlier endpoint transmissions using FI_FENCE.
+        pub fence: bool,
     }
 
     // ========================================================================
@@ -211,6 +241,26 @@ pub mod ffi {
         /// Post an inject (small message, no completion).
         fn endpoint_inject(ep: Pin<&mut EndpointHandle>, data: &[u8]) -> Result<i32>;
 
+        /// Submit a registered read with an explicit peer and completion policy.
+        fn endpoint_read(
+            ep: Pin<&mut EndpointHandle>,
+            buf: &mut [u8],
+            mr: &MemoryRegionHandle,
+            target: &RmaTarget,
+            options: &RmaOptions,
+            ctx: usize,
+        ) -> Result<i32>;
+
+        /// Submit a registered write with an explicit peer and completion policy.
+        fn endpoint_write(
+            ep: Pin<&mut EndpointHandle>,
+            data: &[u8],
+            mr: &MemoryRegionHandle,
+            target: &RmaTarget,
+            options: &RmaOptions,
+            ctx: usize,
+        ) -> Result<i32>;
+
         /// Get the local address/name of an endpoint.
         fn endpoint_get_name(ep: &EndpointHandle) -> Result<Vec<u8>>;
 
@@ -251,6 +301,9 @@ pub mod ffi {
 
         /// Get the local descriptor for a memory region.
         fn mr_descriptor(mr: &MemoryRegionHandle) -> usize;
+
+        /// Export the negotiated address model, full key and registered length.
+        fn mr_remote_memory(mr: &MemoryRegionHandle) -> RemoteMemory;
 
         // ====================================================================
         // Capability constants

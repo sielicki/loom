@@ -87,6 +87,8 @@ struct MrInfo;
 
 /// Remote memory descriptor for RMA operations
 struct RemoteMemory;
+struct RmaTarget;
+struct RmaOptions;
 
 // ============================================================================
 // Opaque wrapper types (own their resources, movable)
@@ -285,6 +287,21 @@ auto endpoint_tagged_recv(EndpointHandle& ep,
 /// Post an inject (small message, no completion)
 auto endpoint_inject(EndpointHandle& ep, rust::Slice<const std::uint8_t> data) -> std::int32_t;
 
+/// Registered RMA submissions preserve the destination and completion policy.
+auto endpoint_read(EndpointHandle& ep,
+                   rust::Slice<std::uint8_t> buffer,
+                   const MemoryRegionHandle& mr,
+                   const RmaTarget& target,
+                   const RmaOptions& options,
+                   std::uintptr_t context) -> std::int32_t;
+
+auto endpoint_write(EndpointHandle& ep,
+                    rust::Slice<const std::uint8_t> buffer,
+                    const MemoryRegionHandle& mr,
+                    const RmaTarget& target,
+                    const RmaOptions& options,
+                    std::uintptr_t context) -> std::int32_t;
+
 /// Get the local address of an endpoint
 auto endpoint_get_name(const EndpointHandle& ep) -> rust::Vec<std::uint8_t>;
 
@@ -324,6 +341,8 @@ auto mr_key(const MemoryRegionHandle& mr) -> std::uint64_t;
 
 /// Get the local descriptor for a memory region
 auto mr_descriptor(const MemoryRegionHandle& mr) -> std::uintptr_t;
+
+auto mr_remote_memory(const MemoryRegionHandle& mr) -> RemoteMemory;
 
 // ============================================================================
 // Capability constants (exposed to Rust)

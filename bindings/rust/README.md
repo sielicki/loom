@@ -102,7 +102,7 @@ async fn main() -> loom_fabric::Result<()> {
 }
 ```
 
-### Submission errors and backpressure
+### Async progress
 
 Async CQs use native wait descriptors when available. If a provider cannot
 expose its wait object, waits poll with a one-millisecond Tokio timer between
@@ -113,7 +113,38 @@ an optional borrowed descriptor; it replaces the unconditional `AsRawFd` API.
 An exported region on a manual-progress provider still needs an active
 progress task for its entire advertised lifetime, including while idle.
 
-`send`, `recv`, tagged submissions, and `inject` return
+### Registered RMA
+
+`Endpoint::read` and `Endpoint::write` submit a registered local slice to
+an explicit `RmaTarget`. Build its `peer` with the endpoint's bound address
+vector and exchange `MemoryRegion::remote_memory()` with the remote process.
+The exported address follows the negotiated registration model, including
+MR-relative offsets, and the key remains 64 bits. `RemoteMemory::subregion`
+checks range and address arithmetic before narrowing the exported view.
+
+Each operation checks that the local registration belongs to the endpoint's
+domain and covers the submitted slice, and that the remote view is large
+enough. `RmaOptions` selects local, transmit, or delivery completion and
+optional fencing; a CQ completion is always requested. Unsupported policies
+remain ordinary submission errors. Local completion permits local buffer
+reuse but does not establish remote delivery or GPU visibility.
+
+Use `OperationContext::new()` for stable native context storage with the
+low-level endpoint, retaining one context per accepted operation until its
+completion or successful close. `AsyncEndpoint::read` and `write` manage
+these contexts and retain a clone of the registration until actual
+retirement, including after observer drop or a queue error. Memory-region
+clones share one native registration. These APIs still borrow the allocation:
+reads prohibit local buffer access, and writes prohibit local mutation,
+until the accepted operation retires. Dropping an observer is not cancellation.
+
+The provider tests exercise host-memory scalar transfers on sockets and
+TCP/RxM. GPU registration, endpoint-bound registration setup, owned allocation
+leases, immediate data, and vectored RMA remain additional Rust frontend work.
+
+### Submission errors and backpressure
+
+`send`, `recv`, tagged and RMA submissions, and `inject` return
 `Error::Submission { code }` when libfabric rejects an operation. `code`
 retains the negative native status. `error.is_would_block()` identifies
 `FI_EAGAIN` using the linked libfabric constants; `error.is_timeout()`
@@ -129,8 +160,8 @@ submission rejection. C++ exceptions remain `Error::Cxx`.
 Async submissions allocate native `fi_context2` scratch storage. The bound
 completion queue retains it when a future is dropped and releases it when
 the matching completion is consumed. Polling a clone of the underlying
-queue performs the same retirement. User buffers and registrations still
-need to remain valid independently of the future.
+queue performs the same retirement. User buffers remain borrowed independently
+of the future; registered RMA additionally retains its registration lease.
 
 `Endpoint::close` and `AsyncEndpoint::close` expose native shutdown errors
 as `Error::Close { code }`. Successful close discards outstanding work and
@@ -161,6 +192,7 @@ queue saturation regression requires that software provider explicitly:
 cargo test --all-features receive_backpressure_survives_the_cpp_bridge -- --ignored
 cargo test --all-features dropped_receives_retain_contexts_until_close -- --ignored
 cargo test --all-features completion_decoding_retires_only_its_native_context -- --ignored
+cargo test --all-features --test rma -- --include-ignored
 ```
 
 ## License
