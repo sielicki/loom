@@ -217,3 +217,21 @@ TEST_CASE("memory registration closes native handles when allocation fails", "[a
     REQUIRE(provider.registrations == 1);
     REQUIRE(provider.live_regions == 0);
 }
+
+TEST_CASE("discovery and fabric creation release native allocations on failure",
+          "[allocation][integration]") {
+    auto info = loom::query_fabric({});
+    if (!info)
+        SKIP("No providers available");
+    auto fabric = loom::fabric::create(*info);
+    if (!fabric)
+        SKIP("Provider fabric cannot be opened");
+    // LeakSanitizer also checks allocations made inside libfabric here.
+    SECTION("discovery result") {
+        REQUIRE_THROWS_AS(loom::query_fabric({}, std::pmr::null_memory_resource()), std::bad_alloc);
+    }
+    SECTION("fabric handle") {
+        REQUIRE_THROWS_AS(loom::fabric::create(*info, std::pmr::null_memory_resource()),
+                          std::bad_alloc);
+    }
+}

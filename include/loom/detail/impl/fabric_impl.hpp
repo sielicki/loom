@@ -18,6 +18,7 @@
 #include "loom/core/fabric.hpp"
 #include "loom/core/result.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 namespace loom::detail {
 
@@ -229,15 +230,19 @@ auto fabric::create(const fabric_info& info, memory_resource* resource) -> resul
         return make_error_result<fabric>(static_cast<errc>(ret));
     }
 
+    detail::unique_fid<::fid_fabric> pending{fab};
+
     if (resource) {
         auto impl =
             detail::make_pmr_unique<detail::fabric_impl>(resource, fab, fi_info->fabric_attr);
+        (void)pending.release();
         return fabric{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl =
         detail::make_pmr_unique<detail::fabric_impl>(default_resource, fab, fi_info->fabric_attr);
+    (void)pending.release();
     return fabric{std::move(impl)};
 }
 
@@ -317,13 +322,17 @@ auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> resul
         return make_error_result<fabric_info>(static_cast<errc>(ret));
     }
 
+    std::unique_ptr<::fi_info, decltype(&::fi_freeinfo)> pending{result, &::fi_freeinfo};
+
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::fabric_info_impl>(resource, result);
+        (void)pending.release();
         return fabric_info{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::fabric_info_impl>(default_resource, result);
+    (void)pending.release();
     return fabric_info{std::move(impl)};
 }
 
