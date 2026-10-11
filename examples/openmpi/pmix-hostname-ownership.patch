@@ -1,0 +1,8 @@
+--- a/src/mca/gds/hash/gds_hash.c
++++ b/src/mca/gds/hash/gds_hash.c
+@@ -861,4 +861,5 @@
+                         PMIX_VALUE_GET_NUMBER(rc, kp2.value, pmix_globals.nodeid, uint32_t);
+                     } else if (PMIX_CHECK_KEY(&kp2, PMIX_HOSTNAME)) {
++                        free(pmix_globals.hostname);
+                         pmix_globals.hostname = strdup(kp2.value->data.string);
+                     }

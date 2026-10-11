@@ -1,6 +1,10 @@
 { stdenv, pmix }:
 pmix.overrideAttrs (old: {
-  patches = (old.patches or [ ]) ++ [ ./pmix-keyindex.patch ./pmix-get-ownership.patch ];
+  patches = (old.patches or [ ]) ++ [
+    ./pmix-keyindex.patch
+    ./pmix-get-ownership.patch
+    ./pmix-hostname-ownership.patch
+  ];
   doInstallCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
   installCheckPhase = ''
     runHook preInstallCheck

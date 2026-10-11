@@ -100,7 +100,9 @@ finalization check under ASan/UBSan with leak detection.
 The blocking `PMIx_Get` callback transfers its already-owned result instead
 of allocating a second copy and losing the first. Its two-process regression
 checks local and server-fetched values, independent mutable results, and
-missing keys under ASan/UBSan with leak detection:
+missing keys under ASan/UBSan with leak detection. It exercises both the
+shared-memory and hash datastores. The hash datastore releases the initial
+hostname before replacing it with the server-provided hostname:
 
 ```sh
 nix build .#checks.x86_64-linux.openmpi-pmix-get --no-link
