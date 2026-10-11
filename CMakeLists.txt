@@ -492,6 +492,7 @@ target_sources(loom PUBLIC
         include/loom/protocol/protocol.hpp
 
         # Detail headers
+        include/loom/detail/collective_traits.hpp
         include/loom/detail/conversions.hpp
         include/loom/detail/native_address.hpp
         include/loom/detail/mr_key.hpp
