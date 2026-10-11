@@ -89,6 +89,7 @@ loom_add_test(test_fabric_query)
 loom_add_test(test_fabric_attributes)
 loom_add_test(test_fabric_iteration)
 loom_add_test(test_provider_aware)
+loom_add_test(test_provider_contract)
 loom_add_test(test_provider_atomic)
 loom_add_test(test_trigger)
 loom_add_test(test_trigger_transport)
@@ -115,6 +116,7 @@ add_executable(test_implementation
     test_counter.cpp
     test_scalable_endpoint.cpp
     test_endpoint_limits.cpp
+    test_provider_contract.cpp
     test_trigger_transport.cpp
     test_fabric_iteration.cpp
     test_fabric_attributes.cpp

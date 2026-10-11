@@ -410,6 +410,7 @@ target_sources(loom PUBLIC
         include/loom/core/counter.hpp
         include/loom/core/domain.hpp
         include/loom/core/endpoint.hpp
+        include/loom/core/endpoint_contract.hpp
         include/loom/core/endpoint_options.hpp
         include/loom/core/endpoint_types.hpp
         include/loom/core/error.hpp

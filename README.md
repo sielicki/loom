@@ -409,6 +409,45 @@ provider may have different capabilities and needs its own established
 contract. Atomic-capable providers still require validation of the
 operation, datatype, and element count through libfabric's atomic queries.
 
+Checked endpoints use a capability profile, with no provider-name matching:
+
+```cpp
+using header_profile = message_endpoint_profile<rdm_endpoint_tag, 32>;
+using header_endpoint = contract_endpoint<header_profile>;
+auto checked = header_endpoint::create(domain, info);
+if (!checked) return std::unexpected(checked.error());
+// Bind completion queues and other resources, then check enable().
+// inject(span<const byte, 32>) fits this type's established bound.
+```
+
+The factory checks endpoint type, required capabilities, supported mode
+obligations, and the chosen message inject bound against the selected
+configuration. Profiles can also require exact threading and control/data
+progress policies, checked against the opened domain. The default profile
+accepts no mode obligations. A custom profile declaring `supported_modes`
+requires the caller to satisfy those obligations for every operation.
+Profiles expose `ep_type`, `required_caps`, and `optional_caps` for use with
+`fabric_query`; additional profile requirements are checked at construction.
+
+The inject bound is checked against `FI_OPT_INJECT_MSG_SIZE`, falling back
+to creation attributes when that option is unsupported. Oversized fixed
+spans are rejected at compile time; dynamic spans are checked before
+submission. Native errors such as `FI_EAGAIN` propagate. Binding resources
+and enabling revalidate the bound; a failure prevents further submissions.
+A zero bound disables injection entirely.
+
+`provider_endpoint<Provider, Bound, EndpointTag>` and the named aliases
+remain convenience spellings for these profiles: a provider tag supplies
+only the default bound, and the default endpoint type is RDM. They expose
+no provider-identity or native-atomic claims. Use `contract_endpoint<Profile>`
+to state requirements directly; provider traits remain discovery defaults.
+Construction from an arbitrary endpoint and `make_provider_endpoint` are
+removed. `underlying()` returns a const view;
+`std::move(checked_endpoint).release()` returns to the generic API.
+Native-handle mutation must preserve the checked configuration. This
+contract does not establish MR policy, ordering, or support for particular
+atomic operations, datatypes, and counts.
+
 ### Protocol Abstraction Layer
 
 Define custom protocol types with compile-time capability validation:
@@ -556,10 +595,10 @@ auto main() -> int {
     // Convenience function for common case
     auto tagged_providers = query_providers<rdm_tagged_messaging>();
 
-    // Filter with a predicate
+    // Filter by a negotiated policy
     auto filtered = query_providers<rdma_write_ops>([](const fabric_info& info) {
-        auto attr = info.get_fabric_attr();
-        return attr && attr->provider_name == "verbs";
+        auto attr = info.get_domain_attr();
+        return attr && attr->data_progress == progress_mode::auto_progress;
     });
 
     return 0;
