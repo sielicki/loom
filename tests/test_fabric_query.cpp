@@ -5,6 +5,54 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+namespace {
+struct unsupported_capabilities {
+    static constexpr loom::caps required_caps{~std::uint64_t{0}};
+    static constexpr loom::caps optional_caps{};
+    static constexpr auto ep_type = loom::endpoint_types::msg;
+};
+}  // namespace
+
+TEST_CASE("filtered provider queries return owning ranges", "[fabric_query][integration]") {
+    auto available = loom::fabric_query<>::query();
+    if (!available)
+        SKIP("No providers available");
+    const auto count = available->size();
+    REQUIRE(count > 0);
+    auto filtered = [] {
+        const auto accept = [](const loom::fabric_info&) {
+            return true;
+        };
+        return loom::query_providers<>(accept);
+    }();
+    REQUIRE(filtered);
+    REQUIRE(std::ranges::distance(*filtered) == count);
+    auto moved = std::move(filtered);
+    REQUIRE(std::ranges::distance(*moved) == count);
+    for (const auto& info : *moved) {
+        REQUIRE(info);
+        REQUIRE(info.get_fabric_attr());
+    }
+    auto none =
+        loom::fabric_query<>::query_filtered([](const loom::fabric_info&) { return false; });
+    REQUIRE(none);
+    REQUIRE(std::ranges::empty(*none));
+}
+
+TEST_CASE("filtered provider queries propagate discovery errors", "[fabric_query]") {
+    using query = loom::fabric_query<unsupported_capabilities>;
+    const auto available = query::query();
+    REQUIRE_FALSE(available);
+    bool called{};
+    auto filtered = query::query_filtered([&](const loom::fabric_info&) {
+        called = true;
+        return true;
+    });
+    REQUIRE_FALSE(filtered);
+    REQUIRE(filtered.error() == available.error());
+    REQUIRE_FALSE(called);
+}
+
 TEST_CASE("fabric queries honor name filters", "[fabric_query][integration]") {
     loom::fabric_hints hints;
     SECTION("provider") {

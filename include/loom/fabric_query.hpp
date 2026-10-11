@@ -3,7 +3,10 @@
 
 #include <concepts>
 #include <optional>
+#include <ranges>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "loom/core/endpoint_types.hpp"
 #include "loom/core/fabric.hpp"
@@ -188,16 +191,18 @@ public:
      * @brief Queries for providers with additional filtering.
      * @tparam Predicate The filter predicate type.
      * @param pred The filter predicate.
-     * @return Filtered view of matching providers.
+     * @return Owning filtered view of matching providers or a discovery error.
      */
     template <typename Predicate>
-    [[nodiscard]] static auto query_filtered(Predicate&& pred) {
+    [[nodiscard]] static auto query_filtered(Predicate&& pred)
+        -> result<std::ranges::filter_view<std::ranges::owning_view<provider_range>,
+                                           std::decay_t<Predicate>>> {
         auto range_result = query();
         if (!range_result) {
-            return range_result;
+            return std::unexpected(range_result.error());
         }
 
-        return std::ranges::views::filter(*range_result, std::forward<Predicate>(pred));
+        return std::views::filter(std::move(*range_result), std::forward<Predicate>(pred));
     }
 
     /**
@@ -270,7 +275,7 @@ template <fabric_capability... Caps>
  * @tparam Caps The required capability descriptors.
  * @tparam Predicate The filter predicate type.
  * @param pred The filter predicate to apply.
- * @return Filtered view of matching providers.
+ * @return Owning filtered view of matching providers or a discovery error.
  */
 template <fabric_capability... Caps, typename Predicate>
 [[nodiscard]] auto query_providers(Predicate&& pred) {
