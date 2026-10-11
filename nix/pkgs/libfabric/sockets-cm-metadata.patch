@@ -1,0 +1,25 @@
+Release duplicated names before replacing connection-request attributes.
+sock_fi_info starts from fi_dupinfo, so both setters receive owned strings.
+Copying default or hinted attributes over them leaked all three names.
+
+Based on ofiwg/libfabric v2.7.0.
+
+--- a/prov/sockets/src/sock_ep.c
++++ b/prov/sockets/src/sock_ep.c
+@@ -1398,6 +1398,8 @@
+ {
+ 	struct sock_fabric *fabric;
+ 
++	free(attr->name);
++	free(attr->prov_name);
+ 	*attr = sock_fabric_attr;
+ 	if (hint_attr && hint_attr->fabric) {
+ 		attr->fabric = hint_attr->fabric;
+@@ -1423,6 +1425,7 @@
+ {
+ 	struct sock_domain *domain;
+ 
++	free(attr->name);
+ 	domain = sock_dom_list_head();
+ 	attr->domain = domain ? &domain->dom_fid : NULL;
+ 	if (!hint_attr) {
