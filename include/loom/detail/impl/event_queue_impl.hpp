@@ -7,6 +7,7 @@
 #include <rdma/fi_errno.h>
 
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "loom/core/allocator.hpp"
@@ -21,13 +22,15 @@ namespace loom::detail {
 struct event_queue_impl {
     ::fid_eq* eq{nullptr};                ///< Underlying libfabric event queue handle.
     std::vector<std::byte> event_buffer;  ///< Buffer for reading events.
+    bool wait_enabled{false};             ///< Whether a native wait object was requested.
 
     /// @brief Default constructor with pre-allocated event buffer.
     event_queue_impl() : event_buffer(1024) {}
 
     /// @brief Constructs event_queue_impl with a libfabric event queue handle.
     /// @param eq_ptr The libfabric event queue pointer.
-    explicit event_queue_impl(::fid_eq* eq_ptr) : eq(eq_ptr), event_buffer(1024) {}
+    explicit event_queue_impl(::fid_eq* eq_ptr, bool can_wait = false)
+        : eq(eq_ptr), event_buffer(1024), wait_enabled(can_wait) {}
 
     /// @brief Destructor that closes the libfabric event queue.
     ~event_queue_impl() {
@@ -106,13 +109,14 @@ auto event_queue::create(const fabric& fab, const event_queue_attr& attr, memory
     detail::unique_fid<::fid_eq> pending{eq};
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::event_queue_impl>(resource, eq);
+        auto impl = detail::make_pmr_unique<detail::event_queue_impl>(resource, eq, attr.wait_obj);
         (void)pending.release();
         return event_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::event_queue_impl>(default_resource, eq);
+    auto impl =
+        detail::make_pmr_unique<detail::event_queue_impl>(default_resource, eq, attr.wait_obj);
     (void)pending.release();
     return event_queue{std::move(impl)};
 }
@@ -155,7 +159,7 @@ auto event_queue::poll() -> std::optional<fabric_event> {
 }
 
 auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> result<fabric_event> {
-    if (!impl_ || !impl_->eq) {
+    if (!impl_ || !impl_->eq || !impl_->wait_enabled) {
         return make_error_result<fabric_event>(errc::invalid_argument);
     }
 
@@ -164,7 +168,10 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
     std::uint64_t flags = 0;
 
     int timeout_ms = -1;
-    if (timeout.has_value()) {
+    if (timeout && timeout->count() >= 0) {
+        if (timeout->count() > std::numeric_limits<int>::max()) {
+            return make_error_result<fabric_event>(errc::invalid_argument);
+        }
         timeout_ms = static_cast<int>(timeout->count());
     }
 

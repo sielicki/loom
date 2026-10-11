@@ -158,6 +158,8 @@ public:
 
     [[nodiscard]] auto poll() const -> std::optional<completion_event>;
 
+    /// Requires completion_queue_attr::wait_obj. Missing or negative timeouts
+    /// wait indefinitely; finite timeouts must fit in int milliseconds.
     [[nodiscard("wait result must be checked for errors or timeout")]]
     auto wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt) const
         -> result<completion_event>;

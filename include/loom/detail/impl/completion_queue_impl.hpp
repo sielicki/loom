@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <ranges>
 #include <system_error>
 
@@ -25,6 +26,7 @@ namespace loom::detail {
 struct completion_queue_impl {
     ::fid_cq* cq{nullptr};               ///< Underlying libfabric completion queue handle.
     runtime_progress_policy progress{};  ///< Progress policy for the completion queue.
+    bool wait_enabled{false};            ///< Whether a native wait object was requested.
 
     /// @brief Default constructor.
     completion_queue_impl() = default;
@@ -33,8 +35,9 @@ struct completion_queue_impl {
     /// @param cq_ptr The libfabric completion queue pointer.
     /// @param prog The progress policy.
     explicit completion_queue_impl(::fid_cq* cq_ptr,
-                                   runtime_progress_policy prog = runtime_progress_policy{})
-        : cq(cq_ptr), progress(prog) {}
+                                   runtime_progress_policy prog = runtime_progress_policy{},
+                                   bool can_wait = false)
+        : cq(cq_ptr), progress(prog), wait_enabled(can_wait) {}
 
     /// @brief Destructor that closes the libfabric completion queue.
     ~completion_queue_impl() {
@@ -96,14 +99,15 @@ auto completion_queue::create(const domain& dom,
     auto progress = dom.progress_policy();
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(resource, cq, progress);
+        auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
+            resource, cq, progress, attr.wait_obj);
         (void)pending.release();
         return completion_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::completion_queue_impl>(default_resource, cq, progress);
+    auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
+        default_resource, cq, progress, attr.wait_obj);
     (void)pending.release();
     return completion_queue{std::move(impl)};
 }
@@ -142,14 +146,17 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
 
 auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) const
     -> result<completion_event> {
-    if (!impl_ || !impl_->cq) {
+    if (!impl_ || !impl_->cq || !impl_->wait_enabled) {
         return make_error_result<completion_event>(errc::invalid_argument);
     }
 
     ::fi_cq_tagged_entry entry{};
 
     int timeout_ms = -1;
-    if (timeout.has_value()) {
+    if (timeout && timeout->count() >= 0) {
+        if (timeout->count() > std::numeric_limits<int>::max()) {
+            return make_error_result<completion_event>(errc::invalid_argument);
+        }
         timeout_ms = static_cast<int>(timeout->count());
     }
 

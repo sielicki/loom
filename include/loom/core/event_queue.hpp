@@ -128,6 +128,8 @@ public:
 
     [[nodiscard]] auto poll() -> std::optional<fabric_event>;
 
+    /// Requires event_queue_attr::wait_obj. Missing or negative timeouts wait
+    /// indefinitely; finite timeouts must fit in int milliseconds.
     [[nodiscard]] auto wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt)
         -> result<fabric_event>;
 
