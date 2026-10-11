@@ -65,6 +65,10 @@ auto endpoint::impl_operation_flags(completion_direction direction) const noexce
     return 0;
 }
 
+auto endpoint::belongs_to(const domain& dom) const noexcept -> bool {
+    return impl_ && impl_->ep && dom && impl_->origin_domain == dom.internal_ptr();
+}
+
 auto endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->ep;
 }
@@ -104,7 +108,8 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
                                                                    inject_size,
                                                                    capabilities,
                                                                    tx_flags,
-                                                                   rx_flags);
+                                                                   rx_flags,
+                                                                   dom_ptr);
         (void)pending.release();
         return endpoint{std::move(impl)};
     }
@@ -118,7 +123,8 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
                                                                inject_size,
                                                                capabilities,
                                                                tx_flags,
-                                                               rx_flags);
+                                                               rx_flags,
+                                                               dom_ptr);
     (void)pending.release();
     return endpoint{std::move(impl)};
 }

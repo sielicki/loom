@@ -66,6 +66,7 @@ struct scalable_provider {
 TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][scalable]") {
     const bool receive = GENERATE(false, true);
     const bool triggered = GENERATE(false, true);
+    const bool explicit_resource = GENERATE(false, true);
     scalable_provider native;
     loom::domain domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
         loom::get_default_resource(), &native.domain_handle)};
@@ -82,7 +83,8 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     raw_info->addr_format = FI_SOCKADDR_IN6;
     loom::fabric_info info{loom::detail::make_pmr_unique<loom::detail::fabric_info_impl>(
         loom::get_default_resource(), raw_info)};
-    auto sep = loom::scalable_endpoint::create(domain, info);
+    auto sep = loom::scalable_endpoint::create(
+        domain, info, explicit_resource ? loom::get_default_resource() : nullptr);
     REQUIRE(sep);
     REQUIRE(sep->tx_context_count() == 2);
     REQUIRE(sep->rx_context_count() == 3);
@@ -90,6 +92,13 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     REQUIRE_FALSE(sep->rx_context(3));
     auto context = receive ? sep->rx_context(2) : sep->tx_context(1);
     REQUIRE(context);
+    CHECK(context->belongs_to(domain));
+    loom::domain empty_domain;
+    CHECK_FALSE(context->belongs_to(empty_domain));
+    auto moved_domain = std::move(domain);
+    CHECK_FALSE(context->belongs_to(domain));
+    CHECK(context->belongs_to(moved_domain));
+    domain = std::move(moved_domain);
     REQUIRE(context->impl_operation_flags(loom::completion_direction::transmit) ==
             (FI_FENCE | FI_DELIVERY_COMPLETE));
     REQUIRE(context->impl_operation_flags(loom::completion_direction::receive) == FI_COMPLETION);

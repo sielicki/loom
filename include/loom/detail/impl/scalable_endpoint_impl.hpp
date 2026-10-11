@@ -28,6 +28,7 @@ struct scalable_endpoint_impl {
     caps capabilities{};
     std::uint64_t tx_op_flags{};
     std::uint64_t rx_op_flags{};
+    ::fid_domain* origin_domain{};
 
     /// @brief Default constructor.
     scalable_endpoint_impl() = default;
@@ -52,10 +53,11 @@ struct scalable_endpoint_impl {
                            std::size_t inject_size_ = 0,
                            caps capabilities_ = {},
                            std::uint64_t tx_op_flags_ = 0,
-                           std::uint64_t rx_op_flags_ = 0)
+                           std::uint64_t rx_op_flags_ = 0,
+                           ::fid_domain* origin = nullptr)
         : sep(sep_), tx_ctx_cnt(tx_cnt), rx_ctx_cnt(rx_cnt), type(type_), addr_format(format),
           max_msg_size(max_msg_size_), inject_size(inject_size_), capabilities(capabilities_),
-          tx_op_flags(tx_op_flags_), rx_op_flags(rx_op_flags_) {}
+          tx_op_flags(tx_op_flags_), rx_op_flags(rx_op_flags_), origin_domain(origin) {}
 
     /// @brief Destructor that closes the libfabric scalable endpoint.
     ~scalable_endpoint_impl() {
@@ -135,7 +137,8 @@ auto scalable_endpoint::create(const domain& dom,
                                                                             inject_size,
                                                                             capabilities,
                                                                             tx_flags,
-                                                                            rx_flags);
+                                                                            rx_flags,
+                                                                            dom_ptr);
         (void)pending.release();
         return scalable_endpoint{std::move(impl)};
     }
@@ -151,7 +154,8 @@ auto scalable_endpoint::create(const domain& dom,
                                                                         inject_size,
                                                                         capabilities,
                                                                         tx_flags,
-                                                                        rx_flags);
+                                                                        rx_flags,
+                                                                        dom_ptr);
     (void)pending.release();
     return scalable_endpoint{std::move(impl)};
 }
@@ -216,7 +220,8 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
                                                                   impl_->inject_size,
                                                                   impl_->capabilities,
                                                                   impl_->tx_op_flags,
-                                                                  impl_->rx_op_flags);
+                                                                  impl_->rx_op_flags,
+                                                                  impl_->origin_domain);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }
@@ -248,7 +253,8 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
                                                                   0UZ,
                                                                   impl_->capabilities,
                                                                   impl_->tx_op_flags,
-                                                                  impl_->rx_op_flags);
+                                                                  impl_->rx_op_flags,
+                                                                  impl_->origin_domain);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }

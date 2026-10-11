@@ -408,6 +408,29 @@ report `invalid_argument`, unavailable native keys report `again`, and raw-key
 domains report `not_supported` through these scalar interfaces. Registered Asio
 buffer key accessors follow the same contract.
 
+For domains requiring `mr_mode_flags::endpoint`, construct the MR cache with
+both its domain and endpoint:
+
+```cpp
+auto cache = make_mr_cache<provider::verbs_tag>(domain, ep);
+auto registered = cache.lookup(buffer, mr_access_flags::send).value();
+```
+
+Each cache belongs to that endpoint. New host, HMEM, and DMA-BUF registrations
+are bound and enabled before a handle is returned; failed preparation leaves
+no cache entry. Ordinary domains keep their registration behavior. Omitting
+the endpoint when required, or supplying an endpoint from another domain,
+returns `invalid_argument` before registration. `ep.belongs_to(domain)` checks
+the native domain identity, including for scalable endpoint contexts;
+`domain.get_memory_region_mode()` exposes the negotiated registration modes.
+
+The domain and endpoint wrappers must keep their native handles and outlive
+the cache. The cache must outlive every returned handle. Retire all operations,
+release the handles, then clear or destroy the cache before closing the
+endpoint. `clear()` evicts only unreferenced registrations, so calling it while
+handles remain alive does not permit endpoint teardown. Cache locking does
+not serialize external endpoint operations against registration and binding.
+
 For raw-key registrations, use `mr.export_raw()` and exchange the returned
 `raw_remote_memory` fields through the consumer's wire protocol. Preserve
 `base_addr`, `addr`, `length` and every key byte. The native mapping base and

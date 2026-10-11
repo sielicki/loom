@@ -75,7 +75,8 @@ auto scalable_endpoint::create(const domain& dom,
                                                                             inject_size,
                                                                             capabilities,
                                                                             tx_flags,
-                                                                            rx_flags);
+                                                                            rx_flags,
+                                                                            dom_ptr);
         (void)pending.release();
         return scalable_endpoint{std::move(impl)};
     }
@@ -91,7 +92,8 @@ auto scalable_endpoint::create(const domain& dom,
                                                                         inject_size,
                                                                         capabilities,
                                                                         tx_flags,
-                                                                        rx_flags);
+                                                                        rx_flags,
+                                                                        dom_ptr);
     (void)pending.release();
     return scalable_endpoint{std::move(impl)};
 }
@@ -156,7 +158,8 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
                                                                   impl_->inject_size,
                                                                   impl_->capabilities,
                                                                   impl_->tx_op_flags,
-                                                                  impl_->rx_op_flags);
+                                                                  impl_->rx_op_flags,
+                                                                  impl_->origin_domain);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }
@@ -188,7 +191,8 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
                                                                   0UZ,
                                                                   impl_->capabilities,
                                                                   impl_->tx_op_flags,
-                                                                  impl_->rx_op_flags);
+                                                                  impl_->rx_op_flags,
+                                                                  impl_->origin_domain);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }

@@ -111,6 +111,10 @@ auto domain::get_address_format() const noexcept -> address_format {
     return impl_ ? impl_->addr_format : address_format::unspecified;
 }
 
+auto domain::get_memory_region_mode() const noexcept -> mr_mode {
+    return impl_ && impl_->domain ? detail::from_fi_mr_mode(impl_->mr_mode) : mr_mode{};
+}
+
 auto domain::get_threading() const -> threading_mode {
     if (!impl_) {
         return threading_mode::unspecified;

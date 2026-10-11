@@ -117,6 +117,7 @@ add_executable(test_implementation
     test_memory.cpp
     test_memory_events.cpp
     test_raw_memory.cpp
+    test_mr_cache.cpp
     test_shared_receive.cpp
     test_resource_allocations.cpp
     test_empty_resources.cpp

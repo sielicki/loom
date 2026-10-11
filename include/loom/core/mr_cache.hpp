@@ -19,6 +19,7 @@
 #include "loom/core/allocator.hpp"
 #include "loom/core/concepts/provider_traits.hpp"
 #include "loom/core/domain.hpp"
+#include "loom/core/endpoint.hpp"
 #include "loom/core/memory.hpp"
 #include "loom/core/result.hpp"
 #include "loom/core/types.hpp"
@@ -326,7 +327,10 @@ struct mr_cache_stats {
  *
  * Provides caching of memory region registrations to avoid repeated
  * registration overhead. Uses page-aligned regions for efficient sharing.
- * The domain must outlive this cache, which must outlive every returned handle.
+ * The domain and optional endpoint must outlive this cache, which must outlive
+ * every returned handle. Keep those wrappers unmoved and their native handles
+ * unchanged until the cache is destroyed. Endpoint-bound registrations are
+ * closed before their endpoint; retire all operations before clearing the cache.
  *
  * @tparam Provider The provider tag type.
  */
@@ -342,7 +346,18 @@ public:
      * @param resource Optional memory resource for allocations.
      */
     explicit mr_cache(domain& dom, memory_resource* resource = nullptr) noexcept
-        : domain_(&dom), resource_(resource ? resource : get_default_resource()) {}
+        : domain_(&dom), domain_identity_(dom.internal_ptr()),
+          resource_(resource ? resource : get_default_resource()) {}
+
+    /// Scope registrations to one endpoint. FI_MR_ENDPOINT domains require
+    /// this overload; each new host, HMEM, or DMA-BUF MR is bound and enabled
+    /// before publication. External endpoint use still follows the negotiated
+    /// provider threading rules; this cache serializes only its own accesses.
+    mr_cache(domain& dom, endpoint& ep, memory_resource* resource = nullptr) noexcept
+        : mr_cache(dom, resource) {
+        endpoint_ = &ep;
+        endpoint_identity_ = ep.internal_ptr();
+    }
 
     /// Deleted copy constructor
     mr_cache(const mr_cache&) = delete;
@@ -376,6 +391,8 @@ public:
         }
 
         std::unique_lock lock(mutex_);
+        if (auto valid = validate_context(); !valid)
+            return std::unexpected(valid.error());
 
         if (auto* entry = find_existing_entry(uaddr, length, access)) {
             ++stats_.hits;
@@ -396,6 +413,9 @@ public:
         if (!mr_result) {
             return std::unexpected(mr_result.error());
         }
+
+        if (auto ready = prepare_registration(*mr_result); !ready)
+            return std::unexpected(ready.error());
 
         entry->mr = std::move(*mr_result);
 
@@ -440,6 +460,8 @@ public:
         }
 
         std::unique_lock lock(mutex_);
+        if (auto valid = validate_context(); !valid)
+            return std::unexpected(valid.error());
 
         auto entry = std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
         entry->host_memory = false;
@@ -452,6 +474,9 @@ public:
         }
 
         entry->base_addr = reinterpret_cast<std::uintptr_t>(mr_result->address());
+        if (auto ready = prepare_registration(*mr_result); !ready)
+            return std::unexpected(ready.error());
+
         entry->mr = std::move(*mr_result);
 
         auto* entry_ptr = entry.get();
@@ -481,6 +506,8 @@ public:
         }
 
         std::unique_lock lock(mutex_);
+        if (auto valid = validate_context(); !valid)
+            return std::unexpected(valid.error());
 
         auto entry = std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
         entry->host_memory = false;
@@ -491,6 +518,9 @@ public:
         if (!mr_result) {
             return std::unexpected(mr_result.error());
         }
+
+        if (auto ready = prepare_registration(*mr_result); !ready)
+            return std::unexpected(ready.error());
 
         entry->mr = std::move(*mr_result);
 
@@ -591,6 +621,25 @@ public:
 private:
     friend class mr_handle<Provider>;
 
+    [[nodiscard]] auto validate_context() const noexcept -> void_result {
+        if (!*domain_ || domain_->internal_ptr() != domain_identity_)
+            return make_error_result<void>(errc::invalid_argument);
+        if (endpoint_ &&
+            (!endpoint_->belongs_to(*domain_) || endpoint_->internal_ptr() != endpoint_identity_))
+            return make_error_result<void>(errc::invalid_argument);
+        if (!endpoint_ && domain_->get_memory_region_mode().has(mr_mode_flags::endpoint))
+            return make_error_result<void>(errc::invalid_argument);
+        return make_success();
+    }
+
+    [[nodiscard]] auto prepare_registration(memory_region& region) -> void_result {
+        if (!domain_->get_memory_region_mode().has(mr_mode_flags::endpoint))
+            return make_success();
+        if (auto bound = region.bind(*endpoint_); !bound)
+            return bound;
+        return region.enable();
+    }
+
     /**
      * @brief Finds an existing entry containing the requested range.
      * @param addr Start address.
@@ -638,6 +687,9 @@ private:
     }
 
     domain* domain_;                   ///< Fabric domain
+    void* domain_identity_;            ///< Native identity fixed at construction
+    endpoint* endpoint_{};             ///< Optional endpoint registration scope
+    void* endpoint_identity_{};
     memory_resource* resource_;        ///< Memory resource
     mutable std::shared_mutex mutex_;  ///< Lock for thread safety
     std::multimap<std::uintptr_t, std::unique_ptr<detail::mr_cache_entry_base>>
@@ -656,6 +708,13 @@ template <provider_tag Provider>
 [[nodiscard]] auto make_mr_cache(domain& dom, memory_resource* resource = nullptr)
     -> mr_cache<Provider> {
     return mr_cache<Provider>(dom, resource);
+}
+
+/// Create a cache scoped to one endpoint in the supplied domain.
+template <provider_tag Provider>
+[[nodiscard]] auto make_mr_cache(domain& dom, endpoint& ep, memory_resource* resource = nullptr)
+    -> mr_cache<Provider> {
+    return mr_cache<Provider>(dom, ep, resource);
 }
 
 /**

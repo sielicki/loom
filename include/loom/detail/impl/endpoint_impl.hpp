@@ -43,6 +43,7 @@ struct endpoint_impl {
     caps capabilities{};
     std::uint64_t tx_op_flags{};
     std::uint64_t rx_op_flags{};
+    ::fid_domain* origin_domain{};
     completion_queue_binding tx_cq;
     completion_queue_binding rx_cq;
 
@@ -65,10 +66,11 @@ struct endpoint_impl {
                   std::size_t inject_size_ = 0,
                   caps capabilities_ = {},
                   std::uint64_t tx_op_flags_ = 0,
-                  std::uint64_t rx_op_flags_ = 0)
+                  std::uint64_t rx_op_flags_ = 0,
+                  ::fid_domain* origin = nullptr)
         : ep(ep_), type(type_), addr_format(fmt), max_msg_size(max_msg_size_),
           inject_size(inject_size_), capabilities(capabilities_), tx_op_flags(tx_op_flags_),
-          rx_op_flags(rx_op_flags_) {}
+          rx_op_flags(rx_op_flags_), origin_domain(origin) {}
 
     [[nodiscard]] auto query_size_limit(int option, std::size_t fallback) const
         -> result<std::size_t> {
@@ -156,6 +158,10 @@ auto endpoint::impl_operation_flags(completion_direction direction) const noexce
     return 0;
 }
 
+auto endpoint::belongs_to(const domain& dom) const noexcept -> bool {
+    return impl_ && impl_->ep && dom && impl_->origin_domain == dom.internal_ptr();
+}
+
 auto endpoint::impl_valid() const noexcept -> bool {
     return impl_ && impl_->ep;
 }
@@ -195,7 +201,8 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
                                                                    inject_size,
                                                                    capabilities,
                                                                    tx_flags,
-                                                                   rx_flags);
+                                                                   rx_flags,
+                                                                   dom_ptr);
         (void)pending.release();
         return endpoint{std::move(impl)};
     }
@@ -209,7 +216,8 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
                                                                inject_size,
                                                                capabilities,
                                                                tx_flags,
-                                                               rx_flags);
+                                                               rx_flags,
+                                                               dom_ptr);
     (void)pending.release();
     return endpoint{std::move(impl)};
 }

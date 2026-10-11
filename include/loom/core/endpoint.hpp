@@ -223,6 +223,10 @@ public:
     [[nodiscard]] auto bind_stx(shared_tx_context& stx) -> void_result;
     [[nodiscard]] auto bind_srx(shared_rx_context& srx) -> void_result;
 
+    /// Whether this live endpoint was created in the given native domain.
+    /// Unknown origin metadata in an adopted implementation does not match.
+    [[nodiscard]] auto belongs_to(const domain& dom) const noexcept -> bool;
+
     /// Native creation defaults for implementation-level message submission.
     [[nodiscard]] auto impl_operation_flags(completion_direction direction) const noexcept
         -> std::uint64_t;

@@ -1,12 +1,33 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/core/fabric.hpp>
 #include <loom/core/mr_cache.hpp>
 
 #include <barrier>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+TEST_CASE("endpoint-bound caches require an endpoint before registering",
+          "[mr_cache][endpoint_mr]") {
+    using namespace loom;
+    test::mock_domain provider{FI_MR_ENDPOINT};
+    mr_cache<provider::tcp_tag> cache{provider.dom};
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    const auto operation = GENERATE(0, 1, 2);
+    auto handle =
+        operation == 0 ? cache.lookup(buffer, mr_access_flags::send)
+        : operation == 1
+            ? cache.lookup_hmem(
+                  buffer.data(), buffer.size(), mr_access_flags::send, hmem_device::cuda(0))
+            : cache.lookup_dmabuf(buffer.data(), buffer.size(), mr_access_flags::send, 7);
+    CHECK_FALSE(handle);
+    CHECK(provider.registrations == 0);
+    CHECK(cache.size() == 0);
+}
 
 TEST_CASE("cache rejects wrapping ranges before lookup or registration", "[mr_cache]") {
     using namespace loom;
@@ -432,4 +453,285 @@ TEST_CASE("alignment edge cases", "[mr_cache]") {
     static_assert(traits::aligned_length(0, 4097) == 8192);
     static_assert(traits::aligned_length(1, 4095) == 4096);
     static_assert(traits::aligned_length(1, 4096) == 8192);
+}
+
+namespace {
+enum class cache_memory { host, hmem, dmabuf };
+
+auto endpoint_cache_lookup(auto& cache, std::span<std::byte> buffer, cache_memory kind)
+    -> decltype(cache.lookup(buffer, loom::mr_access_flags::send)) {
+    switch (kind) {
+        case cache_memory::host:
+            return cache.lookup(buffer, loom::mr_access_flags::send);
+        case cache_memory::hmem:
+            return cache.lookup_hmem(buffer.data(),
+                                     buffer.size(),
+                                     loom::mr_access_flags::send,
+                                     loom::hmem_device::cuda(0));
+        case cache_memory::dmabuf:
+            return cache.lookup_dmabuf(
+                buffer.data(), buffer.size(), loom::mr_access_flags::send, 7);
+    }
+    std::unreachable();
+}
+
+struct endpoint_cache_provider : loom::test::mock_domain {
+    struct binding {
+        fid* endpoint{};
+        bool enabled{};
+    };
+    std::unordered_map<fid_mr*, binding> bindings;
+    int binds{}, enables{}, endpoint_closes{};
+    int bind_error{}, enable_error{};
+    const decltype(fi_ops::close) release_region = region_ops.close;
+
+    static auto owner(fid* handle) -> endpoint_cache_provider& {
+        return *static_cast<endpoint_cache_provider*>(
+            static_cast<loom::test::mock_domain*>(handle->context));
+    }
+    fi_ops endpoint_ops{
+        .size = sizeof(fi_ops),
+        .close =
+            [](fid* endpoint) {
+                auto& self = owner(endpoint);
+                for (const auto& [region, binding] : self.bindings)
+                    if (binding.endpoint == endpoint)
+                        return -FI_EBUSY;
+                ++self.endpoint_closes;
+                delete reinterpret_cast<fid_ep*>(endpoint);
+                return 0;
+            },
+    };
+    fi_ops_domain operations{
+        .size = sizeof(fi_ops_domain),
+        .endpoint =
+            [](fid_domain* domain, fi_info*, fid_ep** output, void*) {
+                auto& self = owner(&domain->fid);
+                *output = new fid_ep{.fid = {.fclass = FI_CLASS_EP,
+                                             .context = domain->fid.context,
+                                             .ops = &self.endpoint_ops}};
+                return 0;
+            },
+    };
+    fi_ep_attr endpoint_attributes{.type = FI_EP_RDM};
+    loom::fabric_info info =
+        loom::fabric_info::copy_native(fi_info{.ep_attr = &endpoint_attributes}).value();
+
+    explicit endpoint_cache_provider(int mode = FI_MR_ENDPOINT,
+                                     std::size_t key_bytes = sizeof(std::uint64_t))
+        : mock_domain(mode, key_bytes) {
+        handle.ops = &operations;
+        region_ops.bind = [](fid* region, fid* endpoint, std::uint64_t flags) {
+            auto& self = owner(region);
+            ++self.binds;
+            CHECK(flags == 0);
+            CHECK(endpoint->fclass == FI_CLASS_EP);
+            CHECK(endpoint->context == region->context);
+            if (self.bind_error)
+                return self.bind_error;
+            auto* mr = reinterpret_cast<fid_mr*>(region);
+            if (self.bindings.contains(mr))
+                return -FI_EOPBADSTATE;
+            self.bindings.emplace(mr, binding{endpoint, false});
+            return 0;
+        };
+        region_ops.control = [](fid* region, int command, void* argument) {
+            auto& self = owner(region);
+            ++self.enables;
+            CHECK(command == FI_ENABLE);
+            CHECK(argument == nullptr);
+            auto binding = self.bindings.find(reinterpret_cast<fid_mr*>(region));
+            if (binding == self.bindings.end() || binding->second.enabled)
+                return -FI_EOPBADSTATE;
+            if (self.enable_error)
+                return self.enable_error;
+            binding->second.enabled = true;
+            return 0;
+        };
+        region_ops.close = [](fid* region) {
+            auto& self = owner(region);
+            self.bindings.erase(reinterpret_cast<fid_mr*>(region));
+            return self.release_region(region);
+        };
+    }
+    auto endpoint(loom::memory_resource* resource = nullptr) -> loom::endpoint {
+        return loom::endpoint::create(dom, info, resource).value();
+    }
+};
+}  // namespace
+
+TEST_CASE("endpoint caches publish enabled host and device registrations",
+          "[mr_cache][endpoint_mr]") {
+    using namespace loom;
+    const auto kind = GENERATE(cache_memory::host, cache_memory::hmem, cache_memory::dmabuf);
+    const auto mode = GENERATE(0, FI_MR_ENDPOINT, FI_MR_ENDPOINT | FI_MR_PROV_KEY);
+    const auto explicit_resource = GENERATE(false, true);
+    endpoint_cache_provider provider{mode};
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    auto endpoint = provider.endpoint(explicit_resource ? get_default_resource() : nullptr);
+    REQUIRE(endpoint.belongs_to(provider.dom));
+    CHECK(provider.dom.get_memory_region_mode().has(mr_mode_flags::endpoint) ==
+          bool(mode & FI_MR_ENDPOINT));
+    auto cache = make_mr_cache<provider::tcp_tag>(provider.dom, endpoint);
+    auto handle = endpoint_cache_lookup(cache, buffer, kind);
+    REQUIRE(handle);
+    CHECK(provider.registrations == 1);
+    CHECK(cache.stats().registrations == 1);
+    CHECK(cache.size() == 1);
+    if (mode & FI_MR_ENDPOINT) {
+        REQUIRE(provider.bindings.size() == 1);
+        auto* native = static_cast<fid_mr*>(handle->mr()->internal_ptr());
+        CHECK(provider.bindings.at(native).endpoint == endpoint.internal_ptr());
+        CHECK(provider.bindings.at(native).enabled);
+        CHECK(provider.binds == 1);
+        CHECK(provider.enables == 1);
+    } else {
+        CHECK(provider.bindings.empty());
+        CHECK(provider.binds == 0);
+        CHECK(provider.enables == 0);
+    }
+    REQUIRE(handle->key());
+    if (kind == cache_memory::host) {
+        const auto again = cache.lookup(buffer, mr_access_flags::send);
+        REQUIRE(again);
+        CHECK(again->key() == handle->key());
+        CHECK(provider.registrations == 1);
+        CHECK(cache.stats().hits == 1);
+    }
+    cache.clear();
+    CHECK(provider.live_regions == 1);
+    if (mode & FI_MR_ENDPOINT)
+        CHECK(endpoint.close().error() == errc::busy);
+    handle = std::unexpected(make_error_code(errc::io_error));
+    CHECK(provider.live_regions == 1);
+    cache.clear();
+    CHECK(provider.live_regions == 0);
+    CHECK(provider.bindings.empty());
+    REQUIRE(endpoint.close());
+    CHECK(provider.endpoint_closes == 1);
+    CHECK(endpoint_cache_lookup(cache, buffer, kind).error() == errc::invalid_argument);
+}
+
+TEST_CASE("endpoint caches never reuse another endpoint registration", "[mr_cache][endpoint_mr]") {
+    using namespace loom;
+    endpoint_cache_provider provider;
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    auto first = provider.endpoint();
+    auto second = provider.endpoint();
+    mr_cache<provider::tcp_tag> first_cache{provider.dom, first};
+    mr_cache<provider::tcp_tag> second_cache{provider.dom, second};
+    auto first_region = first_cache.lookup(buffer, mr_access_flags::send).value();
+    auto second_region = second_cache.lookup(buffer, mr_access_flags::send).value();
+    CHECK(first_region.mr()->internal_ptr() != second_region.mr()->internal_ptr());
+    CHECK(first_region.key() != second_region.key());
+    CHECK(provider.bindings.at(static_cast<fid_mr*>(first_region.mr()->internal_ptr())).endpoint ==
+          first.internal_ptr());
+    CHECK(provider.bindings.at(static_cast<fid_mr*>(second_region.mr()->internal_ptr())).endpoint ==
+          second.internal_ptr());
+    auto moved = std::move(first);
+    CHECK(first_cache.lookup(buffer, mr_access_flags::send).error() == errc::invalid_argument);
+    CHECK(moved.belongs_to(provider.dom));
+    first = std::move(moved);
+    REQUIRE(first_cache.lookup(buffer, mr_access_flags::send));
+    CHECK(provider.registrations == 2);
+}
+
+TEST_CASE("endpoint caches reject missing or foreign native scopes before registering",
+          "[mr_cache][endpoint_mr]") {
+    using namespace loom;
+    const auto kind = GENERATE(cache_memory::host, cache_memory::hmem, cache_memory::dmabuf);
+    endpoint_cache_provider provider;
+    endpoint_cache_provider foreign;
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    auto endpoint = foreign.endpoint();
+    mr_cache<provider::tcp_tag> cache{provider.dom, endpoint};
+    CHECK(endpoint_cache_lookup(cache, buffer, kind).error() == errc::invalid_argument);
+    CHECK(provider.registrations == 0);
+    CHECK(foreign.registrations == 0);
+    CHECK_FALSE(endpoint.belongs_to(provider.dom));
+    loom::endpoint empty_endpoint;
+    mr_cache<provider::tcp_tag> empty_cache{provider.dom, empty_endpoint};
+    CHECK(endpoint_cache_lookup(empty_cache, buffer, kind).error() == errc::invalid_argument);
+    domain empty_domain;
+    mr_cache<provider::tcp_tag> invalid{empty_domain};
+    CHECK(endpoint_cache_lookup(invalid, buffer, kind).error() == errc::invalid_argument);
+    CHECK_FALSE(endpoint.belongs_to(empty_domain));
+    CHECK_FALSE(empty_endpoint.belongs_to(provider.dom));
+    auto moved_domain = std::move(provider.dom);
+    mr_cache<provider::tcp_tag> moved_cache{provider.dom};
+    CHECK(endpoint_cache_lookup(moved_cache, buffer, kind).error() == errc::invalid_argument);
+    provider.dom = std::move(moved_domain);
+}
+
+TEST_CASE("failed endpoint registration is retired before cache publication",
+          "[mr_cache][endpoint_mr]") {
+    using namespace loom;
+    enum class failure { registration, bind, enable };
+    const auto fail = GENERATE(failure::registration, failure::bind, failure::enable);
+    const auto kind = GENERATE(cache_memory::host, cache_memory::hmem, cache_memory::dmabuf);
+    // A one-key pool proves failed registration/bind/enable releases the lease.
+    endpoint_cache_provider provider{FI_MR_ENDPOINT, 0};
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    auto endpoint = provider.endpoint();
+    mr_cache<provider::tcp_tag> cache{provider.dom, endpoint};
+    switch (fail) {
+        case failure::registration:
+            provider.registration_error = -FI_EAGAIN;
+            break;
+        case failure::bind:
+            provider.bind_error = -FI_EAGAIN;
+            break;
+        case failure::enable:
+            provider.enable_error = -FI_EAGAIN;
+            break;
+    }
+    const auto rejected = endpoint_cache_lookup(cache, buffer, kind);
+    REQUIRE_FALSE(rejected);
+    CHECK(rejected.error() == errc::again);
+    CHECK(cache.size() == 0);
+    CHECK(cache.stats().registrations == 0);
+    CHECK(cache.stats().current_entries == 0);
+    CHECK(cache.stats().total_registered_bytes == 0);
+    CHECK(provider.live_regions == 0);
+    CHECK(provider.keys.empty());
+    CHECK(provider.bindings.empty());
+    CHECK(provider.binds == (fail == failure::registration ? 0 : 1));
+    CHECK(provider.enables == (fail == failure::enable ? 1 : 0));
+    provider.registration_error = provider.bind_error = provider.enable_error = 0;
+    const auto accepted = endpoint_cache_lookup(cache, buffer, kind);
+    REQUIRE(accepted);
+    CHECK(provider.live_regions == 1);
+    CHECK(cache.size() == 1);
+    CHECK(provider.requested_keys.back() == 0);
+    const auto native = static_cast<fid_mr*>(accepted->mr()->internal_ptr());
+    CHECK(provider.bindings.at(native).enabled);
+}
+
+TEST_CASE("native endpoint caches preserve ordinary domain registration",
+          "[mr_cache][integration]") {
+    using namespace loom;
+    fabric_hints hints;
+    hints.provider_name = "sockets";
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Sockets provider unavailable");
+    auto fabric = fabric::create(*info).value();
+    auto domain = domain::create(fabric, *info).value();
+    auto foreign = domain::create(fabric, *info).value();
+    auto endpoint = endpoint::create(domain, *info).value();
+    CHECK(endpoint.belongs_to(domain));
+    CHECK_FALSE(endpoint.belongs_to(foreign));
+    CHECK(domain.get_memory_region_mode() == info->get_domain_attr()->memory_region_mode);
+    CHECK_FALSE(domain.get_memory_region_mode().has(mr_mode_flags::endpoint));
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    mr_cache<provider::tcp_tag> cache{domain, endpoint};
+    auto region = cache.lookup(buffer, mr_access_flags::send);
+    REQUIRE(region);
+    REQUIRE(region->key());
+    CHECK(region->base_address() == buffer.data());
+    mr_cache<provider::tcp_tag> invalid{foreign, endpoint};
+    CHECK(invalid.lookup(buffer, mr_access_flags::send).error() == errc::invalid_argument);
+    CHECK(invalid.size() == 0);
 }
