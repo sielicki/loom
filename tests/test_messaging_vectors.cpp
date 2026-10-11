@@ -395,6 +395,215 @@ TEST_CASE("message flags distinguish inherited direction from explicit overrides
         REQUIRE(result);
 }
 
+TEST_CASE("tagged probe flags and context reach the provider", "[message][probe]") {
+    using namespace loom;
+    struct flag_case {
+        msg::recv_flags flags;
+        std::uint64_t native;
+    };
+    const auto [flags, expected] =
+        GENERATE(flag_case{msg::recv_flag::peek, FI_PEEK},
+                 flag_case{msg::recv_flag::peek | msg::recv_flag::claim, FI_PEEK | FI_CLAIM},
+                 flag_case{msg::recv_flag::claim, FI_CLAIM},
+                 flag_case{msg::recv_flag::claim | msg::recv_flag::discard, FI_CLAIM | FI_DISCARD},
+                 flag_case{msg::recv_flag::peek | msg::recv_flag::discard, FI_PEEK | FI_DISCARD});
+    const auto inherit = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EOPNOTSUPP);
+    message_provider native;
+    native.rx_defaults = FI_COMPLETION;
+    native.status = status;
+    auto ep = native.endpoint();
+    fi_context2 context{};
+    const msg::tagged_recv_message<> message{
+        .src_addr = fabric_addr{19}, .tag = 42, .ignore = 0x80, .context = &context};
+    const auto result = inherit
+                            ? msg::tagged_recvmsg<operation_defaults::inherit>(ep, message, flags)
+                            : msg::tagged_recvmsg(ep, message, flags);
+    REQUIRE(native.calls == 1);
+    REQUIRE(native.flags == (expected | (inherit ? FI_COMPLETION : 0)));
+    REQUIRE(native.peer == 19);
+    REQUIRE(native.tag == 42);
+    REQUIRE(native.ignore == 0x80);
+    REQUIRE(native.operation_context == &context);
+    if (status) {
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() == make_error_code_from_fi_errno(status));
+    } else {
+        REQUIRE(result);
+    }
+}
+
+TEST_CASE("tagged probes reserve receive and discard messages", "[message][probe][loopback]") {
+    using namespace loom;
+    enum class disposition { receive, discard_claim, discard_peek };
+    const auto action =
+        GENERATE(disposition::receive, disposition::discard_claim, disposition::discard_peek);
+    const auto provider = GENERATE("sockets", "tcp;ofi_rxm");
+    const auto with_source = GENERATE(false, true);
+    const auto with_data = GENERATE(false, true);
+    CAPTURE(provider, action, with_source, with_data);
+    fabric_hints hints{};
+    hints.provider_name = provider;
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::tagged | capability::source;
+    auto info = query_fabric(hints);
+    if (!info) {
+        SKIP("Tagged software provider unavailable");
+    }
+    // Storage precedes the endpoint so a failed assertion closes it first.
+    std::array<std::byte, 8> outgoing{}, incoming{};
+    outgoing.fill(std::byte{42});
+    fi_context2 send_context{}, probe_context{}, claim_context{};
+    auto fab = fabric::create(*info);
+    REQUIRE(fab);
+    auto dom = domain::create(*fab, *info);
+    REQUIRE(dom);
+    auto cq = completion_queue::create(*dom, {.source_addresses = with_source});
+    REQUIRE(cq);
+    auto av = address_vector::create(*dom);
+    REQUIRE(av);
+    auto send_mr = memory_region::register_memory(*dom, outgoing, mr_access_flags::send);
+    REQUIRE(send_mr);
+    auto recv_mr = memory_region::register_memory(*dom, incoming, mr_access_flags::recv);
+    REQUIRE(recv_mr);
+    const std::array send_iov{iovec{outgoing.data(), outgoing.size()}};
+    const std::array recv_iov{iovec{incoming.data(), incoming.size()}};
+    const std::array send_desc{send_mr->descriptor()}, recv_desc{recv_mr->descriptor()};
+    auto other_ep = endpoint::create(*dom, *info);
+    REQUIRE(other_ep);
+    REQUIRE(other_ep->bind_cq(*cq, cq_bind::transmit | cq_bind::recv));
+    REQUIRE(other_ep->bind_av(*av));
+    REQUIRE(other_ep->enable());
+    auto other_address = other_ep->get_local_address();
+    REQUIRE(other_address);
+    auto other_peer = av->insert(*other_address);
+    REQUIRE(other_peer);
+    auto ep = endpoint::create(*dom, *info);
+    REQUIRE(ep);
+    REQUIRE(ep->bind_cq(*cq, cq_bind::transmit | cq_bind::recv | cq_bind::selective_completion));
+    REQUIRE(ep->bind_av(*av));
+    REQUIRE(ep->enable());
+    auto address = ep->get_local_address();
+    REQUIRE(address);
+    auto peer = av->insert(*address);
+    REQUIRE(peer);
+    REQUIRE(peer->value != other_peer->value);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    auto post = [&](auto submit) {
+        auto result = submit();
+        while (!result && result.error() == errc::again &&
+               std::chrono::steady_clock::now() < deadline) {
+            (void)cq->progress();
+            std::this_thread::yield();
+            result = submit();
+        }
+        REQUIRE(result);
+    };
+    auto completion = [&](void* context) {
+        std::optional<completion_event> event;
+        do {
+            event = cq->poll();
+            if (event) {
+                break;
+            }
+            std::this_thread::yield();
+        } while (std::chrono::steady_clock::now() < deadline);
+        REQUIRE(event);
+        REQUIRE(event->context.get() == context);
+        return *event;
+    };
+    auto peek = [&](fi_context2* context, msg::recv_flags flags) {
+        post([&] {
+            return msg::tagged_recvmsg(*ep,
+                                       msg::tagged_recv_message<>{.tag = 42, .context = context},
+                                       flags | msg::recv_flag::peek | msg::recv_flag::completion);
+        });
+        return completion(context);
+    };
+
+    REQUIRE(peek(&probe_context, msg::recv_flag::none).error == errc::no_message);
+    post([&] {
+        return msg::tagged_sendmsg(
+            *ep,
+            msg::tagged_send_message<>{.iov = send_iov,
+                                       .desc = send_desc,
+                                       .dest_addr = fabric_addr{peer->value},
+                                       .tag = 42,
+                                       .context = &send_context,
+                                       .data = 73},
+            msg::send_flag::completion |
+                (with_data ? msg::send_flag::remote_cq_data : msg::send_flag::none));
+    });
+    REQUIRE_FALSE(completion(&send_context).has_error());
+    // Send completion need not imply arrival in the unexpected-message queue.
+    auto found = peek(&probe_context, msg::recv_flag::none);
+    while (found.error == errc::no_message && std::chrono::steady_clock::now() < deadline) {
+        found = peek(&probe_context, msg::recv_flag::none);
+    }
+    REQUIRE_FALSE(found.has_error());
+    REQUIRE(found.tag == 42);
+    REQUIRE(found.bytes_transferred == outgoing.size());
+    REQUIRE(found.has_immediate_data() == with_data);
+    if (with_data) {
+        REQUIRE(found.data == 73);
+    }
+    if (with_source) {
+        REQUIRE(found.source.get() == peer->value);
+    }
+
+    if (action == disposition::discard_peek) {
+        const auto needs_context =
+            info->get_mode().has(mode_bits::context) || info->get_mode().has(mode_bits::context2);
+        REQUIRE_FALSE(
+            peek(needs_context ? &probe_context : nullptr, msg::recv_flag::discard).has_error());
+    } else {
+        const auto claimed = peek(&claim_context, msg::recv_flag::claim);
+        REQUIRE_FALSE(claimed.has_error());
+        REQUIRE(claimed.tag == 42);
+        REQUIRE(claimed.bytes_transferred == outgoing.size());
+        REQUIRE(claimed.has_immediate_data() == with_data);
+        if (with_data) {
+            REQUIRE(claimed.data == 73);
+        }
+        if (with_source) {
+            REQUIRE(claimed.source.get() == peer->value);
+        }
+        // An unrelated probe cannot steal the reserved message.
+        REQUIRE(peek(&probe_context, msg::recv_flag::none).error == errc::no_message);
+        post([&] {
+            const auto discard = action == disposition::discard_claim;
+            return msg::tagged_recvmsg(
+                *ep,
+                msg::tagged_recv_message<>{.iov = discard ? std::span<const iovec>{} : recv_iov,
+                                           .desc = discard ? std::span<const mr_descriptor>{}
+                                                           : recv_desc,
+                                           .tag = 42,
+                                           .context = &claim_context},
+                msg::recv_flag::claim | msg::recv_flag::completion |
+                    (discard ? msg::recv_flag::discard : msg::recv_flag::none));
+        });
+        const auto consumed = completion(&claim_context);
+        REQUIRE_FALSE(consumed.has_error());
+        if (action == disposition::receive) {
+            REQUIRE(consumed.bytes_transferred == incoming.size());
+            REQUIRE(consumed.has_immediate_data() == with_data);
+            if (with_data) {
+                REQUIRE(consumed.data == 73);
+            }
+            if (with_source) {
+                REQUIRE(consumed.source.get() == peer->value);
+            }
+            REQUIRE(incoming == outgoing);
+        } else {
+            REQUIRE(incoming == std::array<std::byte, 8>{});
+        }
+    }
+    REQUIRE(peek(&probe_context, msg::recv_flag::none).error == errc::no_message);
+    REQUIRE(ep->close());
+    REQUIRE(other_ep->close());
+}
+
 TEST_CASE("selective message completions accompany sockets transfers", "[message][loopback]") {
     using namespace loom;
     const auto tagged = GENERATE(false, true);

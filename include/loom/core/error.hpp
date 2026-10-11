@@ -20,6 +20,7 @@ namespace loom {
 enum class errc {
     success = 0,                                ///< Operation completed successfully
     no_data = -FI_ENODATA,                      ///< No data available
+    no_message = -FI_ENOMSG,                    ///< No matching message for a tagged probe
     message_too_long = -FI_EMSGSIZE,            ///< Message too long for buffer
     no_space = -FI_ENOSPC,                      ///< No space left on device
     again = -FI_EAGAIN,                         ///< Resource temporarily unavailable

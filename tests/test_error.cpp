@@ -29,6 +29,7 @@ TEST_CASE("error_code message for various error codes", "[error]") {
 
     test_error(loom::errc::success);
     test_error(loom::errc::no_data);
+    test_error(loom::errc::no_message);
     test_error(loom::errc::message_too_long);
     test_error(loom::errc::no_space);
     test_error(loom::errc::again);
@@ -71,6 +72,9 @@ TEST_CASE("make_error_code_from_fi_errno", "[error]") {
     const auto flags_error = loom::make_error_code_from_fi_errno(FI_EBADFLAGS);
     REQUIRE(flags_error == loom::errc::bad_flags);
     REQUIRE(loom::make_error_code(loom::errc::bad_flags).message() == fi_strerror(FI_EBADFLAGS));
+
+    REQUIRE(loom::make_error_code_from_fi_errno(FI_ENOMSG) == loom::errc::no_message);
+    REQUIRE(loom::make_error_code_from_fi_errno(-FI_ENOMSG) == loom::errc::no_message);
 }
 
 TEST_CASE("result success", "[error]") {

@@ -64,6 +64,9 @@ namespace recv_flag {
 inline constexpr recv_flags none{0ULL};              ///< No flags
 inline constexpr recv_flags completion{1ULL << 1};   ///< Generate completion event
 inline constexpr recv_flags more{1ULL << 3};         ///< More operations to follow
+inline constexpr recv_flags peek{1ULL << 5};         ///< Probe a tagged message asynchronously
+inline constexpr recv_flags claim{1ULL << 6};        ///< Reserve or receive a claimed message
+inline constexpr recv_flags discard{1ULL << 7};      ///< Discard a probed or claimed message
 inline constexpr recv_flags multi_recv{1ULL << 16};  ///< Multi-receive buffer
 }  // namespace recv_flag
 
@@ -113,6 +116,15 @@ namespace detail {
     }
     if (flags.has(recv_flag::multi_recv)) {
         result |= FI_MULTI_RECV;
+    }
+    if (flags.has(recv_flag::peek)) {
+        result |= FI_PEEK;
+    }
+    if (flags.has(recv_flag::claim)) {
+        result |= FI_CLAIM;
+    }
+    if (flags.has(recv_flag::discard)) {
+        result |= FI_DISCARD;
     }
     return result;
 }
@@ -350,6 +362,13 @@ template <context_like Ctx>
 
 /**
  * @brief Receives a tagged message using scatter/gather I/O.
+ *
+ * Peek completes asynchronously; errc::no_message means no match. Claim
+ * requires a native fi_context (or fi_context2), even without a context mode.
+ * A successful peek-and-claim retains that context until a paired claim
+ * receive or discard completes. Do not move, clear, or recycle its storage
+ * after the peek completion. Discard requires peek or claim. These flags
+ * apply only to tagged receives; support depends on the selected provider.
  * @tparam Ctx The context type for completion handling.
  * @param ep The endpoint for the operation.
  * @param msg The tagged message descriptor.
