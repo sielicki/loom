@@ -48,7 +48,8 @@ struct vector_provider {
         auto& self = *static_cast<vector_provider*>(ep->fid.context);
         self.submission_flags = flags;
         REQUIRE(msg->addr == FI_ADDR_UNSPEC);
-        REQUIRE(msg->desc == nullptr);
+        if (msg->desc)
+            self.descriptors.assign(msg->desc, msg->desc + msg->iov_count);
         return capture(ep, msg->msg_iov, msg->iov_count, msg->context, direction);
     }
 
@@ -182,17 +183,27 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     const auto helper = GENERATE(false, true);
     const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
     const auto short_remote = GENERATE(false, true);
+    const auto null_descriptor = GENERATE(false, true);
     vector_provider native;
     native.submission_status = status;
     ::asio::io_context ioc;
     loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
     std::array<std::byte, 8> storage{};
-    fid_mr handle{.fid = {.ops = &native.ops}, .mem_desc = &handle};
+    fid_mr handle{.fid = {.ops = &native.ops}, .mem_desc = null_descriptor ? nullptr : &handle};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
         loom::get_default_resource(), &handle, storage.data(), storage.size())};
     const loom::fabric_addr peer{23};
     const loom::remote_memory remote{32, 0x123456789abcdef0ULL, short_remote ? 7u : 8u};
-    std::array buffers{::asio::buffer(storage.data(), 3), ::asio::buffer(storage.data() + 3, 5)};
+    // The explicit RMA registration takes precedence over descriptors carried
+    // by the buffer views, including when its native descriptor is null.
+    fid_mr view_handle{.fid = {.ops = &native.ops}, .mem_desc = &view_handle};
+    loom::memory_region view_mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(), &view_handle, storage.data(), storage.size())};
+    std::array buffers{
+        loom::asio::mutable_registered_buffer{
+            ::asio::buffer(storage.data(), 3), &view_mr, loom::asio::registered_buffer_id{0}},
+        loom::asio::mutable_registered_buffer{
+            ::asio::buffer(storage.data() + 3, 5), &view_mr, loom::asio::registered_buffer_id{1}}};
     int completed{};
     auto handler =
         ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
@@ -224,7 +235,10 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
         REQUIRE(native.remote_address == remote.addr);
         REQUIRE(native.remote_key == remote.key);
         REQUIRE(native.remote_length == storage.size());
-        REQUIRE(native.descriptors == std::vector<void*>{&handle, &handle});
+        if (null_descriptor)
+            REQUIRE(native.descriptors.empty());
+        else
+            REQUIRE(native.descriptors == std::vector<void*>{&handle, &handle});
     }
     buffers = {};
     if (!short_remote && !status) {
@@ -322,8 +336,10 @@ TEST_CASE("Asio operations register their buffer sequences before submission", "
     buffers = {};
     const_buffers = {};
     REQUIRE(completions == 0);
-    if (bound && operation < 4)
+    if (bound && operation < 4) {
         CHECK(native.submission_flags == (FI_COMPLETION | (receive ? FI_MORE : FI_FENCE)));
+        CHECK(native.descriptors.empty());
+    }
     if (expected) {
         REQUIRE(native.context == nullptr);
         REQUIRE((native.attempted_context != nullptr) == bound);
@@ -366,6 +382,111 @@ TEST_CASE("Asio operations register their buffer sequences before submission", "
     REQUIRE_FALSE(queue.dispatch(event));
     ioc.run();
     REQUIRE(completions == 1);
+}
+
+TEST_CASE("Asio messages preserve registered buffer descriptors", "[asio][endpoint][buffer]") {
+    const auto receive = GENERATE(false, true);
+    const auto tagged = GENERATE(false, true);
+    const auto helper = GENERATE(false, true);
+    const auto single = GENERATE(false, true);
+    const auto first_registered = GENERATE(false, true);
+    vector_provider native;
+    ::asio::io_context ioc;
+    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    std::array<std::byte, 8> first{}, second{};
+    fid_mr first_handle{.fid = {.ops = &native.ops}, .mem_desc = &first_handle};
+    fid_mr second_handle{.fid = {.ops = &native.ops}, .mem_desc = &second_handle};
+    loom::memory_region first_mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(), &first_handle, first.data(), first.size())};
+    loom::memory_region second_mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(), &second_handle, second.data(), second.size())};
+    const auto first_buffer = loom::asio::buffer(
+        loom::asio::mutable_registered_buffer{::asio::buffer(first),
+                                              first_registered ? &first_mr : nullptr,
+                                              loom::asio::registered_buffer_id{0}} +
+            1,
+        2);
+    const auto second_buffer = loom::asio::buffer(
+        loom::asio::mutable_registered_buffer{
+            ::asio::buffer(second), &second_mr, loom::asio::registered_buffer_id{1}} +
+            2,
+        4);
+    int calls{};
+    const auto handler =
+        ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
+            ++calls;
+            REQUIRE_FALSE(error);
+            REQUIRE(bytes == (single ? 2 : receive ? 6 : 8));
+        });
+    const auto submit = [&](const auto& buffers) {
+        if constexpr (::asio::is_mutable_buffer_sequence<
+                          std::remove_cvref_t<decltype(buffers)>>::value) {
+            if (receive) {
+                if (helper) {
+                    if (tagged)
+                        loom::asio::initiate_fabric_tagged_recv{ep.native_handle()}(
+                            handler, buffers, 42, 0x80);
+                    else
+                        loom::asio::initiate_fabric_recv{ep.native_handle()}(handler, buffers);
+                } else if (tagged)
+                    ep.async_tagged_receive(buffers, 42, 0x80, handler);
+                else
+                    ep.async_receive(buffers, handler);
+                return;
+            }
+        }
+        if (helper) {
+            if (tagged)
+                loom::asio::initiate_fabric_tagged_send{ep.native_handle()}(handler, buffers, 42);
+            else
+                loom::asio::initiate_fabric_send{ep.native_handle()}(handler, buffers);
+        } else if (tagged)
+            ep.async_tagged_send(buffers, 42, handler);
+        else
+            ep.async_send(buffers, handler);
+    };
+    if (receive) {
+        if (single)
+            submit(first_buffer);
+        else
+            submit(std::array{first_buffer, second_buffer, first_buffer});
+    } else {
+        // Both const and mutable registered buffers must model ConstBufferSequence.
+        const auto as_const = GENERATE(false, true);
+        if (as_const) {
+            if (single)
+                submit(loom::asio::const_registered_buffer{first_buffer});
+            else
+                submit(std::array{loom::asio::const_registered_buffer{first_buffer},
+                                  loom::asio::const_registered_buffer{second_buffer},
+                                  loom::asio::const_registered_buffer{first_buffer}});
+        } else if (single)
+            submit(first_buffer);
+        else
+            submit(std::array{first_buffer, second_buffer, first_buffer});
+    }
+    REQUIRE(calls == 0);
+    REQUIRE(native.buffers.size() == (single ? 1 : 3));
+    CHECK(native.buffers[0].iov_base == first.data() + 1);
+    CHECK(native.buffers[0].iov_len == 2);
+    const auto first_descriptor = first_registered ? first_mr.descriptor().raw() : nullptr;
+    if (single && !first_registered) {
+        CHECK(native.descriptors.empty());
+    } else {
+        REQUIRE(native.descriptors.size() == native.buffers.size());
+        CHECK(native.descriptors[0] == first_descriptor);
+        if (!single) {
+            CHECK(native.buffers[1].iov_base == second.data() + 2);
+            CHECK(native.buffers[1].iov_len == 4);
+            CHECK(native.descriptors[1] == second_mr.descriptor().raw());
+            CHECK(native.descriptors[2] == first_descriptor);
+        }
+    }
+    loom::completion_event event{.context = loom::context_ptr<void>{native.context},
+                                 .bytes_transferred = single ? 2UZ : 6UZ};
+    REQUIRE((receive ? native.rx : native.tx).dispatch(event));
+    ioc.run();
+    REQUIRE(calls == 1);
 }
 
 TEST_CASE("Asio receives reject multi-receive defaults", "[asio][endpoint]") {

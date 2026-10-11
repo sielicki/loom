@@ -248,6 +248,7 @@ public:
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
                 if (result) {
                     const msg::send_message<> message{.iov = ctx->buffers().iov,
+                                                      .desc = ctx->buffers().descriptors,
                                                       .context = ctx->as_fi_context()};
                     result = msg::sendmsg<operation_defaults::inherit>(
                         state->endpoint, message, msg::send_flag::completion);
@@ -283,6 +284,7 @@ public:
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::receive);
                 if (result) {
                     const msg::recv_message<> message{.iov = ctx->buffers().iov,
+                                                      .desc = ctx->buffers().descriptors,
                                                       .context = ctx->as_fi_context()};
                     result = msg::recvmsg<operation_defaults::inherit>(
                         state->endpoint, message, msg::recv_flag::completion);
@@ -318,8 +320,10 @@ public:
 
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
                 if (result) {
-                    const msg::tagged_send_message<> message{
-                        .iov = ctx->buffers().iov, .tag = tag, .context = ctx->as_fi_context()};
+                    const msg::tagged_send_message<> message{.iov = ctx->buffers().iov,
+                                                             .desc = ctx->buffers().descriptors,
+                                                             .tag = tag,
+                                                             .context = ctx->as_fi_context()};
                     result = msg::tagged_sendmsg<operation_defaults::inherit>(
                         state->endpoint, message, msg::send_flag::completion);
                 }
@@ -356,6 +360,7 @@ public:
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::receive);
                 if (result) {
                     const msg::tagged_recv_message<> message{.iov = ctx->buffers().iov,
+                                                             .desc = ctx->buffers().descriptors,
                                                              .tag = tag,
                                                              .ignore = ignore,
                                                              .context = ctx->as_fi_context()};

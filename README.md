@@ -772,31 +772,34 @@ auto main() -> int {
 
 #### Registered Buffers
 
-Use `registered_buffer` for zero-copy operations with RDMA-registered memory:
+Use `mutable_registered_buffer` and `const_registered_buffer` for messages
+backed by a memory region. The buffers and registrations remain borrowed until
+the completion handler runs.
 
 ```cpp
 #include <loom/asio.hpp>
 
-// ... fabric/domain setup ...
-
+// ... fabric/domain setup and a connected Asio endpoint named ep ...
 std::array<std::byte, 4096> storage{};
-auto mr = memory_region::register_memory(
+auto mr = loom::memory_region::register_memory(
     domain, std::span{storage},
-    mr_access_flags::send | mr_access_flags::recv
+    loom::mr_access_flags::send | loom::mr_access_flags::recv
 ).value();
 
-// Create a DynamicBuffer backed by registered memory
-loom::asio::registered_buffer buf(mr, std::span{storage});
-
-// Use with async_read/async_write or directly
-auto prepared = buf.prepare(1024);  // Get writable buffer
-// ... receive data into prepared ...
-buf.commit(bytes_received);         // Commit received data
-
-auto data = buf.data();             // Get readable view
-// ... process data ...
-buf.consume(bytes_processed);       // Release processed data
+loom::asio::mutable_registered_buffer buf{
+    ::asio::buffer(storage), &mr, loom::asio::registered_buffer_id{0}};
+ep.async_receive(loom::asio::buffer(buf, 1024),
+    [](std::error_code error, std::size_t received) {
+        // A successful receive reports the message length, not buffer capacity.
+    });
 ```
+
+Tagged and untagged messages preserve each buffer's MR descriptor, including
+arrays of independently registered buffers and offset or shortened views. The
+same views can wrap an MR created with `memory_registration` for HMEM; device
+allocation lifetime and visibility synchronization remain the caller's
+responsibility. RMA overloads that take an explicit MR use that registration for
+every buffer in the sequence.
 
 #### Building with Asio
 

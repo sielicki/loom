@@ -15,7 +15,7 @@
  * std::array<std::byte, 4096> buf1, buf2;
  * std::array buffers = {asio::buffer(buf1), asio::buffer(buf2)};
  *
- * auto registration = loom::asio::register_buffers(ioc, domain, buffers, access);
+ * auto registration = loom::asio::register_buffers(ioc, domain, buffers, access).value();
  *
  * // Use registered buffers in operations
  * ep.async_send(registration[0], handler);
@@ -83,6 +83,11 @@ public:
 
     [[nodiscard]] auto buffer() const noexcept -> const ::asio::mutable_buffer& { return buffer_; }
 
+    // Asio's sequence adapters retain this element type through iteration.
+    // Conversion supplies the standard buffer view when an operation needs it.
+    [[nodiscard]] operator ::asio::mutable_buffer() const noexcept { return buffer_; }
+    [[nodiscard]] operator ::asio::const_buffer() const noexcept { return buffer_; }
+
     [[nodiscard]] auto memory_region() const noexcept -> loom::memory_region* { return mr_; }
 
     [[nodiscard]] auto descriptor() const noexcept -> mr_descriptor {
@@ -126,6 +131,8 @@ public:
     [[nodiscard]] auto id() const noexcept -> registered_buffer_id { return id_; }
 
     [[nodiscard]] auto buffer() const noexcept -> const ::asio::const_buffer& { return buffer_; }
+
+    [[nodiscard]] operator ::asio::const_buffer() const noexcept { return buffer_; }
 
     [[nodiscard]] auto memory_region() const noexcept -> const loom::memory_region* { return mr_; }
 
@@ -173,23 +180,23 @@ private:
 }
 
 [[nodiscard]] inline auto buffer_sequence_begin(const mutable_registered_buffer& b) noexcept
-    -> const ::asio::mutable_buffer* {
-    return &b.buffer();
+    -> const mutable_registered_buffer* {
+    return &b;
 }
 
 [[nodiscard]] inline auto buffer_sequence_end(const mutable_registered_buffer& b) noexcept
-    -> const ::asio::mutable_buffer* {
-    return &b.buffer() + 1;
+    -> const mutable_registered_buffer* {
+    return &b + 1;
 }
 
 [[nodiscard]] inline auto buffer_sequence_begin(const const_registered_buffer& b) noexcept
-    -> const ::asio::const_buffer* {
-    return &b.buffer();
+    -> const const_registered_buffer* {
+    return &b;
 }
 
 [[nodiscard]] inline auto buffer_sequence_end(const const_registered_buffer& b) noexcept
-    -> const ::asio::const_buffer* {
-    return &b.buffer() + 1;
+    -> const const_registered_buffer* {
+    return &b + 1;
 }
 
 /**

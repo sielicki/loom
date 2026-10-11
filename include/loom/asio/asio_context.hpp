@@ -16,6 +16,7 @@
 
 #include <rdma/fabric.h>
 
+#include <concepts>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -28,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "loom/asio/registered_buffer.hpp"
 #include "loom/async/completion_queue.hpp"
 #include "loom/core/crtp/crtp_tags.hpp"
 #include "loom/core/endpoint.hpp"
@@ -355,7 +357,7 @@ public:
     }
 
     template <bool Mutable, typename BufferSequence>
-    void prepare_buffers(const BufferSequence& buffers, mr_descriptor descriptor) {
+    void prepare_buffers(const BufferSequence& buffers, std::optional<mr_descriptor> descriptor) {
         using buffer_type =
             std::conditional_t<Mutable, ::asio::mutable_buffer, ::asio::const_buffer>;
         const auto end = ::asio::buffer_sequence_end(buffers);
@@ -366,8 +368,18 @@ public:
             }
             buffer_iov_.push_back(
                 {const_cast<void*>(static_cast<const void*>(buffer.data())), buffer.size()});
-            if (descriptor) {
-                buffer_descriptors_.push_back(descriptor);
+            auto local_descriptor = descriptor.value_or(mr_descriptor{});
+            using element_type = std::remove_cvref_t<decltype(*it)>;
+            if constexpr (std::same_as<element_type, mutable_registered_buffer> ||
+                          std::same_as<element_type, const_registered_buffer>) {
+                if (!descriptor)
+                    local_descriptor = (*it).descriptor();
+            }
+            if (local_descriptor || !buffer_descriptors_.empty()) {
+                // Keep one descriptor per IOV, including unregistered elements
+                // before the first registration and between registered ranges.
+                buffer_descriptors_.resize(buffer_iov_.size() - 1);
+                buffer_descriptors_.push_back(local_descriptor);
             }
             buffer_bytes_ += buffer.size();
         }
@@ -540,11 +552,13 @@ struct asio_context_deleter {
 using owned_asio_context = std::unique_ptr<asio_context_erased, asio_context_deleter>;
 
 template <bool Mutable, typename Handler, typename Executor, typename BufferSequence>
-[[nodiscard]] auto make_buffered_asio_context(Handler&& handler,
-                                              Executor&& executor,
-                                              endpoint* ep,
-                                              const BufferSequence& buffers,
-                                              mr_descriptor descriptor = {}) -> owned_asio_context {
+[[nodiscard]] auto
+make_buffered_asio_context(Handler&& handler,
+                           Executor&& executor,
+                           endpoint* ep,
+                           const BufferSequence& buffers,
+                           std::optional<mr_descriptor> descriptor = std::nullopt)
+    -> owned_asio_context {
     auto associated = ::asio::get_associated_executor(handler, executor);
     using context_type = asio_context<std::decay_t<Handler>, decltype(associated)>;
     auto* concrete =

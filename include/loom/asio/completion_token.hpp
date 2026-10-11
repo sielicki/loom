@@ -229,6 +229,7 @@ struct initiate_fabric_send {
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
             const msg::send_message<> message{.iov = ctx->buffers().iov,
+                                              .desc = ctx->buffers().descriptors,
                                               .context = ctx->as_fi_context()};
             result = msg::sendmsg<operation_defaults::inherit>(
                 *ep_, message, msg::send_flag::completion);
@@ -262,6 +263,7 @@ struct initiate_fabric_recv {
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
             const msg::recv_message<> message{.iov = ctx->buffers().iov,
+                                              .desc = ctx->buffers().descriptors,
                                               .context = ctx->as_fi_context()};
             result = msg::recvmsg<operation_defaults::inherit>(
                 *ep_, message, msg::recv_flag::completion);
@@ -297,8 +299,10 @@ struct initiate_fabric_tagged_send {
         auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
-            const msg::tagged_send_message<> message{
-                .iov = ctx->buffers().iov, .tag = tag, .context = ctx->as_fi_context()};
+            const msg::tagged_send_message<> message{.iov = ctx->buffers().iov,
+                                                     .desc = ctx->buffers().descriptors,
+                                                     .tag = tag,
+                                                     .context = ctx->as_fi_context()};
             result = msg::tagged_sendmsg<operation_defaults::inherit>(
                 *ep_, message, msg::send_flag::completion);
         }
@@ -336,6 +340,7 @@ struct initiate_fabric_tagged_recv {
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
             const msg::tagged_recv_message<> message{.iov = ctx->buffers().iov,
+                                                     .desc = ctx->buffers().descriptors,
                                                      .tag = tag,
                                                      .ignore = ignore,
                                                      .context = ctx->as_fi_context()};

@@ -18,6 +18,15 @@ using namespace std::literals;
 // registered_buffer_id tests
 // =============================================================================
 
+static_assert(::asio::is_mutable_buffer_sequence<loom::asio::mutable_registered_buffer>::value);
+static_assert(::asio::is_const_buffer_sequence<loom::asio::mutable_registered_buffer>::value);
+static_assert(::asio::is_const_buffer_sequence<loom::asio::const_registered_buffer>::value);
+static_assert(!::asio::is_mutable_buffer_sequence<loom::asio::const_registered_buffer>::value);
+static_assert(::asio::is_mutable_buffer_sequence<
+              std::array<loom::asio::mutable_registered_buffer, 2>>::value);
+static_assert(
+    ::asio::is_const_buffer_sequence<std::array<loom::asio::const_registered_buffer, 2>>::value);
+
 TEST_CASE("registered_buffer_id default is invalid", "[asio][buffer]") {
     loom::asio::registered_buffer_id id;
     REQUIRE(!id.is_valid());
