@@ -1,5 +1,26 @@
 {
   "nodes": {
+    "fenix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-analyzer-src": "rust-analyzer-src"
+      },
+      "locked": {
+        "lastModified": 1791634359,
+        "narHash": "sha256-2P1OVepUcyQFX7AkGwT5PwUQadPJwprvgcjtMRJKROI=",
+        "owner": "nix-community",
+        "repo": "fenix",
+        "rev": "2641a7066cc35b1883801fcac9288fece635f471",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "fenix",
+        "type": "github"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": "nixpkgs-lib"
@@ -73,6 +94,40 @@
         "type": "github"
       }
     },
+    "monarch-rdma-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1764140619,
+        "narHash": "sha256-IdkK+mNoSmRbYLw5hEjW3tfqqxK8g1va7bhrRmGWuWI=",
+        "owner": "linux-rdma",
+        "repo": "rdma-core",
+        "rev": "224154663a9ad5b1ad5629fb76a0c40c675fb936",
+        "type": "github"
+      },
+      "original": {
+        "owner": "linux-rdma",
+        "repo": "rdma-core",
+        "rev": "224154663a9ad5b1ad5629fb76a0c40c675fb936",
+        "type": "github"
+      }
+    },
+    "monarch-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791671467,
+        "narHash": "sha256-EPt5ex/lnsdkAcdYc6acSLa7RMHVgNIvmaj8Ix1P3O8=",
+        "owner": "meta-pytorch",
+        "repo": "monarch",
+        "rev": "dd1bb6719b2cf2b6bdf8851df02f092a900e6f5e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "meta-pytorch",
+        "repo": "monarch",
+        "rev": "dd1bb6719b2cf2b6bdf8851df02f092a900e6f5e",
+        "type": "github"
+      }
+    },
     "nixl-src": {
       "flake": false,
       "locked": {
@@ -138,13 +193,33 @@
     },
     "root": {
       "inputs": {
+        "fenix": "fenix",
         "flake-parts": "flake-parts",
         "libfabric": "libfabric",
         "libfabric-src": "libfabric-src",
+        "monarch-rdma-src": "monarch-rdma-src",
+        "monarch-src": "monarch-src",
         "nixl-src": "nixl-src",
         "nixpkgs": "nixpkgs",
         "systems": "systems",
         "treefmt-nix": "treefmt-nix"
+      }
+    },
+    "rust-analyzer-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791566344,
+        "narHash": "sha256-rB96OV7pq2i58l8ma5+ssfZ17RMHN6mhRbhdE6abE5Q=",
+        "owner": "rust-lang",
+        "repo": "rust-analyzer",
+        "rev": "88552f82f1a539d46fdc2ccacdeb23dcb2dfa2cd",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rust-lang",
+        "ref": "nightly",
+        "repo": "rust-analyzer",
+        "type": "github"
       }
     },
     "systems": {

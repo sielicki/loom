@@ -1,0 +1,11 @@
+diff --git a/monarch_cpp_static_libs/build.rs b/monarch_cpp_static_libs/build.rs
+--- a/monarch_cpp_static_libs/build.rs
++++ b/monarch_cpp_static_libs/build.rs
+@@ -126,6 +126,7 @@ fn copy_dir(src_dir: &Path, target_dir: &Path) {
+     let status = Command::new("cp")
+         .args([
+             "-r",
++            "--no-preserve=mode",
+             src_dir.to_str().unwrap(),
+             target_dir.to_str().unwrap(),
+         ])

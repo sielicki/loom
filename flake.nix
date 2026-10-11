@@ -17,6 +17,18 @@
       url = "github:ai-dynamo/nixl/b69182fe73ac64221dcdbeeee744161f76006dda";
       flake = false;
     };
+    monarch-src = {
+      url = "github:meta-pytorch/monarch/dd1bb6719b2cf2b6bdf8851df02f092a900e6f5e";
+      flake = false;
+    };
+    monarch-rdma-src = {
+      url = "github:linux-rdma/rdma-core/224154663a9ad5b1ad5629fb76a0c40c675fb936";
+      flake = false;
+    };
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -333,6 +345,20 @@
                 stdenv = pkgs.gcc15Stdenv;
                 inherit (self'.packages) loom nixl-consumer;
               };
+              monarch-consumer = pkgs.callPackage ./examples/monarch {
+                stdenv = pkgs.gcc15Stdenv;
+                src = inputs.monarch-src;
+                rdmaSource = inputs.monarch-rdma-src;
+                rustToolchain = (inputs.fenix.packages.${system}.toolchainOf {
+                  channel = "nightly";
+                  date = "2026-07-05";
+                  sha256 = "08c0aba8c8f95055700f4d781b7669f8f6522822ce1c078c207e2df75740905c";
+                }).withComponents [ "cargo" "rustc" "rust-std" ];
+                cudaPackages = (import nixpkgs {
+                  inherit system;
+                  config.allowUnfree = true;
+                }).cudaPackages;
+              };
 
               loom-debug = pkgs.callPackage mkLoom {
                 inherit libfabric;
@@ -605,6 +631,12 @@
                 };
             }
             // pkgs.lib.optionalAttrs (!isDarwin) {
+              monarch-consumer = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
+                inputsFrom = [ self'.packages.monarch-consumer ];
+                inherit (self'.packages.monarch-consumer)
+                  CUDA_HOME MONARCH_RDMA_CORE_SRC MONARCH_GPU_PLATFORM;
+                MONARCH_SOURCE = self'.packages.monarch-consumer.src;
+              };
               # Sanitizer development shell (Linux only)
               sanitizers = pkgs.mkShell {
                 name = "loom-dev-sanitizers";
@@ -668,6 +700,7 @@
             // pkgs.lib.optionalAttrs (!isDarwin) {
               nixl-consumer = self'.packages.nixl-consumer.tests.sdk;
               nixl-loom = self'.packages.nixl-loom;
+              monarch-consumer = self'.packages.monarch-consumer;
 
               # Build check with sanitizers (Linux only)
               loom-build-sanitizers = self'.packages.loom-debug;
