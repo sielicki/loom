@@ -422,6 +422,10 @@
               nixl-loom = pkgs.callPackage ./examples/nixl {
                 stdenv = pkgs.gcc15Stdenv;
                 inherit (self'.packages) loom nixl-consumer;
+                cudaPackages = (import nixpkgs {
+                  inherit system;
+                  config.allowUnfree = true;
+                }).cudaPackages;
               };
               monarch-consumer = pkgs.callPackage ./examples/monarch {
                 stdenv = pkgs.gcc15Stdenv;

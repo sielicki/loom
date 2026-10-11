@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/async/completion_queue.hpp>
 #include <loom/core/endpoint_contract.hpp>
+#include <loom/core/endpoint_options.hpp>
 #include <loom/loom.hpp>
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -28,8 +31,11 @@
 
 #include <backend/backend_plugin.h>
 
+#include "cuda.hpp"
+
 namespace {
 using namespace std::chrono_literals;
+namespace cuda = loom_examples::cuda;
 
 template <typename T>
 auto checked(loom::result<T> result) -> T {
@@ -43,6 +49,9 @@ template <typename F>
 auto protect(F&& function) noexcept -> nixl_status_t {
     try {
         return std::forward<F>(function)();
+    } catch (const cuda::error& error) {
+        NIXL_ERROR << "Loom backend: " << error.what();
+        return error.code == CUDA_ERROR_NOT_SUPPORTED ? NIXL_ERR_NOT_SUPPORTED : NIXL_ERR_BACKEND;
     } catch (const std::invalid_argument&) {
         return NIXL_ERR_INVALID_PARAM;
     } catch (const std::exception& error) {
@@ -60,10 +69,21 @@ auto option(const nixlBackendInitParams& params, const std::string& key, std::st
     return fallback;
 }
 
+auto cuda_enabled(const nixlBackendInitParams& params) -> bool {
+    const auto text = option(params, "cuda", "0");
+    int enabled{};
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), enabled);
+    if (error != std::errc{} || end != text.data() + text.size() || (enabled != 0 && enabled != 1))
+        throw std::invalid_argument("cuda must be 0 or 1");
+    return enabled != 0;
+}
+
 enum class wire_kind : std::uint64_t {
-    connection_v1 = 0x4c4f4f4d0101,
-    memory_v2 = 0x4c4f4f4d0202,
-    notification_v1 = 0x4c4f4f4d0103
+    connection_v2 = 0x4c4f4f4d0201,
+    memory_v3 = 0x4c4f4f4d0302,
+    notification_v1 = 0x4c4f4f4d0103,
+    visibility_request_v1 = 0x4c4f4f4d0104,
+    visibility_reply_v1 = 0x4c4f4f4d0105
 };
 
 template <std::size_t N>
@@ -94,10 +114,14 @@ auto covers(std::uint64_t base,
 }
 
 struct peer;
+enum class channel { notification, visibility_request, visibility_reply };
+enum class visibility_result : std::uint64_t { success, stale_registration, failed };
+enum class registration_id : std::uint64_t {};
 enum class message_phase { waiting, accepted, finished };
 struct notification {
     std::array<std::byte, 8192> bytes{};
     std::size_t length{};
+    channel kind{channel::notification};
     loom::memory_region region;
     loom::request_context context;
     loom::completion_registration completion;
@@ -110,13 +134,19 @@ struct transport_profile : loom::message_endpoint_profile<loom::rdm_endpoint_tag
     static constexpr loom::caps required_caps =
         loom::message_endpoint_profile<loom::rdm_endpoint_tag>::required_caps |
         loom::capability::rma | loom::capability::read | loom::capability::write |
-        loom::capability::remote_read | loom::capability::remote_write;
+        loom::capability::remote_read | loom::capability::remote_write | loom::capability::tagged;
     static constexpr loom::mode supported_modes =
         loom::mode_bits::context | loom::mode_bits::context2;
     static constexpr loom::threading_mode threading = loom::threading_mode::safe;
 };
 
+struct cuda_profile : transport_profile {
+    static constexpr loom::caps required_caps =
+        transport_profile::required_caps | loom::capability::hmem;
+};
+
 struct resources {
+    std::unique_ptr<cuda::driver> gpu;
     loom::fabric_info info;
     loom::fabric fabric;
     loom::domain domain;
@@ -129,10 +159,12 @@ struct resources {
     loom::ipv4_address address;
     loom::mr_mode registration_mode{};
     std::uint64_t protocol{};
+    std::uint64_t tag_mask{};
     std::size_t max_transfer{};
     std::size_t max_message{};
 
-    explicit resources(const nixlBackendInitParams& params) {
+    explicit resources(const nixlBackendInitParams& params)
+        : gpu(cuda_enabled(params) ? std::make_unique<cuda::driver>() : nullptr) {
         const auto provider = option(params, "provider", "sockets");
         const auto device = option(params, "domain", "lo");
         loom::fabric_hints hints;
@@ -142,7 +174,12 @@ struct resources {
         hints.addr_format = loom::address_format::inet;
         hints.threading = transport_profile::threading;
         hints.mode_bits = transport_profile::supported_modes;
-        hints.capabilities = transport_profile::required_caps;
+        hints.capabilities = gpu ? cuda_profile::required_caps : transport_profile::required_caps;
+        if (gpu)
+            hints.memory_region_mode = loom::mr_mode_flags::local | loom::mr_mode_flags::virt_addr |
+                                       loom::mr_mode_flags::allocated |
+                                       loom::mr_mode_flags::prov_key |
+                                       loom::mr_mode_flags::endpoint | loom::mr_mode_flags::hmem;
         info = checked(loom::query_fabric(hints));
         const auto dom = info.get_domain_attr();
         const auto ep = info.get_endpoint_attr();
@@ -152,6 +189,10 @@ struct resources {
         if (registration_mode.has_any(loom::mr_mode_flags::raw | loom::mr_mode_flags::mmu_notify |
                                       loom::mr_mode_flags::rma_event))
             throw std::invalid_argument("unsupported registration contract");
+        const auto* native = static_cast<const fi_info*>(info.internal_ptr());
+        tag_mask = native->ep_attr->mem_tag_format;
+        if (std::popcount(tag_mask) < 2)
+            throw std::invalid_argument("insufficient control-message tag bits");
         protocol = ep->protocol.get();
         max_message = ep->max_msg_size.get();
         fabric = checked(loom::fabric::create(info));
@@ -161,7 +202,11 @@ struct resources {
         // Retain the validated profile's guarantees while using the generic RMA
         // and registered-message APIs. This endpoint stays private.
         endpoint =
-            checked(loom::contract_endpoint<transport_profile>::create(domain, info)).release();
+            gpu ? checked(loom::contract_endpoint<cuda_profile>::create(domain, info)).release()
+                : checked(loom::contract_endpoint<transport_profile>::create(domain, info))
+                      .release();
+        if (gpu)
+            checked(loom::set_cuda_api_permitted(endpoint, false));
         checked(endpoint.bind_cq(cq,
                                  loom::cq_bind::transmit | loom::cq_bind::recv |
                                      loom::cq_bind::selective_completion));
@@ -173,13 +218,38 @@ struct resources {
             throw std::invalid_argument("expected an IPv4 endpoint address");
         address = *ipv4;
         max_transfer = loom::rma::get_max_rma_size(endpoint);
-        if (!max_transfer || !max_message)
+        if (!max_transfer || max_message < 48)
             throw std::invalid_argument("missing RMA size limit");
     }
 
-    auto register_buffer(std::span<std::byte> buffer, loom::mr_access access)
+    auto tag(channel kind) const -> std::uint64_t {
+        const auto first = tag_mask & (~tag_mask + 1);
+        const auto rest = tag_mask & ~first;
+        switch (kind) {
+            case channel::notification:
+                return 0;
+            case channel::visibility_request:
+                return first;
+            case channel::visibility_reply:
+                return rest & (~rest + 1);
+        }
+        std::unreachable();
+    }
+
+    auto register_buffer(std::span<std::byte> buffer,
+                         loom::mr_access access,
+                         const std::optional<cuda::allocation>& device = {})
         -> loom::memory_region {
-        auto region = checked(loom::memory_region::register_memory(domain, buffer, access));
+        auto region =
+            device
+                ? checked(loom::memory_region::register_memory(
+                      domain,
+                      buffer.data(),
+                      buffer.size(),
+                      loom::memory_registration{.access = access,
+                                                .device = loom::hmem_device::cuda(device->device),
+                                                .allocation = loom::hmem_allocation_kind::device}))
+                : checked(loom::memory_region::register_memory(domain, buffer, access));
         if (registration_mode.has(loom::mr_mode_flags::endpoint)) {
             checked(region.bind(endpoint));
             checked(region.enable());
@@ -188,7 +258,17 @@ struct resources {
     }
 };
 
-enum class memory_space : std::uint64_t { host };
+enum class memory_space : std::uint64_t { host, cuda };
+auto space(nixl_mem_t type) -> std::optional<memory_space> {
+    switch (type) {
+        case DRAM_SEG:
+            return memory_space::host;
+        case VRAM_SEG:
+            return memory_space::cuda;
+        default:
+            return std::nullopt;
+    }
+}
 struct memory_identity {
     memory_space space;
     std::uint64_t device;
@@ -200,6 +280,13 @@ struct local_memory {
     loom::memory_region region;
     std::uint64_t base;
     memory_identity identity;
+    registration_id id;
+    std::optional<cuda::allocation> gpu;
+
+    void make_visible() const {
+        if (gpu)
+            cuda::flush(fabric->gpu->functions, *gpu);
+    }
 };
 
 struct local_metadata final : nixlBackendMD {
@@ -223,12 +310,14 @@ struct remote_metadata final : nixlBackendMD {
     std::uint64_t base;
     loom::remote_memory region;
     memory_identity identity;
+    registration_id id;
     remote_metadata(std::shared_ptr<peer> target,
                     std::uint64_t address,
                     loom::remote_memory memory,
-                    memory_identity device)
+                    memory_identity device,
+                    registration_id token)
         : nixlBackendMD(false), destination(std::move(target)), base(address), region(memory),
-          identity(device) {}
+          identity(device), id(token) {}
 };
 
 struct request;
@@ -238,6 +327,7 @@ struct segment {
     std::shared_ptr<peer> destination;
     std::span<std::byte> buffer;
     loom::remote_memory remote;
+    registration_id remote_id{};
     loom::request_context context;
     loom::completion_registration completion;
 };
@@ -251,18 +341,28 @@ struct request final : nixlBackendReqH {
     std::size_t pending{};
     nixl_status_t error{NIXL_SUCCESS};
     std::shared_ptr<notification> message;
+    std::shared_ptr<notification> visibility;
+    std::uint64_t ticket{};
+    std::size_t visible{};
+    std::size_t batch{};
+    bool acknowledged{};
     explicit request(nixl_xfer_op_t op) : operation(op) {}
 
     auto native_pending() const noexcept -> bool {
-        return pending || (message && message->phase == message_phase::accepted);
+        return pending || (message && message->phase == message_phase::accepted) ||
+               (visibility && visibility->phase == message_phase::accepted);
+    }
+
+    auto remotely_visible() const noexcept -> bool {
+        return operation != NIXL_WRITE || visible == segments.size();
     }
 
     auto status() const noexcept -> nixl_status_t {
         if (phase == request_phase::prepared)
             return NIXL_ERR_NOT_POSTED;
         if (native_pending() ||
-            (error == NIXL_SUCCESS &&
-             (next != segments.size() || (message && message->phase != message_phase::finished))))
+            (error == NIXL_SUCCESS && (next != segments.size() || !remotely_visible() ||
+                                       (message && message->phase != message_phase::finished))))
             return NIXL_IN_PROG;
         return error != NIXL_SUCCESS ? error : message ? message->error : NIXL_SUCCESS;
     }
@@ -281,14 +381,26 @@ class engine final : public nixlBackendEngine {
     mutable bool notification_failed_{};
     bool stop_receives_{};
     mutable std::vector<std::shared_ptr<notification>> outgoing_;
+    mutable std::vector<std::shared_ptr<notification>> replies_;
+    mutable std::unordered_map<registration_id, std::weak_ptr<local_memory>> registrations_;
+    std::uint64_t next_registration_{1};
+    mutable std::uint64_t next_ticket_{1};
     mutable notif_list_t notifications_;
     std::jthread progress_thread_;
 
     static void complete(void* object, const loom::completion_event& event) noexcept {
-        auto& work = *static_cast<segment*>(object)->owner;
-        --work.pending;
-        if (event.has_error() && work.error == NIXL_SUCCESS)
+        auto& part = *static_cast<segment*>(object);
+        auto& work = *part.owner;
+        if (event.has_error())
             work.error = NIXL_ERR_BACKEND;
+        else if (work.operation == NIXL_READ) {
+            try {
+                part.memory->make_visible();
+            } catch (...) {
+                work.error = NIXL_ERR_BACKEND;
+            }
+        }
+        --work.pending;
     }
 
     static void complete_message(void* object, const loom::completion_event& event) noexcept {
@@ -340,19 +452,21 @@ class engine final : public nixlBackendEngine {
         const auto descriptor = message.region.descriptor();
         const auto posted =
             message.destination
-                ? loom::msg::sendmsg(
+                ? loom::msg::tagged_sendmsg(
                       fabric_->endpoint,
-                      loom::msg::send_message<>{
+                      loom::msg::tagged_send_message<>{
                           .iov = {&buffer, 1},
                           .desc = {&descriptor, 1},
                           .dest_addr = loom::fabric_addr{message.destination->handle->value},
+                          .tag = fabric_->tag(message.kind),
                           .context = message.context.context_ptr()},
                       loom::msg::send_flag::completion)
-                : loom::msg::recvmsg(
+                : loom::msg::tagged_recvmsg(
                       fabric_->endpoint,
-                      loom::msg::recv_message<>{.iov = {&buffer, 1},
-                                                .desc = {&descriptor, 1},
-                                                .context = message.context.context_ptr()},
+                      loom::msg::tagged_recv_message<>{.iov = {&buffer, 1},
+                                                       .desc = {&descriptor, 1},
+                                                       .tag = fabric_->tag(message.kind),
+                                                       .context = message.context.context_ptr()},
                       loom::msg::recv_flag::completion);
         if (posted) {
             message.phase = message_phase::accepted;
@@ -367,10 +481,147 @@ class engine final : public nixlBackendEngine {
         }
     }
 
+    auto control_message(std::shared_ptr<peer> destination,
+                         channel kind,
+                         std::string_view bytes) const -> std::shared_ptr<notification> {
+        auto message = std::make_shared<notification>();
+        if (bytes.size() > std::min(message->bytes.size(), fabric_->max_message))
+            throw std::invalid_argument("control message exceeds the message limit");
+        std::ranges::copy(bytes, reinterpret_cast<char*>(message->bytes.data()));
+        message->kind = kind;
+        message->length = bytes.size();
+        message->destination = std::move(destination);
+        message->region = fabric_->register_buffer(message->bytes, loom::mr_access_flags::send);
+        return message;
+    }
+
+    void progress_visibility(request& work) const {
+        if (work.remotely_visible())
+            return;
+        if (work.visibility) {
+            if (work.visibility->phase != message_phase::finished)
+                return post_message(*work.visibility);
+            if (work.visibility->error != NIXL_SUCCESS) {
+                work.error = work.visibility->error;
+                return;
+            }
+            if (!work.acknowledged)
+                return;
+            work.visible += work.batch;
+            work.visibility.reset();
+            if (work.remotely_visible())
+                return;
+        }
+        constexpr std::size_t header_size = 40;
+        const auto capacity = (std::min<std::size_t>(8192, fabric_->max_message) - header_size) / 8;
+        work.batch = std::min({std::size_t{128}, capacity, work.segments.size() - work.visible});
+        auto bytes = encode(std::array{std::to_underlying(wire_kind::visibility_request_v1),
+                                       (std::uint64_t{fabric_->address.to_uint32()} << 16) |
+                                           fabric_->address.port(),
+                                       work.ticket,
+                                       std::uint64_t{work.visible},
+                                       std::uint64_t{work.batch}});
+        for (std::size_t i = work.visible; i < work.visible + work.batch; ++i)
+            bytes += encode(std::array{std::to_underlying(work.segments[i]->remote_id)});
+        work.acknowledged = false;
+        work.visibility =
+            control_message(work.segments.front()->destination, channel::visibility_request, bytes);
+        post_message(*work.visibility);
+    }
+
+    void receive_control() const {
+        if (stop_receives_)
+            return;
+        for (auto& slot : fabric_->receives) {
+            if (slot->kind == channel::notification)
+                continue;
+            if (slot->phase == message_phase::finished) {
+                if (slot->kind == channel::visibility_request && replies_.size() >= request_limit)
+                    continue;
+                const std::string_view bytes{reinterpret_cast<const char*>(slot->bytes.data()),
+                                             std::min(slot->length, slot->bytes.size())};
+                const auto header =
+                    bytes.size() >= 40 ? decode<5>(bytes.substr(0, 40)) : std::nullopt;
+                if (slot->error != NIXL_SUCCESS || !header || slot->length > slot->bytes.size()) {
+                    queue_failed_ = true;
+                    return;
+                }
+                const auto& words = *header;
+                if (slot->kind == channel::visibility_request) {
+                    if (words[0] != std::to_underlying(wire_kind::visibility_request_v1) ||
+                        (words[1] >> 48) != 0 || (words[1] & 0xffff) == 0 || !words[2] ||
+                        words[3] >= segment_limit || words[4] == 0 || words[4] > 128 ||
+                        words[4] > segment_limit - words[3] || bytes.size() != 40 + words[4] * 8) {
+                        queue_failed_ = true;
+                        return;
+                    }
+                    auto result = visibility_result::success;
+                    for (std::size_t i = 0; i < words[4]; ++i) {
+                        const auto id = static_cast<registration_id>(
+                            (*decode<1>(bytes.substr(40 + i * 8, 8)))[0]);
+                        const auto found = registrations_.find(id);
+                        const auto memory =
+                            found == registrations_.end() ? nullptr : found->second.lock();
+                        if (!memory) {
+                            result = visibility_result::stale_registration;
+                            break;
+                        }
+                        try {
+                            memory->make_visible();
+                        } catch (...) {
+                            result = visibility_result::failed;
+                            break;
+                        }
+                    }
+                    auto sender = std::make_shared<peer>();
+                    sender->fabric = fabric_;
+                    sender->handle = checked(fabric_->av.insert(
+                        loom::ipv4_address{static_cast<std::uint32_t>(words[1] >> 16),
+                                           static_cast<std::uint16_t>(words[1])}));
+                    replies_.push_back(control_message(
+                        std::move(sender),
+                        channel::visibility_reply,
+                        encode(std::array{std::to_underlying(wire_kind::visibility_reply_v1),
+                                          words[2],
+                                          words[3],
+                                          words[4],
+                                          std::to_underlying(result)})));
+                } else {
+                    if (words[0] != std::to_underlying(wire_kind::visibility_reply_v1) ||
+                        bytes.size() != 40 ||
+                        words[4] > std::to_underlying(visibility_result::failed)) {
+                        queue_failed_ = true;
+                        return;
+                    }
+                    for (auto& [_, work] : requests_) {
+                        if (work->ticket != words[1] || work->phase != request_phase::active ||
+                            !work->visibility || work->visible != words[2] ||
+                            work->batch != words[3])
+                            continue;
+                        if (words[4] != std::to_underlying(visibility_result::success))
+                            work->error = NIXL_ERR_BACKEND;
+                        else
+                            work->acknowledged = true;
+                        break;
+                    }
+                    // A released request can still have a reply in flight. Its
+                    // never-reused ticket prevents that reply completing new work.
+                }
+                slot->phase = message_phase::waiting;
+                slot->error = NIXL_SUCCESS;
+            }
+            post_message(*slot);
+            if (queue_failed_)
+                return;
+        }
+    }
+
     void receive_notifications() const {
         if (stop_receives_)
             return;
         for (auto& slot : fabric_->receives) {
+            if (slot->kind != channel::notification)
+                continue;
             if (slot->phase == message_phase::finished) {
                 if (notifications_.size() >= request_limit)
                     continue;
@@ -418,11 +669,20 @@ class engine final : public nixlBackendEngine {
                     work->phase = request_phase::finished;
                     for (auto& part : work->segments)
                         part->completion.reset();
+                    if (work->visibility) {
+                        work->visibility->completion.reset();
+                        work->visibility->phase = message_phase::finished;
+                        work->visibility->error = NIXL_ERR_BACKEND;
+                    }
                     if (work->message) {
                         work->message->completion.reset();
                         work->message->phase = message_phase::finished;
                         work->message->error = NIXL_ERR_BACKEND;
                     }
+                }
+                for (auto& message : replies_) {
+                    message->completion.reset();
+                    message->phase = message_phase::finished;
                 }
                 for (auto& message : outgoing_) {
                     message->completion.reset();
@@ -435,7 +695,21 @@ class engine final : public nixlBackendEngine {
                 }
             }
         } else {
+            receive_control();
+            if (queue_failed_)
+                return;
             receive_notifications();
+            if (queue_failed_)
+                return;
+            for (auto& message : replies_)
+                post_message(*message);
+            std::erase_if(replies_, [this](const auto& message) {
+                if (message->phase != message_phase::finished)
+                    return false;
+                if (message->error != NIXL_SUCCESS)
+                    queue_failed_ = true;
+                return true;
+            });
             if (queue_failed_)
                 return;
             for (auto& message : outgoing_)
@@ -494,8 +768,11 @@ class engine final : public nixlBackendEngine {
                     }
                 }
                 if (work->error == NIXL_SUCCESS && work->next == work->segments.size() &&
-                    work->pending == 0 && work->message)
-                    post_message(*work->message);
+                    work->pending == 0) {
+                    progress_visibility(*work);
+                    if (work->remotely_visible() && work->message)
+                        post_message(*work->message);
+                }
                 if (work->status() != NIXL_IN_PROG)
                     work->phase = request_phase::finished;
             }
@@ -506,11 +783,14 @@ class engine final : public nixlBackendEngine {
 public:
     explicit engine(const nixlBackendInitParams* params)
         : nixlBackendEngine(params), fabric_(std::make_shared<resources>(*params)) {
-        for (unsigned i = 0; i < 8; ++i) {
-            auto slot = std::make_unique<notification>();
-            slot->region = fabric_->register_buffer(slot->bytes, loom::mr_access_flags::recv);
-            fabric_->receives.push_back(std::move(slot));
-        }
+        for (const auto kind :
+             {channel::notification, channel::visibility_request, channel::visibility_reply})
+            for (unsigned i = 0; i < 8; ++i) {
+                auto slot = std::make_unique<notification>();
+                slot->kind = kind;
+                slot->region = fabric_->register_buffer(slot->bytes, loom::mr_access_flags::recv);
+                fabric_->receives.push_back(std::move(slot));
+            }
         progress_thread_ = std::jthread([this](std::stop_token stop) {
             std::unique_lock lock(mutex_);
             while (!stop.stop_requested()) {
@@ -539,9 +819,10 @@ public:
                 for (const auto& [_, work] : requests_)
                     if (work->native_pending())
                         return false;
-                for (const auto& message : outgoing_)
-                    if (message->phase == message_phase::accepted)
-                        return false;
+                for (const auto& messages : {&outgoing_, &replies_})
+                    for (const auto& message : *messages)
+                        if (message->phase == message_phase::accepted)
+                            return false;
                 return true;
             });
             stop_receives_ = true;
@@ -556,6 +837,7 @@ public:
             });
             requests_.clear();
             outgoing_.clear();
+            replies_.clear();
             fabric_->receives.clear();
             // Failed close retains the endpoint; keep driving progress until
             // native ownership can be released without abandoning live storage.
@@ -570,34 +852,52 @@ public:
     auto supportsRemote() const -> bool override { return true; }
     auto supportsLocal() const -> bool override { return false; }
     auto supportsNotif() const -> bool override { return true; }
-    auto getSupportedMems() const -> nixl_mem_list_t override { return {DRAM_SEG}; }
+    auto getSupportedMems() const -> nixl_mem_list_t override {
+        return fabric_->gpu ? nixl_mem_list_t{DRAM_SEG, VRAM_SEG} : nixl_mem_list_t{DRAM_SEG};
+    }
 
     auto registerMem(const nixlBlobDesc& memory, const nixl_mem_t& type, nixlBackendMD*& output)
         -> nixl_status_t override {
         output = nullptr;
-        if (type != DRAM_SEG)
+        const auto kind = space(type);
+        if (!kind || (*kind == memory_space::cuda && !fabric_->gpu))
             return NIXL_ERR_NOT_SUPPORTED;
         if (!memory.addr || !memory.len ||
             memory.len > std::numeric_limits<std::uintptr_t>::max() - memory.addr)
             return NIXL_ERR_INVALID_PARAM;
         return protect([&] {
             std::lock_guard lock(mutex_);
+            if (next_registration_ == std::numeric_limits<std::uint64_t>::max())
+                return NIXL_ERR_NOT_ALLOWED;
+            std::optional<cuda::allocation> gpu;
+            if (*kind == memory_space::cuda) {
+                gpu = cuda::inspect(fabric_->gpu->functions, reinterpret_cast<void*>(memory.addr));
+                if (!std::cmp_equal(gpu->device, memory.devId))
+                    return NIXL_ERR_INVALID_PARAM;
+            }
+            const auto token = static_cast<registration_id>(next_registration_++);
             auto region = fabric_->register_buffer(
                 {reinterpret_cast<std::byte*>(memory.addr), memory.len},
                 loom::mr_access_flags::read | loom::mr_access_flags::write |
-                    loom::mr_access_flags::remote_read | loom::mr_access_flags::remote_write);
-            auto local =
-                std::make_shared<local_memory>(fabric_,
-                                               std::move(region),
-                                               memory.addr,
-                                               memory_identity{memory_space::host, memory.devId});
-            output = new local_metadata(std::move(local));
+                    loom::mr_access_flags::remote_read | loom::mr_access_flags::remote_write,
+                gpu);
+            auto local = std::make_shared<local_memory>(fabric_,
+                                                        std::move(region),
+                                                        memory.addr,
+                                                        memory_identity{*kind, memory.devId},
+                                                        token,
+                                                        gpu);
+            auto metadata = std::make_unique<local_metadata>(local);
+            registrations_.emplace(token, local);
+            output = metadata.release();
             return NIXL_SUCCESS;
         });
     }
 
     auto deregisterMem(nixlBackendMD* metadata) -> nixl_status_t override {
         std::lock_guard lock(mutex_);
+        if (const auto* local = dynamic_cast<local_metadata*>(metadata))
+            registrations_.erase(local->memory->id);
         delete metadata;
         return NIXL_SUCCESS;
     }
@@ -612,33 +912,36 @@ public:
             return NIXL_ERR_INVALID_PARAM;
         return protect([&] {
             const auto& region = local->memory->region;
-            output = encode(std::array{std::to_underlying(wire_kind::memory_v2),
+            output = encode(std::array{std::to_underlying(wire_kind::memory_v3),
                                        local->memory->base,
                                        std::uint64_t{region.length()},
                                        region.remote_address(),
                                        region.key(),
                                        std::to_underlying(local->memory->identity.space),
-                                       local->memory->identity.device});
+                                       local->memory->identity.device,
+                                       std::to_underlying(local->memory->id)});
             return NIXL_SUCCESS;
         });
     }
 
     auto getConnInfo(std::string& output) const -> nixl_status_t override {
         return protect([&] {
-            output = encode(std::array{std::to_underlying(wire_kind::connection_v1),
+            output = encode(std::array{std::to_underlying(wire_kind::connection_v2),
                                        fabric_->protocol,
                                        std::uint64_t{fabric_->address.to_uint32()},
-                                       std::uint64_t{fabric_->address.port()}});
+                                       std::uint64_t{fabric_->address.port()},
+                                       fabric_->tag_mask});
             return NIXL_SUCCESS;
         });
     }
 
     auto loadRemoteConnInfo(const std::string& agent, const std::string& bytes)
         -> nixl_status_t override {
-        const auto data = decode<4>(bytes);
-        if (!data || (*data)[0] != std::to_underlying(wire_kind::connection_v1) ||
+        const auto data = decode<5>(bytes);
+        if (!data || (*data)[0] != std::to_underlying(wire_kind::connection_v2) ||
             (*data)[1] != fabric_->protocol || !std::in_range<std::uint32_t>((*data)[2]) ||
-            !std::in_range<std::uint16_t>((*data)[3]) || (*data)[3] == 0)
+            !std::in_range<std::uint16_t>((*data)[3]) || (*data)[3] == 0 ||
+            (*data)[4] != fabric_->tag_mask)
             return NIXL_ERR_MISMATCH;
         return protect([&] {
             std::lock_guard lock(mutex_);
@@ -696,13 +999,15 @@ public:
                       const std::string& agent,
                       nixlBackendMD*& output) -> nixl_status_t override {
         output = nullptr;
-        if (type != DRAM_SEG)
+        const auto kind = space(type);
+        if (!kind)
             return NIXL_ERR_NOT_SUPPORTED;
-        const auto data = decode<7>(memory.metaInfo);
-        if (!data || (*data)[0] != std::to_underlying(wire_kind::memory_v2) ||
+        const auto data = decode<8>(memory.metaInfo);
+        if (!data || (*data)[0] != std::to_underlying(wire_kind::memory_v3) ||
             (*data)[1] != memory.addr || (*data)[2] != memory.len || memory.len == 0 ||
             memory.len > std::numeric_limits<std::uint64_t>::max() - (*data)[3] ||
-            (*data)[5] != std::to_underlying(memory_space::host) || (*data)[6] != memory.devId)
+            (*data)[5] != std::to_underlying(*kind) || (*data)[6] != memory.devId ||
+            (*data)[7] == 0)
             return NIXL_ERR_MISMATCH;
         return protect([&] {
             std::lock_guard lock(mutex_);
@@ -712,7 +1017,8 @@ public:
             output = new remote_metadata(target->second,
                                          memory.addr,
                                          loom::remote_memory{(*data)[3], (*data)[4], memory.len},
-                                         memory_identity{memory_space::host, memory.devId});
+                                         memory_identity{*kind, memory.devId},
+                                         static_cast<registration_id>((*data)[7]));
             return NIXL_SUCCESS;
         });
     }
@@ -724,7 +1030,9 @@ public:
                   nixlBackendReqH*& output,
                   const nixl_opt_b_args_t*) const -> nixl_status_t override {
         output = nullptr;
-        if (local.getType() != DRAM_SEG || remote.getType() != DRAM_SEG)
+        const auto local_space = space(local.getType());
+        const auto remote_space = space(remote.getType());
+        if (!local_space || !remote_space || (*local_space == memory_space::cuda && !fabric_->gpu))
             return NIXL_ERR_NOT_SUPPORTED;
         const auto count = std::ranges::size(local);
         if ((operation != NIXL_READ && operation != NIXL_WRITE) || count == 0 ||
@@ -747,9 +1055,8 @@ public:
                     size > local[i].len || size > remote[i].len ||
                     source->memory->fabric != fabric_ ||
                     target->destination != destination->second ||
-                    source->memory->identity !=
-                        memory_identity{memory_space::host, local[i].devId} ||
-                    target->identity != memory_identity{memory_space::host, remote[i].devId} ||
+                    source->memory->identity != memory_identity{*local_space, local[i].devId} ||
+                    target->identity != memory_identity{*remote_space, remote[i].devId} ||
                     !covers(source->memory->base,
                             source->memory->region.length(),
                             local[i].addr,
@@ -761,6 +1068,7 @@ public:
                 part->memory = source->memory;
                 part->destination = target->destination;
                 part->buffer = {reinterpret_cast<std::byte*>(local[i].addr), size};
+                part->remote_id = target->id;
                 part->remote = target->region.subregion(remote[i].addr - target->base, size);
                 work->segments.push_back(std::move(part));
             }
@@ -789,10 +1097,17 @@ public:
         for (auto& part : work.segments)
             if (!part->destination->connected)
                 return NIXL_ERR_REMOTE_DISCONNECT;
-        work.message =
+        if (next_ticket_ == std::numeric_limits<std::uint64_t>::max())
+            return NIXL_ERR_NOT_ALLOWED;
+        auto message =
             options && options->hasNotif
                 ? make_notification(work.segments.front()->destination, options->notifMsg)
                 : nullptr;
+        work.ticket = next_ticket_++;
+        work.visibility.reset();
+        work.visible = 0;
+        work.acknowledged = false;
+        work.message = std::move(message);
         work.next = 0;
         work.pending = 0;
         work.error = NIXL_SUCCESS;
@@ -830,11 +1145,12 @@ public:
 }  // namespace
 
 extern "C" NIXL_PLUGIN_EXPORT auto nixl_plugin_init() -> nixlBackendPlugin* {
-    return nixlBackendPluginCreator<engine>::create(NIXL_PLUGIN_API_VERSION,
-                                                    "LOOM",
-                                                    "0.1.0",
-                                                    {{"provider", "sockets"}, {"domain", "lo"}},
-                                                    {DRAM_SEG});
+    return nixlBackendPluginCreator<engine>::create(
+        NIXL_PLUGIN_API_VERSION,
+        "LOOM",
+        "0.1.0",
+        {{"provider", "sockets"}, {"domain", "lo"}, {"cuda", "0"}},
+        {DRAM_SEG, VRAM_SEG});
 }
 
 extern "C" NIXL_PLUGIN_EXPORT void nixl_plugin_fini() {}

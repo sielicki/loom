@@ -4,6 +4,7 @@
 , ninja
 , pkg-config
 , makeWrapper
+, cudaPackages
 , loom
 , nixl-consumer
 }:
@@ -11,11 +12,12 @@ stdenv.mkDerivation {
   pname = "nixl-loom";
   version = "0.1.0";
   src = lib.fileset.toSource {
-    root = ./.;
-    fileset = lib.fileset.unions [ ./CMakeLists.txt ./backend.cpp ./workload.cpp ./test-contract.cpp ];
+    root = ../.;
+    fileset = lib.fileset.unions [ ./CMakeLists.txt ./backend.cpp ./workload.cpp ./test-contract.cpp ../hmem/cuda.hpp ../hmem/test-cuda.cpp ];
   };
+  sourceRoot = "source/nixl";
   nativeBuildInputs = [ cmake ninja pkg-config makeWrapper ];
-  buildInputs = [ loom nixl-consumer ];
+  buildInputs = [ loom nixl-consumer (lib.getInclude cudaPackages.cuda_cudart) ];
   doCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
   checkPhase = ''
     runHook preCheck

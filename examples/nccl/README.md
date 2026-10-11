@@ -160,7 +160,7 @@ The remaining adapter work is explicit:
 
 | Example | HMEM work still required |
 | --- | --- |
-| NIXL | Accept device segments, preserve allocation/device metadata, negotiate HMEM, and establish visibility before transfer/notification completion. |
+| NIXL | Validate experimental CUDA registration and receiver visibility acknowledgements on hardware; add other device runtimes and DMA-BUF. |
 | Monarch | Carry GPU allocation identity through the Rust/C++ registration boundary and retain its keepalive through retirement and visibility completion. |
 | Open MPI | Enable accelerator dependencies, retain MTL device registrations and descriptors in the Loom bridge, and validate matching/packing with device buffers. |
 | NCCL | Validate the experimental CUDA path on hardware and with NCCL collectives; add DMA-BUF and other supported registration/visibility profiles. |
