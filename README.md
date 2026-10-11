@@ -447,6 +447,22 @@ endpoint. `clear()` evicts only unreferenced registrations, so calling it while
 handles remain alive does not permit endpoint teardown. Cache locking does
 not serialize external endpoint operations against registration and binding.
 
+HMEM cache hits require the same memory interface and device, a containing
+range, and sufficient permissions. DMA-BUF hits also require the same borrowed
+file descriptor and allocation base, with a containing file-offset range.
+Unmapped buffers retain their file offsets even though their local address is
+null. Device registrations keep their exact ranges and contribute to the same
+hit, miss, registration, and byte statistics as host registrations.
+Use separate caches for device contexts whose address spaces can alias.
+
+Keep allocations and DMA-BUF descriptors valid while their registrations are
+cached. Before freeing or remapping memory, or closing/reusing a descriptor,
+invalidate the registered range and retire all handles that still use it.
+Invalidation prevents subsequent reuse but preserves existing handles until
+release. The cache does not monitor allocator or descriptor changes; use
+`clear()` or `evict_unreferenced()` to release idle registrations. Distinct
+allocations have no automatic retention budget.
+
 For raw-key registrations, use `mr.export_raw()` and exchange the returned
 `raw_remote_memory` fields through the consumer's wire protocol. Preserve
 `base_addr`, `addr`, `length` and every key byte. The native mapping base and

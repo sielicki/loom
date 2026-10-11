@@ -15,6 +15,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <utility>
+#include <variant>
 
 #include "loom/core/allocator.hpp"
 #include "loom/core/concepts/provider_traits.hpp"
@@ -36,6 +37,25 @@ namespace loom {
  */
 namespace detail {
 
+struct host_cache_key {
+    auto operator==(const host_cache_key&) const -> bool = default;
+};
+
+struct hmem_cache_key {
+    hmem_iface iface;
+    std::int64_t device;
+    void* reserved;
+    auto operator==(const hmem_cache_key&) const -> bool = default;
+};
+
+struct dmabuf_cache_key {
+    std::uintptr_t allocation;
+    int fd;
+    std::uint64_t offset;
+};
+
+using mr_cache_identity = std::variant<host_cache_key, hmem_cache_key, dmabuf_cache_key>;
+
 /**
  * @struct mr_cache_entry_base
  * @brief Base structure for memory region cache entries.
@@ -44,7 +64,7 @@ struct mr_cache_entry_base {
     std::uintptr_t base_addr{0};           ///< Base address of registered region
     std::size_t length{0};                 ///< Length of registered region
     mr_access access{};                    ///< Access flags for the region
-    bool host_memory{true};                ///< Eligible for ordinary host lookup
+    mr_cache_identity identity{};          ///< Registration kind and allocation identity
     bool invalidated{false};               ///< Retained only for existing handles
     std::atomic<std::size_t> refcount{0};  ///< Reference count
     std::optional<memory_region> mr{};     ///< Cached memory region
@@ -331,6 +351,10 @@ struct mr_cache_stats {
  * every returned handle. Keep those wrappers unmoved and their native handles
  * unchanged until the cache is destroyed. Endpoint-bound registrations are
  * closed before their endpoint; retire all operations before clearing the cache.
+ * Cached allocations and DMA-BUF descriptors must remain valid until their
+ * registrations are evicted. Before freeing or remapping memory or reusing a
+ * descriptor, invalidate overlapping entries and retire every affected handle.
+ * Retention is explicit: clear() and evict_unreferenced() release idle entries.
  *
  * @tparam Provider The provider tag type.
  */
@@ -442,12 +466,14 @@ public:
 
     /**
      * @brief Looks up or registers a DMA buffer.
-     * @param addr Virtual address.
+     * @param addr Allocation base address, or null for an unmapped DMA buffer.
      * @param length Buffer length.
      * @param access Required access permissions.
      * @param fd DMA buffer file descriptor.
      * @param offset Offset within the DMA buffer.
      * @return Handle to the cached region or error.
+     * Reuses containing file ranges only for the same borrowed descriptor and
+     * allocation base. The descriptor must not be closed while an MR is cached.
      */
     [[nodiscard]] auto lookup_dmabuf(void* addr,
                                      std::size_t length,
@@ -455,16 +481,26 @@ public:
                                      int fd,
                                      std::uint64_t offset = 0) -> result<handle_type> {
         auto uaddr = std::bit_cast<std::uintptr_t>(addr);
-        if (length == 0 || length > std::numeric_limits<std::uintptr_t>::max() - uaddr) {
+        constexpr auto maximum = std::numeric_limits<std::uintptr_t>::max();
+        if (length == 0 || fd < 0 || length > std::numeric_limits<std::uint64_t>::max() - offset ||
+            (addr && (offset > maximum - uaddr || length > maximum - (uaddr + offset)))) {
             return make_error_result<handle_type>(errc::invalid_argument);
         }
+        const auto local = addr ? uaddr + static_cast<std::uintptr_t>(offset) : 0;
+        const detail::dmabuf_cache_key identity{uaddr, fd, offset};
 
         std::unique_lock lock(mutex_);
         if (auto valid = validate_context(); !valid)
             return std::unexpected(valid.error());
 
-        auto entry = std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
-        entry->host_memory = false;
+        if (auto* entry = find_existing_entry(local, length, access, identity)) {
+            ++stats_.hits;
+            return handle_type{this, entry};
+        }
+        ++stats_.misses;
+
+        auto entry = std::make_unique<detail::mr_cache_entry_base>(local, length, access);
+        entry->identity = identity;
 
         auto mr_result = memory_region::register_dmabuf(
             *domain_, std::bit_cast<void*>(uaddr), length, access, fd, offset, resource_);
@@ -496,6 +532,8 @@ public:
      * @param access Required access permissions.
      * @param device The heterogeneous memory device.
      * @return Handle to the cached region or error.
+     * Reuses containing ranges only for the same memory interface and device.
+     * Device allocations are never rounded to host page boundaries.
      */
     [[nodiscard]] auto
     lookup_hmem(void* addr, std::size_t length, mr_access access, hmem_device device)
@@ -509,8 +547,15 @@ public:
         if (auto valid = validate_context(); !valid)
             return std::unexpected(valid.error());
 
+        const detail::hmem_cache_key identity{device.iface, device.device_id, device.hmem_data};
+        if (auto* entry = find_existing_entry(uaddr, length, access, identity)) {
+            ++stats_.hits;
+            return handle_type{this, entry};
+        }
+        ++stats_.misses;
+
         auto entry = std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
-        entry->host_memory = false;
+        entry->identity = identity;
 
         auto mr_result = memory_region::register_hmem(
             *domain_, std::bit_cast<void*>(uaddr), length, access, device, resource_);
@@ -647,17 +692,32 @@ private:
      * @param access Required access permissions.
      * @return Pointer to matching entry, or nullptr.
      */
-    [[nodiscard]] auto
-    find_existing_entry(std::uintptr_t addr, std::size_t length, mr_access access) const noexcept
+    template <typename Key = detail::host_cache_key>
+    [[nodiscard]] auto find_existing_entry(std::uintptr_t addr,
+                                           std::size_t length,
+                                           mr_access access,
+                                           const Key& identity = {}) const noexcept
         -> detail::mr_cache_entry_base* {
         for (auto it = std::make_reverse_iterator(entries_.upper_bound(addr));
              it != entries_.rend();
              ++it) {
             auto& entry = *it->second;
-            if (!entry.invalidated && entry.host_memory && entry.contains(addr, length) &&
-                entry.access.has(access)) {
-                return it->second.get();
+            if (entry.invalidated || !entry.contains(addr, length) || !entry.access.has(access))
+                continue;
+            const auto* cached = std::get_if<Key>(&entry.identity);
+            if (!cached)
+                continue;
+            if constexpr (std::same_as<Key, detail::dmabuf_cache_key>) {
+                // File offsets distinguish unmapped buffers, whose local addresses are null.
+                if (cached->allocation != identity.allocation || cached->fd != identity.fd ||
+                    identity.offset < cached->offset ||
+                    identity.offset - cached->offset > entry.length ||
+                    length > entry.length - (identity.offset - cached->offset))
+                    continue;
+            } else if (*cached != identity) {
+                continue;
             }
+            return it->second.get();
         }
 
         return nullptr;

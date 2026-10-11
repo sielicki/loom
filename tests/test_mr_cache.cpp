@@ -58,17 +58,31 @@ TEST_CASE("cache range comparisons do not wrap", "[mr_cache]") {
 
 TEST_CASE("concurrent cache hits retain exact statistics", "[mr_cache]") {
     using namespace loom;
+    enum class memory { host, hmem, dmabuf };
+    const auto kind = GENERATE(memory::host, memory::hmem, memory::dmabuf);
     test::mock_domain provider;
     mr_cache<provider::tcp_tag> cache(provider.dom);
     alignas(4096) std::array<std::byte, 4096> buffer{};
-    auto registration = cache.lookup(buffer, mr_access_flags::send);
+    const auto lookup = [&]() {
+        switch (kind) {
+            case memory::host:
+                return cache.lookup(buffer, mr_access_flags::send);
+            case memory::hmem:
+                return cache.lookup_hmem(
+                    buffer.data(), buffer.size(), mr_access_flags::send, hmem_device::cuda(0));
+            case memory::dmabuf:
+                return cache.lookup_dmabuf(buffer.data(), buffer.size(), mr_access_flags::send, 7);
+        }
+        std::unreachable();
+    };
+    auto registration = lookup();
     REQUIRE(registration);
     {
         std::vector<std::jthread> threads;
         for (int i = 0; i < 4; ++i) {
             threads.emplace_back([&] {
                 for (int j = 0; j < 1000; ++j) {
-                    auto handle = cache.lookup(buffer, mr_access_flags::send);
+                    auto handle = lookup();
                 }
             });
         }
@@ -591,8 +605,8 @@ TEST_CASE("endpoint caches publish enabled host and device registrations",
         CHECK(provider.enables == 0);
     }
     REQUIRE(handle->key());
-    if (kind == cache_memory::host) {
-        const auto again = cache.lookup(buffer, mr_access_flags::send);
+    {
+        const auto again = endpoint_cache_lookup(cache, buffer, kind);
         REQUIRE(again);
         CHECK(again->key() == handle->key());
         CHECK(provider.registrations == 1);
@@ -734,4 +748,252 @@ TEST_CASE("native endpoint caches preserve ordinary domain registration",
     mr_cache<provider::tcp_tag> invalid{foreign, endpoint};
     CHECK(invalid.lookup(buffer, mr_access_flags::send).error() == errc::invalid_argument);
     CHECK(invalid.size() == 0);
+}
+
+TEST_CASE("device cache lookups reuse registrations and count hits", "[mr_cache][reuse]") {
+    using namespace loom;
+    const auto dma = GENERATE(false, true);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    std::array<std::byte, 128> allocation{};
+    for (int i = 0; i < 100; ++i) {
+        const auto handle =
+            dma ? cache.lookup_dmabuf(allocation.data(), 64, mr_access_flags::send, 7, 17)
+                : cache.lookup_hmem(
+                      allocation.data() + 17, 64, mr_access_flags::send, hmem_device::cuda(0));
+        REQUIRE(handle);
+        CHECK(handle->base_address() == allocation.data() + 17);
+    }
+    CHECK(provider.registrations == 1);
+    CHECK(provider.live_regions == 1);
+    CHECK(cache.size() == 1);
+    CHECK(cache.stats().hits == 99);
+    CHECK(cache.stats().misses == 1);
+    CHECK(cache.stats().registrations == 1);
+    CHECK(cache.stats().total_registered_bytes == 64);
+    cache.clear();
+    CHECK(provider.live_regions == 0);
+}
+
+TEST_CASE("device cache lookups reuse contained ranges and permissions", "[mr_cache][reuse]") {
+    using namespace loom;
+    const auto dma = GENERATE(false, true);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    std::array<std::byte, 128> allocation{};
+    const auto original =
+        dma ? cache.lookup_dmabuf(
+                  allocation.data(), 64, mr_access_flags::send | mr_access_flags::recv, 7, 17)
+            : cache.lookup_hmem(allocation.data() + 17,
+                                64,
+                                mr_access_flags::send | mr_access_flags::recv,
+                                hmem_device::cuda(0));
+    REQUIRE(original);
+    const auto contained =
+        dma ? cache.lookup_dmabuf(allocation.data(), 32, mr_access_flags::recv, 7, 25)
+            : cache.lookup_hmem(
+                  allocation.data() + 25, 32, mr_access_flags::recv, hmem_device::cuda(0));
+    REQUIRE(contained);
+    CHECK(contained->mr()->internal_ptr() == original->mr()->internal_ptr());
+    CHECK(original->refcount() == 2);
+    CHECK(provider.registrations == 1);
+    CHECK(cache.stats().hits == 1);
+    CHECK(cache.stats().misses == 1);
+}
+
+TEST_CASE("HMEM cache identity separates devices interfaces and permissions", "[mr_cache][hmem]") {
+    using namespace loom;
+    enum class change {
+        none,
+        device,
+        interface,
+        address,
+        length,
+        permissions,
+        reserved,
+        invalid_device,
+        invalid_interface
+    };
+    const auto changed = GENERATE(change::none,
+                                  change::device,
+                                  change::interface,
+                                  change::address,
+                                  change::length,
+                                  change::permissions,
+                                  change::reserved,
+                                  change::invalid_device,
+                                  change::invalid_interface);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    std::array<std::byte, 128> allocation{};
+    const auto original = cache.lookup_hmem(
+        allocation.data(), 32, mr_access_flags::send | mr_access_flags::recv, hmem_device::cuda(0));
+    REQUIRE(original);
+    auto device = hmem_device::cuda(0);
+    auto* address = allocation.data();
+    std::size_t length = 32;
+    auto access = mr_access_flags::send;
+    switch (changed) {
+        case change::none:
+            break;
+        case change::device:
+            device.device_id = 1;
+            break;
+        case change::interface:
+            device.iface = hmem_iface::rocr;
+            break;
+        case change::address:
+            address += 64;
+            break;
+        case change::length:
+            length = 64;
+            break;
+        case change::permissions:
+            access = mr_access_flags::read;
+            break;
+        case change::reserved:
+            device.hmem_data = allocation.data();
+            break;
+        case change::invalid_device:
+            device.device_id = std::numeric_limits<std::int64_t>::max();
+            break;
+        case change::invalid_interface:
+            device.iface = static_cast<hmem_iface>(99);
+            break;
+    }
+    const auto found = cache.lookup_hmem(address, length, access, device);
+    const bool invalid = changed == change::reserved || changed == change::invalid_device ||
+                         changed == change::invalid_interface;
+    CAPTURE(changed);
+    REQUIRE(static_cast<bool>(found) == !invalid);
+    if (invalid) {
+        CHECK(found.error() == errc::invalid_argument);
+        CHECK(provider.registrations == 1);
+    } else {
+        CHECK((found->mr()->internal_ptr() == original->mr()->internal_ptr()) ==
+              (changed == change::none));
+        CHECK(provider.registrations == (changed == change::none ? 1 : 2));
+    }
+    provider.registration_error = -FI_EIO;
+    const auto again =
+        cache.lookup_hmem(allocation.data(), 16, mr_access_flags::recv, hmem_device::cuda(0));
+    REQUIRE(again);
+    CHECK(again->mr()->internal_ptr() == original->mr()->internal_ptr());
+}
+
+TEST_CASE("DMA-BUF cache identity checks file and virtual ranges", "[mr_cache][dmabuf]") {
+    using namespace loom;
+    enum class change {
+        same,
+        inside,
+        before,
+        beyond,
+        fd,
+        mapping,
+        permissions,
+        overflow,
+        invalid_fd
+    };
+    const auto changed = GENERATE(change::same,
+                                  change::inside,
+                                  change::before,
+                                  change::beyond,
+                                  change::fd,
+                                  change::mapping,
+                                  change::permissions,
+                                  change::overflow,
+                                  change::invalid_fd);
+    const auto mapped = GENERATE(false, true);
+    CAPTURE(changed, mapped);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    std::array<std::byte, 128> allocation{}, other{};
+    auto* base = mapped ? allocation.data() : nullptr;
+    const auto original =
+        cache.lookup_dmabuf(base, 64, mr_access_flags::send | mr_access_flags::recv, 7, 17);
+    REQUIRE(original);
+    std::uint64_t offset = 17;
+    int fd = 7;
+    std::size_t length = 32;
+    auto access = mr_access_flags::send;
+    switch (changed) {
+        case change::same:
+            break;
+        case change::inside:
+            offset = 25;
+            break;
+        case change::before:
+            offset = 16;
+            break;
+        case change::beyond:
+            offset = 73;
+            break;
+        case change::fd:
+            fd = 8;
+            break;
+        case change::mapping:
+            base = other.data();
+            break;
+        case change::permissions:
+            access = mr_access_flags::read;
+            break;
+        case change::overflow:
+            offset = std::numeric_limits<std::uint64_t>::max();
+            break;
+        case change::invalid_fd:
+            fd = -1;
+            break;
+    }
+    const auto found = cache.lookup_dmabuf(base, length, access, fd, offset);
+    const bool invalid = changed == change::overflow || changed == change::invalid_fd;
+    const bool hit = changed == change::same || changed == change::inside;
+    REQUIRE(static_cast<bool>(found) == !invalid);
+    if (invalid) {
+        CHECK(found.error() == errc::invalid_argument);
+        CHECK(provider.registrations == 1);
+    } else {
+        CHECK((found->mr()->internal_ptr() == original->mr()->internal_ptr()) == hit);
+        CHECK(provider.registrations == (hit ? 1 : 2));
+    }
+    CHECK(cache.stats().hits == (hit ? 1 : 0));
+    CHECK(cache.stats().misses == (hit || invalid ? 1 : 2));
+    provider.registration_error = -FI_EIO;
+    const auto again =
+        cache.lookup_dmabuf(mapped ? allocation.data() : nullptr, 16, mr_access_flags::recv, 7, 17);
+    REQUIRE(again);
+    CHECK(again->mr()->internal_ptr() == original->mr()->internal_ptr());
+}
+
+TEST_CASE("invalidated device allocations cannot be reused by new handles",
+          "[mr_cache][invalidate]") {
+    using namespace loom;
+    const auto kind = GENERATE(cache_memory::hmem, cache_memory::dmabuf);
+    const auto mapped = GENERATE(false, true);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    std::array<std::byte, 128> allocation{};
+    auto* base = mapped ? allocation.data() : nullptr;
+    const auto lookup = [&]() {
+        return kind == cache_memory::dmabuf
+                   ? cache.lookup_dmabuf(base, 64, mr_access_flags::send, 7, 17)
+                   : cache.lookup_hmem(base, 64, mr_access_flags::send, hmem_device::cuda(0));
+    };
+    auto original = lookup();
+    REQUIRE(original);
+    cache.invalidate(original->base_address(), original->length());
+    auto replacement = lookup();
+    REQUIRE(replacement);
+    CHECK(replacement->mr()->internal_ptr() != original->mr()->internal_ptr());
+    CHECK(provider.live_regions == 2);
+    CHECK(cache.stats().total_registered_bytes == 128);
+    *original = {};
+    CHECK(provider.live_regions == 1);
+    CHECK(cache.stats().total_registered_bytes == 64);
+    CHECK(cache.stats().evictions == 1);
+    cache.clear();
+    CHECK(provider.live_regions == 1);
+    *replacement = {};
+    cache.clear();
+    CHECK(provider.live_regions == 0);
+    CHECK(cache.size() == 0);
 }
