@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -164,6 +165,7 @@ private:
     std::recursive_mutex mutex_;
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdown_{false};
+    std::uint64_t poll_generation_{};
     bool resume_after_fork_{};
 };
 
@@ -261,6 +263,7 @@ inline void fabric_service::start() {
 inline void fabric_service::stop() {
     const std::lock_guard lock{mutex_};
     running_.store(false, std::memory_order_release);
+    ++poll_generation_;
     if (poll_timer_) {
         poll_timer_->cancel();
     }
@@ -291,13 +294,23 @@ inline void fabric_service::schedule_poll() {
         interval = completion_queues_.front()->opts.poll_interval;
     }
 
-    poll_timer_->expires_after(interval);
-    poll_timer_->async_wait([this](const std::error_code& ec) {
-        if (!ec && running_.load(std::memory_order_acquire)) {
-            do_poll();
+    const auto generation = ++poll_generation_;
+    try {
+        poll_timer_->expires_after(interval);
+        poll_timer_->async_wait([this, generation](const std::error_code& ec) {
+            const std::lock_guard lock{mutex_};
+            if (ec || !running_.load(std::memory_order_acquire) || generation != poll_generation_) {
+                return;
+            }
+            // Keep progress scheduled if a registered callback throws. Stop or
+            // restart from that callback can invalidate this pending wait.
             schedule_poll();
-        }
-    });
+            do_poll();
+        });
+    } catch (...) {
+        running_.store(false, std::memory_order_release);
+        throw;
+    }
 }
 
 inline void fabric_service::do_poll() {

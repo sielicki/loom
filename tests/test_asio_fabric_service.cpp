@@ -541,3 +541,96 @@ TEST_CASE("reentrant Asio progress cannot overwrite an unclaimed event", "[asio]
     REQUIRE(second);
     REQUIRE(second->data == 11);
 }
+
+TEST_CASE("Asio timer progress resumes after a registered callback throws",
+          "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    service_queue native;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    struct handler_error {};
+    struct state {
+        loom::asio::fabric_service& service;
+        int callbacks{};
+    } state{service};
+    std::array<fi_context2, 2> contexts{};
+    std::array<loom::completion_registration, 2> registrations;
+    for (std::size_t index = 0; index < contexts.size(); ++index) {
+        REQUIRE(registrations[index].bind(native.queue,
+                                          loom::context_ptr<void>{&contexts[index]},
+                                          &state,
+                                          [](void* object, const loom::completion_event&) {
+                                              auto& state = *static_cast<struct state*>(object);
+                                              if (++state.callbacks == 1)
+                                                  throw handler_error{};
+                                              state.service.stop();
+                                          }));
+        native.pending.push_back({.op_context = &contexts[index]});
+    }
+    service.register_cq(native.queue, {.poll_interval = 0us, .max_completions_per_poll = 1});
+    service.start();
+    REQUIRE_THROWS_AS(ioc.run_one(), handler_error);
+    REQUIRE(state.callbacks == 1);
+    ioc.run_for(100ms);
+    const bool resumed = state.callbacks == 2;
+    service.stop();
+    // Retire the second operation even if the timer failed to resume.
+    service.poll_once();
+    ioc.restart();
+    ioc.poll();
+    REQUIRE_FALSE(service.deregister_cq(native.queue));
+    REQUIRE(resumed);
+    REQUIRE(state.callbacks == 2);
+}
+
+TEST_CASE("Asio timer preserves a stop requested by a throwing handler", "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    service_queue native;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    struct handler_error {};
+    auto* context = loom::asio::make_asio_context(
+        [&](std::error_code, std::size_t) {
+            service.stop();
+            throw handler_error{};
+        },
+        ioc.get_executor());
+    REQUIRE(context->bind_completion(native.queue));
+    native.pending.push_back({.op_context = context->as_fi_context()});
+    service.register_cq(native.queue, {.poll_interval = 0us, .max_completions_per_poll = 1});
+    service.start();
+    REQUIRE_THROWS_AS(ioc.run_one(), handler_error);
+    REQUIRE_FALSE(service.is_running());
+    const auto reads = native.reads;
+    ioc.run();
+    REQUIRE(native.reads == reads);
+    REQUIRE_FALSE(service.deregister_cq(native.queue));
+}
+
+TEST_CASE("Asio polling stays stopped after concurrent timer restarts", "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    service_queue native;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    std::atomic<int> polls{};
+    native.before_read = [&] {
+        ++polls;
+    };
+    service.register_cq(native.queue, {.poll_interval = 0us});
+    auto work = ::asio::make_work_guard(ioc);
+    std::jthread runner{[&] { ioc.run(); }};
+    bool stayed_stopped = true;
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        service.start();
+        std::this_thread::yield();
+        service.stop();
+        const auto stopped_at = polls.load();
+        std::promise<void> drained;
+        auto ready = drained.get_future();
+        ::asio::post(ioc, [drained = std::move(drained)]() mutable { drained.set_value(); });
+        ready.wait();
+        stayed_stopped &= polls.load() == stopped_at;
+    }
+    work.reset();
+    runner.join();
+    REQUIRE(stayed_stopped);
+    REQUIRE_FALSE(service.is_running());
+    REQUIRE_FALSE(service.deregister_cq(native.queue));
+}
