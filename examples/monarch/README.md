@@ -10,7 +10,7 @@ nix build .#monarch-loom --cores 4
   backend::loom::tests::rxm_process_round_trip
 ```
 
-The build runs eight Loom workloads and eleven upstream TCP baseline tests.
+The build runs nine Loom workloads and eleven upstream TCP baseline tests.
 Loom tests disable both TCP fallback and ibverbs, require the typed Loom
 backend handle and remote context, and transfer data through Monarch's
 `RdmaAction` interface. They cover sockets and TCP/RxM, multiple peers,
@@ -57,7 +57,16 @@ peer addresses. Rejected `FI_EAGAIN` submissions retain their preparation
 for retry; accepted submissions are never reposted. Conflicting local
 read/write ranges are serialized.
 
-Writes request delivery completion. Successful reads permit local buffer
+Writes request delivery completion and then await the target's visibility
+acknowledgment through Monarch's actor transport. Metadata schema 2 binds
+that request to the native endpoint address, export ID, and a registration
+generation that is never reused by the worker. Released, stale, or mismatched
+exports fail the acknowledgment. The current host profile needs no device
+flush; it exercises the same request and failure path planned for GPU writes.
+A fault test verifies that delivered bytes cannot turn stale metadata, an
+unrelated control actor, or a target visibility failure into transfer success.
+
+Successful reads permit local buffer
 access. Timeout or observer drop does not grant buffer reuse: accepted DMA
 retains its leases, while expiration stops unsubmitted work. External access
 must remain excluded until that work retires. Remote users must quiesce

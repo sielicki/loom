@@ -168,6 +168,82 @@ async fn rxm_actor_round_trip() -> Result<()> {
     round_trip("tcp;ofi_rxm").await
 }
 
+#[timed_test::async_timed_test(timeout_secs = 45)]
+async fn writes_require_target_visibility_acknowledgment() -> Result<()> {
+    let config = hyperactor_config::global::lock();
+    let _enabled = config.override_key(crate::config::RDMA_ALLOW_LOOM, true);
+    let _provider = config.override_key(crate::config::RDMA_LOOM_PROVIDER, "sockets".into());
+    let _domain = config.override_key(crate::config::RDMA_LOOM_DOMAIN, "lo".into());
+    let _tcp = config.override_key(crate::config::RDMA_ALLOW_TCP_FALLBACK, false);
+    let _verbs = config.override_key(crate::config::RDMA_DISABLE_IBVERBS, true);
+    let source = Env::new(128).await?;
+    let target = Env::new(128).await?;
+    let other = Env::new(128).await?;
+    let pattern = [0x5a; 128];
+    // SAFETY: no operation is outstanding on the source allocation.
+    unsafe {
+        source.local.write_at(0, &pattern)?;
+    }
+
+    let mut stale = target.remote.clone();
+    stale.backends.loom.as_mut().unwrap().visibility.generation += 1;
+    let mut misdirected = target.remote.clone();
+    misdirected
+        .backends
+        .loom
+        .as_mut()
+        .unwrap()
+        .visibility
+        .control = other.backend.control.clone();
+    for remote in [stale, misdirected] {
+        // Keep valid native RMA metadata: data is delivered, but a stale or
+        // unrelated target acknowledgment must not turn it into success.
+        unsafe {
+            target.local.write_at(0, &[0; 128])?;
+        }
+        let accepted = source.inspect().await?.0;
+        assert!(remote
+            .write_from_local(&source.client, source.local.clone(), 10)
+            .await
+            .is_err());
+        assert_eq!(source.inspect().await?, (accepted + 1, 0));
+        let mut received = [0; 128];
+        unsafe {
+            target.local.read_at(0, &mut received)?;
+        }
+        assert_eq!(received, pattern);
+    }
+
+    let (done, reply) = oneshot::channel();
+    target
+        .backend
+        .commands
+        .send(Command::FailFlush(true, done))
+        .await?;
+    reply.await??;
+    assert!(target
+        .remote
+        .write_from_local(&source.client, source.local.clone(), 10)
+        .await
+        .is_err());
+    let (done, reply) = oneshot::channel();
+    target
+        .backend
+        .commands
+        .send(Command::FailFlush(false, done))
+        .await?;
+    reply.await??;
+    target
+        .remote
+        .write_from_local(&source.client, source.local.clone(), 10)
+        .await?;
+
+    source.shutdown().await?;
+    target.shutdown().await?;
+    other.shutdown().await?;
+    Ok(())
+}
+
 async fn retention(timeout: bool, partial_failure: bool) -> Result<()> {
     let config = hyperactor_config::global::lock();
     let _enabled = config.override_key(crate::config::RDMA_ALLOW_LOOM, true);

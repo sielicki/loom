@@ -98,7 +98,8 @@ rustPlatform.buildRustPackage {
     for test in sockets_actor_round_trip rxm_actor_round_trip \
       sockets_process_round_trip rxm_process_round_trip \
       dropped_observer_retains_dma timeout_retains_dma partial_failure_retains_accepted_dma \
-      pending_operations_respect_completion_capacity; do
+      pending_operations_respect_completion_capacity \
+      writes_require_target_visibility_acknowledgment; do
       testName="backend::loom::tests::$test"
       grep -Fx "$testName: test" tests.list
       timeout 60 ./monarch-rdma-tests --exact "$testName"

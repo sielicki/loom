@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use async_trait::async_trait;
 use hyperactor::context;
-use hyperactor::{Actor, Instance};
+use hyperactor::{
+    Actor, ActorRef, Context as ActorContext, HandleClient, Handler, Instance, OncePortRef,
+    RefClient,
+};
 use loom_fabric::{
     AddressFormat, AddressVector, Capabilities, CompletionQueue, CqBindFlags, Domain, Endpoint,
     EndpointType, Fabric, FabricAttributes, FabricHints, MemoryRegion, Modes, MrAccess, MrMode,
@@ -22,6 +25,7 @@ use loom_fabric::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
+use typeuri::Named;
 
 use crate::backend::{RdmaBackend, RdmaConfig};
 use crate::device_selection::MemoryLocation;
@@ -33,10 +37,10 @@ const OP_LIMIT: usize = 64;
 const RESOURCE_LIMIT: usize = 1024;
 const PROGRESS_BUDGET: usize = 64;
 const IN_FLIGHT_LIMIT: usize = 256;
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 
 /// Portable IPv4 endpoint identity, without padding or process-local handles.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Named)]
 pub struct Ipv4Address {
     ip: [u8; 4],
     port: u16,
@@ -82,20 +86,71 @@ pub struct LoomRemoteContext {
     addr: u64,
     key: u64,
     length: u64,
+    visibility: RemoteFlush,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RemoteFlush {
+    control: ActorRef<LoomControl>,
+    address: Ipv4Address,
+    id: usize,
+    generation: u64,
+}
+
+#[derive(Handler, HandleClient, RefClient, Debug, Serialize, Deserialize, Named)]
+struct FlushRemote {
+    address: Ipv4Address,
+    id: usize,
+    generation: u64,
+    #[reply]
+    reply: OncePortRef<Result<(), String>>,
+}
+wirevalue::register_type!(FlushRemote);
 
 /// Actor-facing command handle; contains no native fabric resource.
 #[derive(Clone, Debug)]
 pub struct LoomBackend {
     commands: mpsc::Sender<Command>,
+    control: ActorRef<LoomControl>,
 }
 
-struct WorkerLifetime {
+#[derive(Debug)]
+#[hyperactor::export(handlers = [FlushRemote])]
+pub struct LoomControl {
+    commands: mpsc::Sender<Command>,
     stop: Option<oneshot::Sender<()>>,
     stopped: Option<oneshot::Receiver<Result<()>>>,
 }
 
-impl Drop for WorkerLifetime {
+#[async_trait]
+#[hyperactor::handle(FlushRemote)]
+impl FlushRemoteHandler for LoomControl {
+    async fn flush_remote(
+        &mut self,
+        _cx: &ActorContext<Self>,
+        address: Ipv4Address,
+        id: usize,
+        generation: u64,
+    ) -> Result<Result<(), String>> {
+        let result = async {
+            let (done, reply) = oneshot::channel();
+            self.commands
+                .send(Command::Flush {
+                    address,
+                    id,
+                    generation,
+                    done,
+                })
+                .await
+                .map_err(|_| anyhow!("Loom worker stopped"))?;
+            reply.await.context("Loom visibility request interrupted")?
+        }
+        .await;
+        Ok(result.map_err(|error| format!("{error:#}")))
+    }
+}
+
+impl Drop for LoomControl {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
@@ -104,7 +159,7 @@ impl Drop for WorkerLifetime {
 }
 
 #[async_trait]
-impl Actor for WorkerLifetime {
+impl Actor for LoomControl {
     async fn cleanup(
         &mut self,
         _this: &Instance<Self>,
@@ -127,6 +182,7 @@ type Reply<T> = oneshot::Sender<Result<T>>;
 enum Command {
     Register {
         id: usize,
+        control: ActorRef<LoomControl>,
         local: KeepaliveLocalMemory,
         done: Reply<LoomRemoteContext>,
     },
@@ -137,16 +193,27 @@ enum Command {
     Submit {
         ops: Vec<RdmaOp>,
         deadline: Instant,
+        done: Reply<Vec<RemoteFlush>>,
+    },
+    Flush {
+        address: Ipv4Address,
+        id: usize,
+        generation: u64,
         done: Reply<()>,
     },
     #[cfg(test)]
     PauseCompletions(bool, Reply<()>),
     #[cfg(test)]
     Inspect(Reply<(usize, usize)>),
+    #[cfg(test)]
+    FailFlush(bool, Reply<()>),
 }
 
 impl LoomBackend {
-    async fn start(provider: String, domain: String) -> Result<(Self, WorkerLifetime)> {
+    async fn start(
+        provider: String,
+        domain: String,
+    ) -> Result<(mpsc::Sender<Command>, LoomControl)> {
         let (commands, incoming) = mpsc::channel(QUEUE_LIMIT);
         let (ready, started) = oneshot::channel();
         let (stop, stopping) = oneshot::channel();
@@ -167,8 +234,9 @@ impl LoomBackend {
             })?;
         started.await.context("Loom worker failed to start")??;
         Ok((
-            Self { commands },
-            WorkerLifetime {
+            commands.clone(),
+            LoomControl {
+                commands,
                 stop: Some(stop),
                 stopped: Some(stopped),
             },
@@ -195,13 +263,13 @@ impl RdmaBackend for LoomBackend {
     }
 
     async fn spawn(cx: &(impl context::Actor + Send + Sync), _config: &RdmaConfig) -> Result<Self> {
-        let (backend, lifetime) = Self::start(
+        let (commands, lifetime) = Self::start(
             hyperactor_config::global::get_cloned(crate::config::RDMA_LOOM_PROVIDER),
             hyperactor_config::global::get_cloned(crate::config::RDMA_LOOM_DOMAIN),
         )
         .await?;
-        cx.spawn(lifetime);
-        Ok(backend)
+        let control = cx.spawn(lifetime).bind();
+        Ok(Self { commands, control })
     }
 
     async fn register_remote_buffer(
@@ -212,7 +280,12 @@ impl RdmaBackend for LoomBackend {
     ) -> Result<LoomRemoteContext> {
         let (done, reply) = oneshot::channel();
         self.commands
-            .send(Command::Register { id, local, done })
+            .send(Command::Register {
+                id,
+                control: self.control.clone(),
+                local,
+                done,
+            })
             .await
             .map_err(|_| anyhow!("Loom worker stopped"))?;
         reply.await.context("Loom registration interrupted")?
@@ -233,7 +306,7 @@ impl RdmaBackend for LoomBackend {
 
     async fn submit(
         &self,
-        _cx: &(impl context::Actor + Send + Sync),
+        cx: &(impl context::Actor + Send + Sync),
         ops: Vec<RdmaOp>,
         timeout: Duration,
     ) -> Result<()> {
@@ -254,7 +327,14 @@ impl RdmaBackend for LoomBackend {
                 })
                 .await
                 .map_err(|_| anyhow!("Loom worker stopped"))?;
-            reply.await.context("Loom submission interrupted")?
+            for target in reply.await.context("Loom submission interrupted")?? {
+                target
+                    .control
+                    .flush_remote(cx, target.address, target.id, target.generation)
+                    .await?
+                    .map_err(|error| anyhow!(error))?;
+            }
+            Ok(())
         })
         .await
         .context("Loom deadline elapsed; accepted DMA may still be active")?
@@ -267,6 +347,18 @@ struct Registration {
     local: KeepaliveLocalMemory,
 }
 
+impl Registration {
+    fn flush(&self) -> Result<()> {
+        // Delivery completion suffices for the current host-only profile.
+        Ok(())
+    }
+}
+
+struct Export {
+    registration: Registration,
+    generation: u64,
+}
+
 struct Transfer {
     registration: Registration,
     context: OperationContext,
@@ -274,6 +366,7 @@ struct Transfer {
     kind: RdmaOpType,
     length: usize,
     batch: u64,
+    remote_flush: Option<RemoteFlush>,
 }
 
 struct Batch {
@@ -282,7 +375,8 @@ struct Batch {
     prepared: Option<Transfer>,
     active: usize,
     deadline: Instant,
-    done: Option<Reply<()>>,
+    done: Option<Reply<Vec<RemoteFlush>>>,
+    remote_flushes: Vec<RemoteFlush>,
 }
 
 impl Batch {
@@ -302,15 +396,18 @@ struct Worker {
     domain: Domain,
     attributes: FabricAttributes,
     address: Ipv4Address,
-    exports: HashMap<usize, Registration>,
+    exports: HashMap<usize, Export>,
     peers: HashMap<Ipv4Address, u64>,
     batches: VecDeque<Batch>,
     pending: HashMap<usize, Transfer>,
     next_batch: u64,
+    next_registration: u64,
     accepted: usize,
     failed: bool,
     #[cfg(test)]
     paused: bool,
+    #[cfg(test)]
+    fail_flush: bool,
 }
 
 impl Worker {
@@ -368,10 +465,13 @@ impl Worker {
                     batches: VecDeque::new(),
                     pending: HashMap::new(),
                     next_batch: 0,
+                    next_registration: 0,
                     accepted: 0,
                     failed: false,
                     #[cfg(test)]
                     paused: false,
+                    #[cfg(test)]
+                    fail_flush: false,
                 })
             };
             match setup() {
@@ -406,7 +506,12 @@ impl Worker {
         Ok(Registration { region, local })
     }
 
-    fn export(&mut self, id: usize, local: KeepaliveLocalMemory) -> Result<LoomRemoteContext> {
+    fn export(
+        &mut self,
+        id: usize,
+        control: ActorRef<LoomControl>,
+        local: KeepaliveLocalMemory,
+    ) -> Result<LoomRemoteContext> {
         ensure!(
             !self.exports.contains_key(&id),
             "buffer id already exported"
@@ -416,6 +521,11 @@ impl Worker {
             "Loom export capacity exhausted"
         );
         let registration = self.register(local)?;
+        let generation = self
+            .next_registration
+            .checked_add(1)
+            .context("Loom registration generations exhausted")?;
+        self.next_registration = generation;
         let remote = registration.region.remote_memory();
         let context = LoomRemoteContext {
             schema: SCHEMA,
@@ -425,9 +535,34 @@ impl Worker {
             addr: remote.addr,
             key: remote.key,
             length: remote.length as u64,
+            visibility: RemoteFlush {
+                control,
+                address: self.address,
+                id,
+                generation,
+            },
         };
-        self.exports.insert(id, registration);
+        self.exports.insert(
+            id,
+            Export {
+                registration,
+                generation,
+            },
+        );
         Ok(context)
+    }
+
+    fn flush_export(&self, address: Ipv4Address, id: usize, generation: u64) -> Result<()> {
+        ensure!(!self.failed, "Loom completion queue failed");
+        ensure!(self.address == address, "Loom visibility endpoint mismatch");
+        let export = self.exports.get(&id).context("Loom export was released")?;
+        ensure!(
+            export.generation == generation,
+            "stale Loom registration generation"
+        );
+        #[cfg(test)]
+        ensure!(!self.fail_flush, "injected Loom visibility failure");
+        export.registration.flush()
     }
 
     fn prepare(&mut self, op: RdmaOp, batch: u64) -> Result<Transfer> {
@@ -444,6 +579,10 @@ impl Worker {
         ensure!(
             remote.length == op.remote.size as u64,
             "inconsistent remote buffer size"
+        );
+        ensure!(
+            remote.visibility.address == remote.address && remote.visibility.id == op.remote.id,
+            "inconsistent remote visibility metadata"
         );
         let length = match op.op_type {
             RdmaOpType::ReadIntoLocal => {
@@ -503,6 +642,8 @@ impl Worker {
             kind: op.op_type,
             length,
             batch,
+            remote_flush: (op.op_type == RdmaOpType::WriteFromLocal)
+                .then(|| remote.visibility.clone()),
         })
     }
 
@@ -590,12 +731,15 @@ impl Worker {
                     }
                 }
             }
-            if let Some(transfer) = batch.prepared.take() {
+            if let Some(mut transfer) = batch.prepared.take() {
                 if self.pending.len() >= IN_FLIGHT_LIMIT || self.conflicts(&transfer) {
                     batch.prepared = Some(transfer);
                 } else {
                     match self.submit_transfer(&transfer) {
                         Ok(()) => {
+                            if let Some(flush) = transfer.remote_flush.take() {
+                                batch.remote_flushes.push(flush);
+                            }
                             self.pending.insert(transfer.context.address(), transfer);
                             batch.active += 1;
                             self.accepted += 1;
@@ -607,7 +751,7 @@ impl Worker {
             }
             if batch.active == 0 && batch.remaining.is_empty() && batch.prepared.is_none() {
                 if let Some(done) = batch.done.take() {
-                    let _ = done.send(Ok(()));
+                    let _ = done.send(Ok(batch.remote_flushes));
                 }
             } else {
                 self.batches.push_back(batch);
@@ -617,13 +761,18 @@ impl Worker {
 
     fn command(&mut self, command: Command) {
         match command {
-            Command::Register { id, local, done } => {
+            Command::Register {
+                id,
+                control,
+                local,
+                done,
+            } => {
                 if self.failed {
                     let _ = done.send(Err(anyhow!("Loom completion queue failed")));
                     return;
                 }
                 if !done.is_closed() {
-                    let result = self.export(id, local);
+                    let result = self.export(id, control, local);
                     let created = result.is_ok();
                     if done.send(result).is_err() && created {
                         self.exports.remove(&id);
@@ -633,6 +782,14 @@ impl Worker {
             Command::Release { id, done } => {
                 self.exports.remove(&id);
                 let _ = done.send(Ok(()));
+            }
+            Command::Flush {
+                address,
+                id,
+                generation,
+                done,
+            } => {
+                let _ = done.send(self.flush_export(address, id, generation));
             }
             Command::Submit {
                 ops,
@@ -652,6 +809,7 @@ impl Worker {
                         active: 0,
                         deadline,
                         done: Some(done),
+                        remote_flushes: Vec::new(),
                     });
                 } else {
                     let _ = done.send(Err(anyhow!("Loom batch identifiers exhausted")));
@@ -665,6 +823,11 @@ impl Worker {
             #[cfg(test)]
             Command::Inspect(done) => {
                 let _ = done.send(Ok((self.accepted, self.pending.len())));
+            }
+            #[cfg(test)]
+            Command::FailFlush(fail, done) => {
+                self.fail_flush = fail;
+                let _ = done.send(Ok(()));
             }
         }
     }
