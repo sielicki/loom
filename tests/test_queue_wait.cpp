@@ -333,7 +333,9 @@ TEST_CASE("unrecognized events do not report a successful connection", "[queue][
 
 TEST_CASE("control event entries retain their context and data", "[queue][event_entry]") {
     const auto waiting = GENERATE(false, true);
-    const auto type = GENERATE(FI_MR_COMPLETE, FI_AV_COMPLETE, FI_JOIN_COMPLETE);
+    const auto type = GENERATE(std::uint32_t{FI_MR_COMPLETE},
+                               std::uint32_t{FI_AV_COMPLETE},
+                               std::uint32_t{FI_JOIN_COMPLETE});
     queue_provider provider;
     provider.native_event = type;
     auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting});
@@ -352,7 +354,7 @@ TEST_CASE("control event entries retain their context and data", "[queue][event_
 
 TEST_CASE("short native event entries are rejected", "[queue][event_entry]") {
     const auto waiting = GENERATE(false, true);
-    const auto type = GENERATE(FI_CONNECTED, FI_MR_COMPLETE);
+    const auto type = GENERATE(std::uint32_t{FI_CONNECTED}, std::uint32_t{FI_MR_COMPLETE});
     queue_provider provider;
     provider.native_event = type;
     provider.short_entry = true;
