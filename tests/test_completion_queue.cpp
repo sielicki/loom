@@ -89,6 +89,7 @@ struct format_provider {
     int source_reads{};
     int open_calls{};
     int read_calls{};
+    int error_reads{};
     int status{};
     std::size_t cursor{};
     std::array<int, 70> contexts{};
@@ -155,6 +156,7 @@ struct format_provider {
             },
         .readerr = [](fid_cq* cq, fi_cq_err_entry* output, std::uint64_t) -> ssize_t {
             auto& self = *static_cast<format_provider*>(cq->fid.context);
+            ++self.error_reads;
             *output = {.op_context = &self.contexts[0],
                        .flags = FI_RECV,
                        .len = 3,
@@ -347,6 +349,43 @@ TEST_CASE("immediate data uses the remote CQ data flag", "[completion_queue]") {
     REQUIRE_FALSE(event.has_immediate_data());
     event.flags = FI_REMOTE_CQ_DATA;
     REQUIRE(event.has_immediate_data());
+}
+
+TEST_CASE("completion progress leaves entries queued and reports failures",
+          "[completion_queue][progress]") {
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EAVAIL, -FI_EIO, -FI_EINVAL, -FI_ENOSYS);
+    format_provider provider;
+    provider.status = status;
+    auto queue = loom::completion_queue::create(provider.domain);
+    REQUIRE(queue);
+    const auto progressed = queue->progress();
+    if (status == 0 || status == -FI_EAGAIN) {
+        REQUIRE(progressed);
+    } else {
+        REQUIRE_FALSE(progressed);
+        REQUIRE(progressed.error() == loom::make_error_code_from_fi_errno(-status));
+    }
+    REQUIRE(provider.read_calls == 1);
+    REQUIRE(provider.cursor == 0);
+    REQUIRE(provider.error_reads == 0);
+    if (status == -FI_EAVAIL) {
+        const auto error = queue->poll();
+        REQUIRE(error);
+        REQUIRE(error->error == loom::errc::canceled);
+        REQUIRE(error->context.get() == &provider.contexts[0]);
+        REQUIRE(provider.error_reads == 1);
+    }
+    provider.status = 0;
+    const auto completion = queue->poll();
+    REQUIRE(completion);
+    provider.check(*completion, 0);
+}
+
+TEST_CASE("completion progress rejects an empty queue", "[completion_queue][progress]") {
+    const loom::completion_queue queue;
+    const auto result = queue.progress();
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == loom::errc::invalid_argument);
 }
 
 TEST_CASE("batch polling drains errors and resumes completions", "[completion_queue]") {

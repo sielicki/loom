@@ -192,7 +192,9 @@ public:
     /// Minimum capacity requested at creation; zero if unknown or provider-selected.
     [[nodiscard]] auto capacity() const noexcept -> std::size_t;
 
-    [[nodiscard]] auto pending() const noexcept -> std::size_t;
+    /// Drive native progress without consuming completions. Libfabric provides
+    /// no portable queue-depth query. FI_EAVAIL leaves an error queued for a read.
+    [[nodiscard]] auto progress() const noexcept -> void_result;
 
     auto ack(const completion_event& event) -> void_result;
 

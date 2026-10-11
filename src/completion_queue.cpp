@@ -264,19 +264,16 @@ auto completion_queue::capacity() const noexcept -> std::size_t {
     return impl_->capacity;
 }
 
-auto completion_queue::pending() const noexcept -> std::size_t {
+auto completion_queue::progress() const noexcept -> void_result {
     if (!impl_ || !impl_->cq) {
-        return 0;
+        return make_error_result<void>(errc::invalid_argument);
     }
 
-    ::fi_cq_msg_entry entry{};
-    ssize_t ret = ::fi_cq_read(impl_->cq, &entry, 0);
-
-    if (ret < 0) {
-        return 0;
+    const auto status = ::fi_cq_read(impl_->cq, nullptr, 0);
+    if (status < 0 && status != -FI_EAGAIN) {
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
     }
-
-    return static_cast<std::size_t>(ret);
+    return make_success();
 }
 
 auto completion_queue::ack(const completion_event&) -> void_result {
