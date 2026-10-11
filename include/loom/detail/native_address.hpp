@@ -9,20 +9,21 @@
 
 #include "loom/core/address.hpp"
 #include "loom/core/result.hpp"
+#include "loom/detail/native_ib_address.hpp"
 
 namespace loom::detail {
 
-using native_address = std::variant<sockaddr_in, sockaddr_in6>;
+using native_address = std::variant<sockaddr_in, sockaddr_in6, native_ib_address>;
 
 // These values own the native objects until the provider call returns.
 [[nodiscard]] inline auto to_native_address(const address& addr, address_format format)
     -> result<native_address> {
     const auto actual = get_address_format(addr);
-    const bool socket_format =
-        format == address_format::sockaddr || format == address_format::sockaddr_ip;
     const bool ip_format = actual == address_format::inet || actual == address_format::inet6;
-    if (format != address_format::unspecified && format != actual &&
-        !(socket_format && ip_format)) {
+    const bool socket_format =
+        (format == address_format::sockaddr && (ip_format || actual == address_format::ib)) ||
+        (format == address_format::sockaddr_ip && ip_format);
+    if (format != address_format::unspecified && format != actual && !socket_format) {
         return make_error_result<native_address>(errc::invalid_argument);
     }
     if (const auto* ip = std::get_if<ipv4_address>(&addr)) {
@@ -50,7 +51,9 @@ using native_address = std::variant<sockaddr_in, sockaddr_in6>;
 #endif
         return native;
     }
-    // A GID/QPN/LID or a MAC alone does not describe a sockaddr_ib or EFA address.
+    if (const auto* ib = std::get_if<ib_socket_address>(&addr))
+        return to_native_ib_address(*ib);
+    // A GID/QPN/LID or a MAC alone does not describe a native socket address.
     return make_error_result<native_address>(errc::not_supported);
 }
 

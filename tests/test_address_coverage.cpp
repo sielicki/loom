@@ -127,37 +127,14 @@ int main() {
         }
     }
 
-    // Test address_from_raw ib
+    // A GID alone is not a native InfiniBand socket address.
     {
-        std::array<std::uint8_t, 16> raw_gid = {0xFE,
-                                                0x80,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x00,
-                                                0x01};
-
-        auto result =
-            loom::address_from_raw(raw_gid.data(), raw_gid.size(), loom::address_format::ib);
-        if (!std::holds_alternative<loom::ib_address>(result)) {
-            std::cerr << "FAIL: ib should parse to ib_address\n";
+        std::array<std::uint8_t, 16> gid{};
+        const auto result =
+            loom::address_from_raw(gid.data(), gid.size(), loom::address_format::ib);
+        if (!std::holds_alternative<loom::unspecified_address>(result)) {
+            std::cerr << "FAIL: ib should reject a bare GID\n";
             ++failed;
-        } else {
-            const auto& ib = std::get<loom::ib_address>(result);
-            auto gid = ib.gid();
-            if (gid[0] != 0xFE || gid[1] != 0x80) {
-                std::cerr << "FAIL: ib gid mismatch\n";
-                ++failed;
-            }
         }
     }
 

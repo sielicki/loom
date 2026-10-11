@@ -150,6 +150,17 @@ native copy. Native duplication failures return `errc::other`, since
 releasing the native copy. The pinned libfabric also fixes failure cleanup
 that otherwise closes the source NIC when duplication fails.
 
+### Native socket addresses
+
+`FI_SOCKADDR_IB` addresses decode to `ib_socket_address`, an alternative in
+`loom::address`. It preserves the GID, partition key, flow information,
+service ID and mask, and scope ID. Scalar fields use host byte order; GID
+bytes use network order. Connection setup and AV insertion encode the full
+native socket address, including through `FI_SOCKADDR`. `FI_SOCKADDR_IP`
+accepts only IPv4 and IPv6 addresses. Exhaustive address visitors must handle
+the new alternative. The existing GID/QPN/LID `ib_address` remains a separate
+identifier type and cannot be submitted as a socket address.
+
 ### Tagged message reservations
 
 `msg::tagged_claim` keeps one native context stable from a matched probe

@@ -9,6 +9,10 @@
 #include <cstring>
 #include <vector>
 
+#if __has_include(<infiniband/ib.h>)
+#    include <infiniband/ib.h>
+#endif
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -40,6 +44,14 @@ struct provider {
     };
     fi_ops_cm cm{
         .size = sizeof(fi_ops_cm),
+        .getname =
+            [](fid* handle, void* addr, std::size_t* length) {
+                return static_cast<provider*>(handle->context)->copy_name(addr, length);
+            },
+        .getpeer =
+            [](fid_ep* ep, void* addr, std::size_t* length) {
+                return static_cast<provider*>(ep->fid.context)->copy_name(addr, length);
+            },
         .connect =
             [](fid_ep* ep, const void* addr, const void*, std::size_t) {
                 auto& self = *static_cast<provider*>(ep->fid.context);
@@ -123,8 +135,190 @@ struct provider {
         const auto* bytes = static_cast<const std::byte*>(address);
         received.assign(bytes, bytes + count * address_size);
     }
+    auto copy_name(void* addr, std::size_t* length) const -> int {
+        const auto capacity = *length;
+        *length = stored_address.size();
+        if (capacity < *length)
+            return -FI_ETOOSMALL;
+        std::memcpy(addr, stored_address.data(), *length);
+        return 0;
+    }
 };
+
+constexpr loom::ib_socket_address ib_socket{
+    .gid = {0xa0,
+            0xa1,
+            0xa2,
+            0xa3,
+            0xa4,
+            0xa5,
+            0xa6,
+            0xa7,
+            0xa8,
+            0xa9,
+            0xaa,
+            0xab,
+            0xac,
+            0xad,
+            0xae,
+            0xaf},
+    .partition_key = 0x8123,
+    .flow_info = 0x12345678,
+    .service_id = 0x1122334455667788,
+    .service_id_mask = 0xffff0000abcd1234,
+    .scope_id = 0x0123456789abcdef,
+};
+
+auto ib_socket_bytes(bool zero = false) -> std::array<std::uint8_t, 48> {
+    // sockaddr_ib ABI: family and scope are native-endian; all other scalars
+    // are network-endian. Distinct field bytes catch offset and width errors.
+    std::array<std::uint8_t, 48> bytes{
+        0,    0,    0x81, 0x23, 0x12, 0x34, 0x56, 0x78, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5,
+        0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf, 0x11, 0x22, 0x33, 0x44,
+        0x55, 0x66, 0x77, 0x88, 0xff, 0xff, 0,    0,    0xab, 0xcd, 0x12, 0x34,
+    };
+    if (zero)
+        bytes.fill(0);
+    const std::uint16_t family = 27;  // AF_IB, also used by libfabric's portable layout.
+    std::memcpy(bytes.data(), &family, sizeof(family));
+    const auto scope = zero ? std::uint64_t{} : ib_socket.scope_id;
+    std::memcpy(bytes.data() + 40, &scope, sizeof(scope));
+    return bytes;
+}
 }  // namespace
+
+TEST_CASE("InfiniBand socket decoding preserves every native field", "[address][ib]") {
+    const auto format = GENERATE(loom::address_format::ib, loom::address_format::sockaddr);
+    const auto zero = GENERATE(false, true);
+    const auto bytes = ib_socket_bytes(zero);
+    const loom::address expected{zero ? loom::ib_socket_address{} : ib_socket};
+    CHECK(loom::address_from_raw(bytes.data(), bytes.size(), format) == expected);
+    std::array<std::uint8_t, 49> unaligned{};
+    std::ranges::copy(bytes, unaligned.begin() + 1);
+    CHECK(loom::address_from_raw(unaligned.data() + 1, bytes.size(), format) == expected);
+    for (std::size_t length = 0; length < bytes.size(); ++length) {
+        CAPTURE(length);
+        CHECK(std::holds_alternative<loom::unspecified_address>(
+            loom::address_from_raw(bytes.data(), length, format)));
+    }
+    auto wrong_family = bytes;
+    const std::uint16_t family = AF_INET;
+    std::memcpy(wrong_family.data(), &family, sizeof(family));
+    CHECK(std::holds_alternative<loom::unspecified_address>(
+        loom::address_from_raw(wrong_family.data(), bytes.size(), loom::address_format::ib)));
+    CHECK(std::holds_alternative<loom::unspecified_address>(
+        loom::address_from_raw(bytes.data(), bytes.size(), loom::address_format::sockaddr_ip)));
+}
+
+TEST_CASE("InfiniBand sockets survive connection and address vector operations", "[address][ib]") {
+    enum class transport {
+        connect,
+        insert,
+        batch,
+        batch_with_context,
+        lookup,
+        local_name,
+        peer_name
+    };
+    const auto format = GENERATE(loom::address_format::ib, loom::address_format::sockaddr);
+    const auto via = GENERATE(transport::connect,
+                              transport::insert,
+                              transport::batch,
+                              transport::batch_with_context,
+                              transport::lookup,
+                              transport::local_name,
+                              transport::peer_name);
+    const auto zero = GENERATE(false, true);
+    const auto bytes = ib_socket_bytes(zero);
+    provider native;
+    native.address_size = bytes.size();
+    const loom::address addr{zero ? loom::ib_socket_address{} : ib_socket};
+    auto av = native.vector(format);
+    if (via == transport::lookup || via == transport::local_name || via == transport::peer_name) {
+        const auto storage = std::as_bytes(std::span{bytes});
+        native.stored_address.assign(storage.begin(), storage.end());
+        if (via == transport::lookup) {
+            REQUIRE(av.lookup(loom::av_handle{100}).value() == addr);
+        } else {
+            auto ep = native.endpoint(format);
+            const auto result =
+                via == transport::local_name ? ep.get_local_address() : ep.get_peer_address();
+            REQUIRE(result);
+            CHECK(*result == addr);
+        }
+        return;
+    }
+    if (via == transport::connect) {
+        auto ep = native.endpoint(format);
+        REQUIRE(ep.connect(addr));
+    } else if (via == transport::insert) {
+        REQUIRE(av.insert(addr));
+    } else {
+        const bool with_contexts = via == transport::batch_with_context;
+        const std::array addresses{addr, addr};
+        std::array<loom::av_handle, 2> handles{};
+        std::array<int, 2> tokens{};
+        std::array<void*, 2> contexts{&tokens[0], &tokens[1]};
+        const auto result = av.insert_batch(
+            addresses, handles, with_contexts ? std::span{contexts} : std::span<void*>{});
+        REQUIRE(result);
+        CHECK(*result == 2);
+        CHECK(handles[0].value == 100);
+        CHECK(handles[1].value == (with_contexts ? 100 : 101));
+        if (with_contexts)
+            CHECK(std::ranges::equal(native.contexts, contexts));
+    }
+    REQUIRE(native.received.size() % bytes.size() == 0);
+    for (std::size_t offset = 0; offset < native.received.size(); offset += bytes.size())
+        CHECK(std::memcmp(native.received.data() + offset, bytes.data(), bytes.size()) == 0);
+}
+
+TEST_CASE("IP-only address formats reject InfiniBand socket submissions", "[address][ib]") {
+    const auto format = GENERATE(
+        loom::address_format::inet, loom::address_format::inet6, loom::address_format::sockaddr_ip);
+    provider native;
+    auto ep = native.endpoint(format);
+    auto av = native.vector(format);
+    const loom::address addr{ib_socket};
+    const auto rejected = [](const auto& result) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == loom::errc::invalid_argument);
+    };
+    rejected(ep.connect(addr));
+    rejected(av.insert(addr));
+    const std::array addresses{addr};
+    std::array<loom::av_handle, 1> handles{};
+    rejected(av.insert_batch(addresses, handles));
+    CHECK(native.calls == 0);
+}
+
+#if __has_include(<infiniband/ib.h>)
+TEST_CASE("InfiniBand socket layout agrees with rdma-core", "[address][ib][native]") {
+    using native = loom::detail::native_ib_address;
+    static_assert(loom::detail::ib_socket_family == AF_IB);
+    static_assert(sizeof(native) == sizeof(sockaddr_ib));
+    static_assert(alignof(native) == alignof(sockaddr_ib));
+    static_assert(offsetof(native, family) == offsetof(sockaddr_ib, sib_family));
+    static_assert(offsetof(native, partition_key) == offsetof(sockaddr_ib, sib_pkey));
+    static_assert(offsetof(native, flow_info) == offsetof(sockaddr_ib, sib_flowinfo));
+    static_assert(offsetof(native, gid) == offsetof(sockaddr_ib, sib_addr));
+    static_assert(offsetof(native, service_id) == offsetof(sockaddr_ib, sib_sid));
+    static_assert(offsetof(native, service_id_mask) == offsetof(sockaddr_ib, sib_sid_mask));
+    static_assert(offsetof(native, scope_id) == offsetof(sockaddr_ib, sib_scope_id));
+    const auto bytes = ib_socket_bytes();
+    sockaddr_ib expected{};
+    expected.sib_family = AF_IB;
+    expected.sib_pkey = htobe16(ib_socket.partition_key);
+    expected.sib_flowinfo = htobe32(ib_socket.flow_info);
+    std::ranges::copy(ib_socket.gid, expected.sib_addr.sib_raw);
+    expected.sib_sid = htobe64(ib_socket.service_id);
+    expected.sib_sid_mask = htobe64(ib_socket.service_id_mask);
+    expected.sib_scope_id = ib_socket.scope_id;
+    CHECK(std::memcmp(&expected, bytes.data(), bytes.size()) == 0);
+    CHECK(loom::address_from_raw(&expected, sizeof(expected), loom::address_format::ib) ==
+          loom::address{ib_socket});
+}
+#endif
 
 TEST_CASE("address lookup retries provider-sized buffers", "[address]") {
     provider native;
@@ -306,8 +500,10 @@ TEST_CASE("generic socket batches reject mixed address strides before submission
     const auto format = GENERATE(loom::address_format::sockaddr, loom::address_format::sockaddr_ip);
     const bool reverse = GENERATE(false, true);
     const bool with_contexts = GENERATE(false, true);
+    const bool infiniband = GENERATE(false, true);
     std::array<loom::address, 2> addresses{loom::ipv4_address{0xC0000201U, 4321},
-                                           loom::ipv6_address{}};
+                                           infiniband ? loom::address{ib_socket}
+                                                      : loom::address{loom::ipv6_address{}}};
     if (reverse) {
         std::swap(addresses[0], addresses[1]);
     }

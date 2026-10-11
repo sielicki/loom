@@ -522,6 +522,28 @@ struct std::formatter<loom::ib_address> {
     }
 };
 
+template <>
+struct std::formatter<loom::ib_socket_address> {
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(const loom::ib_socket_address& addr, FormatContext& ctx) const {
+        auto out = std::format_to(ctx.out(), "ib[gid=");
+        for (std::size_t i = 0; i < addr.gid.size(); ++i) {
+            if (i != 0)
+                *out++ = ':';
+            out = std::format_to(out, "{:02x}", addr.gid[i]);
+        }
+        return std::format_to(out,
+                              ",pkey={:04x},flow={:08x},sid={:016x},mask={:016x},scope={}]",
+                              addr.partition_key,
+                              addr.flow_info,
+                              addr.service_id,
+                              addr.service_id_mask,
+                              addr.scope_id);
+    }
+};
+
 /**
  * @struct formatter<loom::ethernet_address>
  * @brief Formatter specialization for Ethernet MAC addresses.

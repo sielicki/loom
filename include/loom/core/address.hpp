@@ -310,7 +310,7 @@ inline constexpr std::size_t address_size_v<ipv6_address> = sizeof(ipv6_address)
 
 /**
  * @class ib_address
- * @brief Represents an InfiniBand network address.
+ * @brief InfiniBand GID/QPN/LID identifiers, not a native socket address.
  */
 class ib_address {
 public:
@@ -389,6 +389,29 @@ inline constexpr bool is_rdma_capable_v<ib_address> = true;
  */
 template <>
 inline constexpr std::size_t address_size_v<ib_address> = sizeof(ib_address);
+}  // namespace address_traits
+
+/// InfiniBand socket address for FI_SOCKADDR_IB. Scalar fields use host byte
+/// order; GID bytes retain network order. This is not a native or wire layout.
+struct ib_socket_address {
+    std::array<std::uint8_t, 16> gid{};
+    std::uint16_t partition_key{};
+    std::uint32_t flow_info{};
+    std::uint64_t service_id{};
+    std::uint64_t service_id_mask{};
+    std::uint64_t scope_id{};
+
+    constexpr auto operator<=>(const ib_socket_address&) const noexcept = default;
+};
+
+static_assert(trivially_serializable<ib_socket_address>);
+static_assert(address_type<ib_socket_address>);
+
+namespace address_traits {
+template <>
+inline constexpr bool is_rdma_capable_v<ib_socket_address> = true;
+template <>
+inline constexpr std::size_t address_size_v<ib_socket_address> = sizeof(ib_socket_address);
 }  // namespace address_traits
 
 /**
@@ -510,8 +533,12 @@ static_assert(address_type<unspecified_address>);
  * @typedef address
  * @brief Variant type holding any supported address type.
  */
-using address =
-    std::variant<unspecified_address, ipv4_address, ipv6_address, ib_address, ethernet_address>;
+using address = std::variant<unspecified_address,
+                             ipv4_address,
+                             ipv6_address,
+                             ib_address,
+                             ethernet_address,
+                             ib_socket_address>;
 
 /**
  * @namespace address_ops
@@ -733,6 +760,7 @@ template <typename Visitor>
         overload{[](const ipv4_address&) { return address_format::inet; },
                  [](const ipv6_address&) { return address_format::inet6; },
                  [](const ib_address&) { return address_format::ib; },
+                 [](const ib_socket_address&) { return address_format::ib; },
                  [](const ethernet_address&) { return address_format::ethernet; },
                  [](const unspecified_address&) { return address_format::unspecified; }},
         addr);

@@ -414,34 +414,10 @@ TEST_CASE("address_from_raw inet6 parses loopback", "[address]") {
     REQUIRE(ipv6.is_loopback());
 }
 
-TEST_CASE("address_from_raw ib parses raw gid", "[address]") {
-    std::array<std::uint8_t, 16> raw_gid = {0xFE,
-                                            0x80,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x00,
-                                            0x01};
-
-    auto result = loom::address_from_raw(raw_gid.data(), raw_gid.size(), loom::address_format::ib);
-    REQUIRE(std::holds_alternative<loom::ib_address>(result));
-
-    const auto& ib = std::get<loom::ib_address>(result);
-    auto gid = ib.gid();
-    REQUIRE(gid[0] == 0xFE);
-    REQUIRE(gid[1] == 0x80);
-    REQUIRE(gid[15] == 0x01);
-    REQUIRE(ib.qpn() == 0U);
-    REQUIRE(ib.lid() == 0);
+TEST_CASE("address_from_raw ib rejects a bare GID", "[address]") {
+    std::array<std::uint8_t, 16> gid{};
+    const auto result = loom::address_from_raw(gid.data(), gid.size(), loom::address_format::ib);
+    REQUIRE(std::holds_alternative<loom::unspecified_address>(result));
 }
 
 TEST_CASE("address_from_raw ethernet parses raw mac", "[address]") {

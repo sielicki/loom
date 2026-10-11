@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 
 #include "loom/core/address.hpp"
+#include "loom/detail/native_ib_address.hpp"
 
 #ifdef LOOM_IMPLEMENTATION
 
@@ -22,6 +23,13 @@ auto address_from_raw(const void* data, std::size_t len, address_format format) 
         case address_format::sockaddr:
         case address_format::sockaddr_ip: {
             if (len < sizeof(::sockaddr)) {
+                return unspecified_address{};
+            }
+            std::uint16_t family{};
+            std::memcpy(&family, data, sizeof(family));
+            if (family == detail::ib_socket_family) {
+                if (format == address_format::sockaddr)
+                    return address_from_raw(data, len, address_format::ib);
                 return unspecified_address{};
             }
             ::sockaddr sa{};
@@ -70,13 +78,14 @@ auto address_from_raw(const void* data, std::size_t len, address_format format) 
         }
 
         case address_format::ib: {
-            if (len < ib_address::gid_size) {
+            if (len < sizeof(detail::native_ib_address)) {
                 return unspecified_address{};
             }
-            const auto* raw = static_cast<const std::uint8_t*>(data);
-            std::array<std::uint8_t, 16> gid{};
-            std::memcpy(gid.data(), raw, 16);
-            return ib_address{std::span<const std::uint8_t, 16>{gid}, 0, 0};
+            detail::native_ib_address native{};
+            std::memcpy(&native, data, sizeof(native));
+            if (native.family != detail::ib_socket_family)
+                return unspecified_address{};
+            return detail::from_native_ib_address(native);
         }
 
         case address_format::ethernet: {
