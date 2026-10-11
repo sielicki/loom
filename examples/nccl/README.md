@@ -119,9 +119,10 @@ timeout 120 ./result/bin/nccl-loom-cuda-workload \
 ```
 
 The driver must be reachable by the runtime loader. The workload registers
-CUDA allocations, transfers a 1 MiB subrange, and verifies every word on the
-GPU. Its verifier is already running before the receive is submitted. The
-host publishes a mapped-memory flag only after `iflush`, and waits for the
+CUDA allocations, transfers a 1 MiB subrange, and verifies every word and both
+guard regions on the GPU. Its verifier is already running before the receive
+is submitted. The shared CUDA setup and verifier also serve the NIXL workload.
+The host publishes a mapped-memory flag only after `iflush`, and waits for the
 GPU's result without another CUDA submission or synchronization API that
 could mask a missing flush. A timeout or unsupported configuration is a
 failure, not a passing skip. The verifier requires mapped host memory and

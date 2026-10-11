@@ -31,8 +31,8 @@ target_link_libraries(nccl-loom-cuda-workload PRIVATE PkgConfig::NCCL ${CMAKE_DL
 # PTX for the runner's GPU; this cubin is only a build check.
 find_program(CUDA_PTXAS ptxas REQUIRED)
 add_custom_command(OUTPUT visibility.cubin
-    COMMAND "${CUDA_PTXAS}" -arch=sm_70 "${CMAKE_CURRENT_SOURCE_DIR}/visibility.ptx" -o visibility.cubin
-    DEPENDS visibility.ptx VERBATIM)
+    COMMAND "${CUDA_PTXAS}" -arch=sm_70 "${CMAKE_CURRENT_SOURCE_DIR}/../hmem/visibility.ptx" -o visibility.cubin
+    DEPENDS ../hmem/visibility.ptx VERBATIM)
 add_custom_target(nccl-cuda-kernel-check ALL DEPENDS visibility.cubin)
 
 enable_testing()
@@ -46,4 +46,4 @@ endforeach()
 
 install(TARGETS nccl-net-loom nccl-loom-workload nccl-loom-cuda-workload LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 
-install(FILES visibility.ptx DESTINATION share/nccl-loom)
+install(FILES ../hmem/visibility.ptx DESTINATION share/nccl-loom)

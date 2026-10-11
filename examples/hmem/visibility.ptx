@@ -8,13 +8,17 @@
 .visible .entry verify_receive(
     .param .u64 data,
     .param .u32 count,
+    .param .u32 guard,
     .param .u64 control)
 {
     .reg .pred p;
-    .reg .b32 n, i, actual, expected, errors, ready;
+    .reg .b32 n, extent, g, i, index, actual, expected, errors, ready;
     .reg .b64 buffer, flags, address, offset;
     ld.param.u64 buffer, [data];
     ld.param.u32 n, [count];
+    ld.param.u32 g, [guard];
+    add.u32 extent, n, g;
+    add.u32 extent, extent, g;
     ld.param.u64 flags, [control];
     st.release.sys.global.u32 [flags], 1;
 wait_ready:
@@ -24,12 +28,21 @@ wait_ready:
     mov.u32 i, 0;
     mov.u32 errors, 0;
 check_word:
-    setp.ge.u32 p, i, n;
+    setp.ge.u32 p, i, extent;
     @p bra finished;
     mul.wide.u32 offset, i, 4;
     add.u64 address, buffer, offset;
     ld.global.u32 actual, [address];
-    xor.b32 expected, i, 0x5a5a5a5a;
+    setp.lt.u32 p, i, g;
+    @p bra guard_word;
+    sub.u32 index, i, g;
+    setp.ge.u32 p, index, n;
+    @p bra guard_word;
+    xor.b32 expected, index, 0x5a5a5a5a;
+    bra compare_word;
+guard_word:
+    mov.u32 expected, 0xa55aa55a;
+compare_word:
     setp.ne.u32 p, actual, expected;
     @p add.u32 errors, errors, 1;
     add.u32 i, i, 1;
