@@ -145,6 +145,23 @@
         "type": "github"
       }
     },
+    "nccl-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791494160,
+        "narHash": "sha256-acy6NyT5cnaR/qXDygVJA7hA2e1hGMybhlsXHtTu51Q=",
+        "owner": "NVIDIA",
+        "repo": "nccl",
+        "rev": "3e46c089f4ae4732722a419eb6096aead7e47a30",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NVIDIA",
+        "repo": "nccl",
+        "rev": "3e46c089f4ae4732722a419eb6096aead7e47a30",
+        "type": "github"
+      }
+    },
     "nixl-src": {
       "flake": false,
       "locked": {
@@ -251,6 +268,7 @@
         "monarch-rdma-src": "monarch-rdma-src",
         "monarch-src": "monarch-src",
         "mpi-standard-src": "mpi-standard-src",
+        "nccl-src": "nccl-src",
         "nixl-src": "nixl-src",
         "nixpkgs": "nixpkgs",
         "openmpi-oac-src": "openmpi-oac-src",
