@@ -27,7 +27,7 @@ auto inject_to(endpoint& ep,
                fabric_addr dest_addr,
                remote_memory remote) -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    if (!fid_ep) {
+    if (!fid_ep || !detail::contains_elements(remote, dt, count)) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, inject)) {

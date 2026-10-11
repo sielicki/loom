@@ -6,6 +6,7 @@
 
 #include <array>
 #include <chrono>
+#include <limits>
 #include <thread>
 
 #include <catch2/catch_template_test_macros.hpp>
@@ -26,6 +27,7 @@ struct atomic_peer_provider {
     void* output_desc{};
     void* context{};
     std::size_t count{};
+    std::uint64_t address{24};
     fi_op operation{};
     fi_datatype datatype{FI_UINT64};
 
@@ -45,7 +47,7 @@ struct atomic_peer_provider {
                        void* context) -> ssize_t {
         auto& self = *static_cast<atomic_peer_provider*>(ep->fid.context);
         ++self.calls;
-        REQUIRE(address == 24);
+        REQUIRE(address == self.address);
         REQUIRE(key == 0x123456789abcdef0ULL);
         REQUIRE(datatype == self.datatype);
         self.peer = peer;
@@ -217,6 +219,139 @@ struct atomic_peer_provider {
         FI_FENCE | FI_DELIVERY_COMPLETE)};
 };
 }  // namespace
+
+TEST_CASE("atomic submissions enforce remote element bounds", "[atomic][bounds]") {
+    using namespace loom;
+    struct element {
+        atomic::datatype type;
+        fi_datatype native;
+        std::size_t bytes;
+        bool valid{true};
+    };
+    constexpr std::array elements{
+        element{atomic::datatype::int8, FI_INT8, 1},
+        element{atomic::datatype::uint8, FI_UINT8, 1},
+        element{atomic::datatype::int16, FI_INT16, 2},
+        element{atomic::datatype::uint16, FI_UINT16, 2},
+        element{atomic::datatype::int32, FI_INT32, 4},
+        element{atomic::datatype::uint32, FI_UINT32, 4},
+        element{atomic::datatype::int64, FI_INT64, 8},
+        element{atomic::datatype::uint64, FI_UINT64, 8},
+        element{atomic::datatype::float32, FI_FLOAT, sizeof(float)},
+        element{atomic::datatype::double64, FI_DOUBLE, sizeof(double)},
+        element{atomic::datatype::float_complex, FI_FLOAT_COMPLEX, 2 * sizeof(float)},
+        element{atomic::datatype::double_complex, FI_DOUBLE_COMPLEX, 2 * sizeof(double)},
+        element{atomic::datatype::long_double, FI_LONG_DOUBLE, sizeof(long double)},
+        element{
+            atomic::datatype::long_double_complex, FI_LONG_DOUBLE_COMPLEX, 2 * sizeof(long double)},
+        element{atomic::datatype::int128, FI_INT128, 16},
+        element{atomic::datatype::uint128, FI_UINT128, 16},
+        element{static_cast<atomic::datatype>(-1), FI_INT8, 1, false},
+        element{static_cast<atomic::datatype>(999), FI_INT8, 1, false},
+    };
+    constexpr auto max_address = std::numeric_limits<std::uint64_t>::max();
+    constexpr auto max_count = std::numeric_limits<std::size_t>::max();
+    struct transfer {
+        std::uint64_t address;
+        std::size_t length;
+        std::size_t count;
+        bool valid;
+    };
+    for (const auto& element : elements) {
+        CAPTURE(element.native);
+        const auto size = element.bytes;
+        const std::array transfers{
+            transfer{24, 0, 0, true},
+            transfer{24, 0, 1, false},
+            transfer{24, size - 1, 1, false},
+            transfer{24, size, 1, true},
+            transfer{24, size, 2, false},
+            transfer{24, 2 * size, 2, true},
+            transfer{max_address - size, size, 1, true},
+            transfer{max_address - size + 1, size, 1, false},
+            transfer{max_address, 0, 0, true},
+            transfer{0, max_count, max_count / size, true},
+            transfer{24, max_count, max_count / size + (size > 1), false},
+        };
+        for (const auto& test : transfers) {
+            CAPTURE(test.address, test.length, test.count);
+            atomic_peer_provider provider;
+            provider.datatype = element.native;
+            provider.address = test.address;
+            provider.status = -FI_EAGAIN;  // Capture parameters without accessing any buffers.
+            std::array<std::byte, 64> input{}, comparison{}, output{};
+            const fabric_addr peer{19};
+            const remote_memory remote{test.address, 0x123456789abcdef0ULL, test.length};
+            const auto type = element.type;
+            const auto count = test.count;
+            const auto op = atomic::operation::sum;
+            const std::array results{
+                atomic::execute_to(
+                    provider.ep, op, type, input.data(), count, nullptr, peer, remote),
+                atomic::execute_to(provider.ep,
+                                   op,
+                                   type,
+                                   input.data(),
+                                   count,
+                                   nullptr,
+                                   peer,
+                                   remote,
+                                   op_flag::none),
+                atomic::fetch_to(provider.ep,
+                                 op,
+                                 type,
+                                 input.data(),
+                                 output.data(),
+                                 count,
+                                 nullptr,
+                                 nullptr,
+                                 peer,
+                                 remote),
+                atomic::fetch_to(provider.ep,
+                                 op,
+                                 type,
+                                 input.data(),
+                                 output.data(),
+                                 count,
+                                 nullptr,
+                                 nullptr,
+                                 peer,
+                                 remote,
+                                 op_flag::none),
+                atomic::compare_swap_to(provider.ep,
+                                        type,
+                                        comparison.data(),
+                                        input.data(),
+                                        output.data(),
+                                        count,
+                                        nullptr,
+                                        nullptr,
+                                        nullptr,
+                                        peer,
+                                        remote),
+                atomic::compare_swap_to(provider.ep,
+                                        type,
+                                        comparison.data(),
+                                        input.data(),
+                                        output.data(),
+                                        count,
+                                        nullptr,
+                                        nullptr,
+                                        nullptr,
+                                        peer,
+                                        remote,
+                                        op_flag::none),
+                atomic::inject_to(provider.ep, op, type, input.data(), count, peer, remote),
+            };
+            for (const auto& result : results) {
+                REQUIRE_FALSE(result);
+                CHECK(result.error() ==
+                      (test.valid && element.valid ? errc::again : errc::invalid_argument));
+            }
+            CHECK(provider.calls == (test.valid && element.valid ? results.size() : 0));
+        }
+    }
+}
 
 TEMPLATE_TEST_CASE("atomic peer submissions preserve registrations and deferred operands",
                    "[atomic][peer]",

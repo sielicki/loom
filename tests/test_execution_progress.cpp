@@ -1243,7 +1243,7 @@ TEST_CASE("borrowed atomic senders reject invalid registered ranges",
 TEST_CASE("borrowed atomic senders require valid endpoints and remote ranges",
           "[execution][progress][atomic]") {
     const auto compare_swap = GENERATE(false, true);
-    const auto invalid = GENERATE(0, 1, 2);
+    const auto invalid = GENERATE(0, 1, 2, 3);
     provider native;
     if (invalid == 0)
         native.ep = {};
@@ -1255,14 +1255,17 @@ TEST_CASE("borrowed atomic senders require valid endpoints and remote ranges",
         auto operation = loom::execution::connect(std::move(sender), receiver{&state});
         loom::execution::start(operation);
         REQUIRE(state.calls == 1);
-        REQUIRE(state.error == (invalid == 2
+        REQUIRE(state.error == (invalid >= 2
                                     ? loom::make_error_code(loom::errc::invalid_argument)
                                     : std::make_error_code(std::errc::bad_file_descriptor)));
         REQUIRE(native.submitted_flags == 0);
         REQUIRE(native.pending.empty());
     };
     const auto operations = loom::rma_async(native.ep);
-    const loom::remote_memory remote{0x1000, 1, invalid == 2 ? sizeof(result) - 1 : sizeof(result)};
+    const loom::remote_memory remote{
+        invalid == 3 ? std::numeric_limits<std::uint64_t>::max() - sizeof(result) + 1 : 0x1000,
+        1,
+        invalid == 2 ? sizeof(result) - 1 : sizeof(result)};
     if (compare_swap)
         run(operations.compare_swap_to(comparison,
                                        nullptr,
