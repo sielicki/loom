@@ -1,0 +1,26 @@
+--- a/opal/mca/smsc/base/smsc_base_frame.c
++++ b/opal/mca/smsc/base/smsc_base_frame.c
+@@ -112,12 +112,14 @@
+              * with the highest priority to store it as a pass-through
+              * component */
+             second = (mca_smsc_base_component_t *) opal_list_remove_first(selectable);
+             second_component = (mca_smsc_component_t *) second->smsc_component;
++            OBJ_RELEASE(second);
+             mca_smsc = second_component->enable();
+         }
+
+         selected_component = (mca_smsc_component_t *) first->smsc_component;
++        OBJ_RELEASE(first);
+         mca_smsc = selected_component->enable();
+
+         opal_output_verbose(MCA_BASE_VERBOSE_COMPONENT, opal_smsc_base_framework.framework_output,
+                             "mca_smsc_base_select: selected shared-memory single-copy component: %s",
+@@ -134,7 +136,7 @@
+                             "mca_smsc_base_select: no shared-memory single-copy component available for selection");
+     }
+
+-    OBJ_RELEASE(selectable);
++    OPAL_LIST_RELEASE(selectable);
+
+     return OPAL_SUCCESS;
+ }

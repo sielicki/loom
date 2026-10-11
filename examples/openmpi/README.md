@@ -40,8 +40,8 @@ claim.
 
 The bridge's configuration-rejection and failed-close retention checks pass
 with ASan, UBSan, and leak detection. Full MPI-process leak checking is still
-open: the workload completes, but shutdown reports allocations retained by
-PMIx and Open MPI, also reproduced with the unmodified OFI baseline. The
+open: the workload completes, but shutdown reports parameter strings retained
+by Open MPI, also reproduced with the baseline OFI transport. The
 upstream memory patcher conflicts with ASan's interception; diagnostic MPI
 runs used `--mca memory '^patcher'` while keeping sanitizer and leak checks
 enabled. The ordinary acceptance runs retain the default memory-hook policy.
@@ -87,6 +87,9 @@ The `openmpi-consumer` package uses Open MPI's existing OFI backend and serves
 as the comparison baseline. Select `openmpi-loom` to exercise Loom.
 Both packages apply the OFI string-ownership fixes: release copied parameter
 descriptions and provider labels, and let MCA copy the static default filter.
+They also release temporary shared-memory component-selection records after
+selection. A sanitizer regression checks empty selection, priority, and
+pass-through enable order with up to three candidate components.
 
 Open MPI is pinned to `873cd3a294c7194a5f88937de36d5bc0b1c18d88`.
 Its Open MPI Autoconf macros and MPI binding-generator metadata use the
