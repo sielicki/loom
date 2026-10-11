@@ -96,6 +96,7 @@ target_link_libraries(loom_test_implementation
     PUBLIC loom_sanitizers ${LOOM_LIBFABRIC_TARGET} Threads::Threads
 )
 add_executable(test_implementation
+    test_memory.cpp
     test_resource_allocations.cpp
     test_empty_resources.cpp
     test_atomic.cpp

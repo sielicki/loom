@@ -10,6 +10,21 @@
 
 using namespace loom;
 
+TEST_CASE("memory binding rejects empty endpoints before calling the provider", "[memory]") {
+    test::mock_domain provider;
+    provider.region_ops.bind = [](fid*, fid*, std::uint64_t) {
+        FAIL("invalid endpoint reached the memory provider");
+        return 0;
+    };
+    std::array<std::byte, 64> buffer{};
+    auto region = memory_region::register_memory(provider.dom, buffer, mr_access_flags::send);
+    REQUIRE(region);
+    endpoint empty;
+    const auto result = region->bind(empty);
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == errc::invalid_argument);
+}
+
 TEST_CASE("memory registration rejects empty domains", "[memory]") {
     domain empty;
     std::array<std::byte, 64> buffer{};

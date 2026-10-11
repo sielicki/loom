@@ -254,7 +254,7 @@ auto memory_region::length() const noexcept -> std::size_t {
 }
 
 auto memory_region::bind(endpoint& ep) -> result<void> {
-    if (!impl_ || !impl_->mr) {
+    if (!impl_ || !impl_->mr || !ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
