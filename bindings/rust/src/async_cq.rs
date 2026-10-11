@@ -342,7 +342,7 @@ impl CompletionRouter {
         self.available.notify_waiters();
     }
 
-    fn clear_after_close(&self) {
+    pub(crate) fn clear_after_close(&self) {
         let pending = std::mem::take(&mut *self.pending.borrow_mut());
         for (_, operation) in pending {
             let changed = {
@@ -714,13 +714,28 @@ impl AsyncEndpoint {
 
 impl Drop for AsyncEndpoint {
     fn drop(&mut self) {
-        if self.close().is_err() {
+        if let Err(error) = self.close() {
+            if matches!(error, Error::BoundRegistrations) {
+                // Retire managed contexts when the retained endpoint actually
+                // closes. Keep these queues even if inner_mut replaced native
+                // bindings; completing a request must still break ownership.
+                self.inner
+                    .state
+                    .deferred_queues
+                    .borrow_mut()
+                    .extend([self.tx_cq.inner.clone(), self.rx_cq.inner.clone()]);
+                return;
+            }
             // Preserve the managed scratch storage even if inner_mut was used
             // to change native CQ bindings before these operations started.
-            // Endpoint::drop separately retains the native resource graph if
-            // its final close attempt fails.
-            std::mem::forget(self.tx_cq.inner.router.clone());
-            std::mem::forget(self.rx_cq.inner.router.clone());
+            // EndpointState separately retains the native resource graph if
+            // its final close attempt fails. Empty routers need no retention
+            // when a live endpoint-bound registration merely defers close.
+            for queue in [&self.tx_cq, &self.rx_cq] {
+                if !queue.inner.router.pending.borrow().is_empty() {
+                    std::mem::forget(queue.inner.router.clone());
+                }
+            }
         }
     }
 }

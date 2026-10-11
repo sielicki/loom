@@ -215,7 +215,10 @@ private:
 /// Wrapper around memory_region that owns the resource
 class MemoryRegionHandle {
 public:
-    explicit MemoryRegionHandle(loom::memory_region mr) : mr_(std::move(mr)) {}
+    explicit MemoryRegionHandle(loom::memory_region mr, bool endpoint_bound = false)
+        : mr_(std::move(mr)), endpoint_bound_(endpoint_bound) {}
+
+    [[nodiscard]] auto endpoint_bound() const noexcept -> bool { return endpoint_bound_; }
 
     template <typename Self>
     [[nodiscard]] auto get(this Self&& self) noexcept -> decltype(auto) {
@@ -224,6 +227,7 @@ public:
 
 private:
     loom::memory_region mr_;
+    bool endpoint_bound_;
 };
 
 // ============================================================================
@@ -260,6 +264,13 @@ auto register_memory(const DomainHandle& dom,
                      std::uint64_t access) -> std::unique_ptr<MemoryRegionHandle>;
 
 auto register_memory_with_options(const DomainHandle& dom,
+                                  std::uintptr_t ptr,
+                                  std::size_t len,
+                                  const MemoryRegistrationAttributes& attributes)
+    -> std::unique_ptr<MemoryRegionHandle>;
+
+auto register_memory_for_endpoint(const DomainHandle& dom,
+                                  EndpointHandle& ep,
                                   std::uintptr_t ptr,
                                   std::size_t len,
                                   const MemoryRegistrationAttributes& attributes)

@@ -11,6 +11,9 @@ pub enum Error {
     /// Managed operations must retire before the endpoint can be replaced.
     #[error("Endpoint still has pending managed operations")]
     PendingOperations,
+    /// Endpoint-bound registrations must be released before native close.
+    #[error("Endpoint still has bound memory registrations")]
+    BoundRegistrations,
     /// Endpoint close failed; native resources remain owned and may be retried.
     #[error("Fabric endpoint close failed with code {code}")]
     Close {

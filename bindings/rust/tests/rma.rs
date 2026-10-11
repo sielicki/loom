@@ -33,16 +33,6 @@ impl Node {
         .unwrap();
         let fabric = Fabric::new(&info).unwrap();
         let domain = Domain::new(&fabric, &info).unwrap();
-        // The caller's buffer outlives this node and all its operations.
-        let region = unsafe {
-            MemoryRegion::register_with_options(
-                &domain,
-                buffer.as_mut_ptr(),
-                buffer.len(),
-                MemoryRegistration::new(ACCESS),
-            )
-        }
-        .unwrap();
         let queue = CompletionQueue::with_options(&domain, 128, false).unwrap();
         let mut addresses = AddressVector::new(&domain).unwrap();
         let mut endpoint = Endpoint::new(&domain, &info).unwrap();
@@ -51,6 +41,16 @@ impl Node {
             .unwrap();
         endpoint.bind_av(&addresses).unwrap();
         endpoint.enable().unwrap();
+        // The caller's buffer outlives this node and all its operations.
+        let region = unsafe {
+            MemoryRegion::register_for_endpoint(
+                &mut endpoint,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                MemoryRegistration::new(ACCESS),
+            )
+        }
+        .unwrap();
         // No special treatment for self versus a remote address-vector entry.
         unsafe { addresses.insert(&endpoint.name().unwrap()) }.unwrap();
         Self {

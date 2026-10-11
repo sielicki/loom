@@ -309,9 +309,56 @@ pub mod ffi {
     }
 
     #[cfg(feature = "test_fixtures")]
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum TestRegistrationFailure {
+        None,
+        Register,
+        Bind,
+        Enable,
+        Close,
+    }
+
+    #[cfg(feature = "test_fixtures")]
+    #[derive(Debug, Default)]
+    pub struct TestRegistrationState {
+        pub fabrics: u32,
+        pub domains: u32,
+        pub endpoints: u32,
+        pub queues: u32,
+        pub vectors: u32,
+        pub regions: u32,
+        pub registration_calls: u32,
+        pub bind_calls: u32,
+        pub enable_calls: u32,
+        pub endpoint_close_calls: u32,
+        pub read_calls: u32,
+        pub write_calls: u32,
+        pub last_context: usize,
+        pub bad_close_order: u32,
+        pub cuda: bool,
+        pub device: i32,
+        pub device_allocation: bool,
+    }
+
+    #[cfg(feature = "test_fixtures")]
     unsafe extern "C++" {
         include!("tests/completion_fixture.hpp");
         include!("tests/memory_fixture.hpp");
+        include!("tests/registration_fixture.hpp");
+        type RegistrationFixture;
+        fn test_registration_fixture(endpoint_bound: bool) -> UniquePtr<RegistrationFixture>;
+        fn test_registration_fabric(
+            fixture: Pin<&mut RegistrationFixture>,
+        ) -> UniquePtr<FabricHandle>;
+        fn test_registration_info(
+            fixture: &RegistrationFixture,
+        ) -> Result<UniquePtr<FabricInfoHandle>>;
+        fn test_registration_state(fixture: &RegistrationFixture) -> TestRegistrationState;
+        fn test_registration_fail(
+            fixture: Pin<&mut RegistrationFixture>,
+            failure: TestRegistrationFailure,
+        );
         fn test_memory_key(raw: bool, key: u64) -> Result<u64>;
         fn test_memory_export(raw: bool, key: u64) -> Result<RemoteMemory>;
 
@@ -400,6 +447,18 @@ pub mod ffi {
             len: usize,
             attributes: &MemoryRegistrationAttributes,
         ) -> Result<UniquePtr<MemoryRegionHandle>>;
+
+        /// Complete endpoint-bound registration before publishing the handle.
+        fn register_memory_for_endpoint(
+            dom: &DomainHandle,
+            ep: Pin<&mut EndpointHandle>,
+            ptr: usize,
+            len: usize,
+            attributes: &MemoryRegistrationAttributes,
+        ) -> Result<UniquePtr<MemoryRegionHandle>>;
+
+        /// Whether Rust must retain the endpoint's complete resource graph.
+        fn endpoint_bound(self: &MemoryRegionHandle) -> bool;
 
         // ====================================================================
         // Endpoint operations

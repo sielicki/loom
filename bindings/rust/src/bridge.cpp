@@ -247,10 +247,33 @@ auto create_address_vector(const DomainHandle& dom) -> std::unique_ptr<AddressVe
     return std::make_unique<AddressVectorHandle>(unwrap_or_throw(std::move(result)));
 }
 
+namespace {
+auto endpoint_registration(const DomainHandle& dom) noexcept -> bool {
+    return dom.get().get_memory_region_mode().has(loom::mr_mode_flags::endpoint);
+}
+
+void require_domain_registration(const DomainHandle& dom) {
+    if (endpoint_registration(dom))
+        throw std::invalid_argument("registration requires an endpoint");
+}
+
+auto registration_attributes(const MemoryRegistrationAttributes& attributes)
+    -> loom::memory_registration {
+    loom::memory_registration registration{
+        .access = loom::mr_access{attributes.access},
+        .allocation = native_value(attributes.allocation, hmem_allocation_values),
+    };
+    registration.device.iface = native_value(attributes.interface, hmem_interface_values);
+    registration.device.device_id = attributes.device;
+    return registration;
+}
+}  // namespace
+
 auto register_memory(const DomainHandle& dom,
                      std::uintptr_t ptr,
                      std::size_t len,
                      std::uint64_t access) -> std::unique_ptr<MemoryRegionHandle> {
+    require_domain_registration(dom);
     auto span = std::span{reinterpret_cast<std::byte*>(ptr), len};
     auto result = loom::memory_region::register_memory(dom.get(), span, loom::mr_access{access});
     return std::make_unique<MemoryRegionHandle>(unwrap_or_throw(std::move(result)));
@@ -261,15 +284,28 @@ auto register_memory_with_options(const DomainHandle& dom,
                                   std::size_t len,
                                   const MemoryRegistrationAttributes& attributes)
     -> std::unique_ptr<MemoryRegionHandle> {
-    loom::memory_registration registration{
-        .access = loom::mr_access{attributes.access},
-        .allocation = native_value(attributes.allocation, hmem_allocation_values),
-    };
-    registration.device.iface = native_value(attributes.interface, hmem_interface_values);
-    registration.device.device_id = attributes.device;
+    require_domain_registration(dom);
     auto result = loom::memory_region::register_memory(
-        dom.get(), reinterpret_cast<void*>(ptr), len, registration);
+        dom.get(), reinterpret_cast<void*>(ptr), len, registration_attributes(attributes));
     return std::make_unique<MemoryRegionHandle>(unwrap_or_throw(std::move(result)));
+}
+
+auto register_memory_for_endpoint(const DomainHandle& dom,
+                                  EndpointHandle& ep,
+                                  std::uintptr_t ptr,
+                                  std::size_t len,
+                                  const MemoryRegistrationAttributes& attributes)
+    -> std::unique_ptr<MemoryRegionHandle> {
+    if (!ep.get().belongs_to(dom.get()))
+        throw std::invalid_argument("endpoint does not belong to the registration domain");
+    auto region = unwrap_or_throw(loom::memory_region::register_memory(
+        dom.get(), reinterpret_cast<void*>(ptr), len, registration_attributes(attributes)));
+    const bool bound = endpoint_registration(dom);
+    if (bound) {
+        unwrap_void_or_throw(region.bind(ep.get()));
+        unwrap_void_or_throw(region.enable());
+    }
+    return std::make_unique<MemoryRegionHandle>(std::move(region), bound);
 }
 
 void endpoint_enable(EndpointHandle& ep) {

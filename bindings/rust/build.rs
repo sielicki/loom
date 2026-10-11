@@ -62,12 +62,15 @@ fn main() {
         build.include(&manifest_dir);
         build.file("tests/completion_fixture.cpp");
         build.file("tests/memory_fixture.cpp");
+        build.file("tests/registration_fixture.cpp");
     }
     println!("cargo:rerun-if-changed=tests/completion_fixture.hpp");
     println!("cargo:rerun-if-changed=tests/completion_fixture.cpp");
 
     println!("cargo:rerun-if-changed=tests/memory_fixture.hpp");
     println!("cargo:rerun-if-changed=tests/memory_fixture.cpp");
+    println!("cargo:rerun-if-changed=tests/registration_fixture.hpp");
+    println!("cargo:rerun-if-changed=tests/registration_fixture.cpp");
 
     // Compiler flags
     build.flag_if_supported("-Wno-unused-parameter");

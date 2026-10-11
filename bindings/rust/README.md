@@ -157,6 +157,21 @@ ordinary system memory uses `Unspecified`. Negative ordinals and device
 allocation flags on the system interface are rejected before registration.
 Provider errors never trigger a fallback to system memory.
 
+For domains requiring `MrMode::ENDPOINT`, use the unsafe
+`MemoryRegion::register_for_endpoint(&mut endpoint, ptr, len, attributes)`
+factory. It registers, binds, and enables the region before returning it.
+The endpoint-free factories reject this mode before native registration.
+The new factory also accepts ordinary domains, where no binding is needed.
+
+Endpoint-bound registration clones retain the endpoint, its bound queues and
+address vectors, and its domain. Dropping the endpoint wrapper defers native
+close until the last registration is released. Explicit close returns
+`Error::BoundRegistrations` while these registrations remain alive, including
+clones retained by accepted async operations. Progress those operations to
+retirement and release the registrations before retrying close. This ownership
+does not extend the caller's allocation lifetime. Use `AsyncEndpoint::inner_mut`
+to create registrations before starting managed operations.
+
 `MemoryRegion::key()` and `remote_memory()` now return `Result`. Check their
 results before exchanging metadata: raw-key registrations and unavailable keys
 cannot be exported as ordinary scalar descriptors. Raw-key mapping is available
@@ -165,8 +180,8 @@ through the C++ API; the Rust scalar interface rejects those registrations.
 Negotiate `Capabilities::HMEM` and satisfy the returned MR requirements
 before registering accelerator memory. Retain the allocation through all
 registration clones and accepted operations. Registration does not synchronize
-device producers, establish completion visibility, or enable endpoint-bound
-registrations. Those obligations remain with the consumer.
+device producers or establish completion visibility. Those obligations remain
+with the consumer.
 
 Consumers that require transfers without provider CUDA API calls can set
 `Endpoint::set_cuda_api_permitted(false)` before enabling the endpoint.
@@ -174,9 +189,9 @@ An unsupported or rejected option is an error and must prevent selecting
 that transfer profile. Application registration and visibility operations
 may still call CUDA APIs.
 
-Each operation checks that the local registration belongs to the endpoint's
-domain and covers the submitted range, and that the remote view is large
-enough. `RmaOptions` selects local, transmit, or delivery completion and
+Each operation checks the registration's domain and any endpoint binding,
+the local buffer bounds, and the remote view's length.
+`RmaOptions` selects local, transmit, or delivery completion and
 optional fencing; a CQ completion is always requested. Unsupported policies
 remain ordinary submission errors. Local completion permits local buffer
 reuse but does not establish remote delivery or GPU visibility.
@@ -191,9 +206,10 @@ reads prohibit local buffer access, and writes prohibit local mutation,
 until the accepted operation retires. Dropping an observer is not cancellation.
 
 The provider tests exercise host-memory scalar transfers on sockets and
-TCP/RxM and reject invalid device attributes. GPU hardware validation,
-endpoint-bound registration setup, DMA-BUF registration, owned allocation
-leases, immediate data, and vectored RMA remain additional Rust frontend work.
+TCP/RxM and reject invalid device attributes. Native-operation fixtures cover
+endpoint-bound registration, failure cleanup, and resource destruction order.
+GPU hardware validation, DMA-BUF registration, owned allocation leases,
+immediate data, and vectored RMA remain additional Rust frontend work.
 
 ### Submission errors and backpressure
 

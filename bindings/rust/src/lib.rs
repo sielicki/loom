@@ -58,6 +58,7 @@ pub use ffi::ffi::{RemoteMemory, RmaCompletion, RmaOptions, RmaTarget};
 pub use registration::{HmemAllocationKind, HmemDevice, MemoryRegistration};
 
 use cxx::UniquePtr;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 impl Default for RmaOptions {
@@ -577,10 +578,12 @@ impl AddressVector {
 pub struct MemoryRegion {
     inner: Rc<UniquePtr<ffi::ffi::MemoryRegionHandle>>,
     _domain: Domain,
+    _endpoint: Option<Rc<EndpointState>>,
 }
 
 impl MemoryRegion {
-    /// Register a memory region.
+    /// Register a memory region. Domains requiring endpoint binding must use
+    /// [`Self::register_for_endpoint`].
     ///
     /// # Safety
     ///
@@ -604,6 +607,7 @@ impl MemoryRegion {
         Ok(Self {
             inner: Rc::new(inner),
             _domain: domain.clone(),
+            _endpoint: None,
         })
     }
 
@@ -611,7 +615,8 @@ impl MemoryRegion {
     /// Device memory requires a domain negotiated with [`Capabilities::HMEM`].
     /// Provider registration failures are returned without falling back to host
     /// registration. This call neither owns the allocation nor establishes GPU
-    /// visibility, and it does not bind or enable endpoint-bound registrations.
+    /// visibility. Domains requiring endpoint binding must use
+    /// [`Self::register_for_endpoint`].
     ///
     /// # Safety
     ///
@@ -635,6 +640,42 @@ impl MemoryRegion {
         Ok(Self {
             inner: Rc::new(inner),
             _domain: domain.clone(),
+            _endpoint: None,
+        })
+    }
+
+    /// Register memory and satisfy the domain's endpoint-binding requirement.
+    /// When required, binding and enable complete before this call returns.
+    /// Such registrations retain the endpoint and its dependencies, reject use
+    /// through another endpoint, and prevent explicit endpoint close until the
+    /// last registration clone is released. Ordinary domains need no binding
+    /// and retain only the domain.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must name `len` live bytes accurately described by `attributes`.
+    /// The caller owns the allocation and must keep it alive through every
+    /// registration clone and accepted operation. Device synchronization and
+    /// completion visibility remain the caller's responsibility.
+    pub unsafe fn register_for_endpoint(
+        endpoint: &mut Endpoint,
+        ptr: *mut u8,
+        len: usize,
+        attributes: MemoryRegistration,
+    ) -> Result<Self> {
+        let attributes = attributes.bridge()?;
+        let inner = ffi::ffi::register_memory_for_endpoint(
+            &endpoint.state.domain.inner,
+            endpoint.state.inner.borrow_mut().pin_mut(),
+            ptr as usize,
+            len,
+            &attributes,
+        )?;
+        let owner = inner.endpoint_bound().then(|| endpoint.state.clone());
+        Ok(Self {
+            inner: Rc::new(inner),
+            _domain: endpoint.state.domain.clone(),
+            _endpoint: owner,
         })
     }
 
@@ -698,10 +739,18 @@ impl OperationContext {
 /// }
 /// ```
 pub struct Endpoint {
-    inner: UniquePtr<ffi::ffi::EndpointHandle>,
-    _domain: Domain,
-    bound_queues: Vec<CompletionQueue>,
-    bound_vectors: Vec<AddressVector>,
+    state: Rc<EndpointState>,
+}
+
+// Retained by endpoint-bound registrations. Close the native endpoint before
+// releasing any of its dependencies, including contexts owned by bound queues.
+struct EndpointState {
+    inner: RefCell<UniquePtr<ffi::ffi::EndpointHandle>>,
+    domain: Domain,
+    bound_queues: RefCell<Vec<CompletionQueue>>,
+    bound_vectors: RefCell<Vec<AddressVector>>,
+    #[cfg(feature = "tokio")]
+    deferred_queues: RefCell<Vec<CompletionQueue>>,
 }
 
 impl Endpoint {
@@ -713,7 +762,16 @@ impl Endpoint {
     /// * `info` - Fabric information.
     pub fn new(domain: &Domain, info: &FabricInfo) -> Result<Self> {
         let inner = ffi::ffi::create_endpoint(&domain.inner, &info.inner)?;
-        Ok(Self { inner, _domain: domain.clone(), bound_queues: Vec::new(), bound_vectors: Vec::new() })
+        Ok(Self {
+            state: Rc::new(EndpointState {
+                inner: RefCell::new(inner),
+                domain: domain.clone(),
+                bound_queues: RefCell::new(Vec::new()),
+                bound_vectors: RefCell::new(Vec::new()),
+                #[cfg(feature = "tokio")]
+                deferred_queues: RefCell::new(Vec::new()),
+            }),
+        })
     }
 
     /// Permit or forbid the provider from calling CUDA APIs during transfers.
@@ -723,7 +781,7 @@ impl Endpoint {
     /// the application from using CUDA for registration or visibility.
     pub fn set_cuda_api_permitted(&mut self, permitted: bool) -> Result<()> {
         Ok(ffi::ffi::endpoint_set_cuda_api_permitted(
-            self.inner.pin_mut(),
+            self.state.inner.borrow_mut().pin_mut(),
             permitted,
         )?)
     }
@@ -733,15 +791,23 @@ impl Endpoint {
     /// The endpoint must be bound to completion queues and address vectors
     /// before being enabled.
     pub fn enable(&mut self) -> Result<()> {
-        Ok(ffi::ffi::endpoint_enable(self.inner.pin_mut())?)
+        Ok(ffi::ffi::endpoint_enable(
+            self.state.inner.borrow_mut().pin_mut(),
+        )?)
     }
 
     /// Close the native endpoint. Success discards outstanding operations and
     /// can discard CQ entries without reporting their completions. Failure
     /// retains the endpoint and its bound resources so close can be retried.
     /// A closed endpoint rejects further operations; repeated close succeeds.
+    /// Bound registrations, including those retained by accepted operations,
+    /// must retire and be released first. Dropping the wrapper defers native
+    /// close while these registrations retain its resource graph.
     pub fn close(&mut self) -> Result<()> {
-        match ffi::ffi::endpoint_close(self.inner.pin_mut()) {
+        if Rc::strong_count(&self.state) != 1 {
+            return Err(Error::BoundRegistrations);
+        }
+        match ffi::ffi::endpoint_close(self.state.inner.borrow_mut().pin_mut()) {
             0 => Ok(()),
             code => Err(Error::Close { code }),
         }
@@ -754,15 +820,19 @@ impl Endpoint {
     /// * `cq` - The completion queue to bind.
     /// * `flags` - Bind flags (transmit, recv, or both).
     pub fn bind_cq(&mut self, cq: &CompletionQueue, flags: CqBindFlags) -> Result<()> {
-        ffi::ffi::endpoint_bind_cq(self.inner.pin_mut(), &cq.inner, flags.bits())?;
-        self.bound_queues.push(cq.clone());
+        ffi::ffi::endpoint_bind_cq(
+            self.state.inner.borrow_mut().pin_mut(),
+            &cq.inner,
+            flags.bits(),
+        )?;
+        self.state.bound_queues.borrow_mut().push(cq.clone());
         Ok(())
     }
 
     /// Bind an address vector to the endpoint.
     pub fn bind_av(&mut self, av: &AddressVector) -> Result<()> {
-        ffi::ffi::endpoint_bind_av(self.inner.pin_mut(), &av.inner)?;
-        self.bound_vectors.push(av.clone());
+        ffi::ffi::endpoint_bind_av(self.state.inner.borrow_mut().pin_mut(), &av.inner)?;
+        self.state.bound_vectors.borrow_mut().push(av.clone());
         Ok(())
     }
 
@@ -781,7 +851,7 @@ impl Endpoint {
     /// A successful return only means the operation was submitted.
     pub unsafe fn send(&mut self, data: &[u8], context: usize) -> Result<()> {
         error::from_submission_status(ffi::ffi::endpoint_send(
-            self.inner.pin_mut(),
+            self.state.inner.borrow_mut().pin_mut(),
             data,
             context,
         )?)
@@ -801,7 +871,11 @@ impl Endpoint {
     /// not be accessed, and send buffers must not be mutated, before then.
     /// A successful return only means the operation was submitted.
     pub unsafe fn recv(&mut self, buf: &mut [u8], context: usize) -> Result<()> {
-        error::from_submission_status(ffi::ffi::endpoint_recv(self.inner.pin_mut(), buf, context)?)
+        error::from_submission_status(ffi::ffi::endpoint_recv(
+            self.state.inner.borrow_mut().pin_mut(),
+            buf,
+            context,
+        )?)
     }
 
     /// Post a tagged send operation.
@@ -820,7 +894,7 @@ impl Endpoint {
     /// A successful return only means the operation was submitted.
     pub unsafe fn tagged_send(&mut self, data: &[u8], tag: u64, context: usize) -> Result<()> {
         error::from_submission_status(ffi::ffi::endpoint_tagged_send(
-            self.inner.pin_mut(),
+            self.state.inner.borrow_mut().pin_mut(),
             data,
             tag,
             context,
@@ -850,7 +924,7 @@ impl Endpoint {
         context: usize,
     ) -> Result<()> {
         error::from_submission_status(ffi::ffi::endpoint_tagged_recv(
-            self.inner.pin_mut(),
+            self.state.inner.borrow_mut().pin_mut(),
             buf,
             tag,
             ignore,
@@ -863,7 +937,10 @@ impl Endpoint {
     /// This is more efficient for small messages but doesn't provide
     /// completion notification.
     pub fn inject(&mut self, data: &[u8]) -> Result<()> {
-        error::from_submission_status(ffi::ffi::endpoint_inject(self.inner.pin_mut(), data)?)
+        error::from_submission_status(ffi::ffi::endpoint_inject(
+            self.state.inner.borrow_mut().pin_mut(),
+            data,
+        )?)
     }
 
     /// Submit a registered RMA read to an explicit peer, requesting a CQ completion.
@@ -924,7 +1001,7 @@ impl Endpoint {
         self.check_registration(registration)?;
         error::from_submission_status(unsafe {
             ffi::ffi::endpoint_read_raw(
-                self.inner.pin_mut(),
+                self.state.inner.borrow_mut().pin_mut(),
                 buffer,
                 len,
                 &registration.inner,
@@ -992,7 +1069,7 @@ impl Endpoint {
         self.check_registration(registration)?;
         error::from_submission_status(unsafe {
             ffi::ffi::endpoint_write_raw(
-                self.inner.pin_mut(),
+                self.state.inner.borrow_mut().pin_mut(),
                 buffer,
                 len,
                 &registration.inner,
@@ -1004,9 +1081,18 @@ impl Endpoint {
     }
 
     fn check_registration(&self, registration: &MemoryRegion) -> Result<()> {
-        if !Rc::ptr_eq(&self._domain.inner, &registration._domain.inner) {
+        if !Rc::ptr_eq(&self.state.domain.inner, &registration._domain.inner) {
             return Err(Error::InvalidArgument(
                 "registration belongs to another domain".into(),
+            ));
+        }
+        if registration
+            ._endpoint
+            .as_ref()
+            .is_some_and(|owner| !Rc::ptr_eq(owner, &self.state))
+        {
+            return Err(Error::InvalidArgument(
+                "registration is bound to another endpoint".into(),
             ));
         }
         Ok(())
@@ -1014,21 +1100,28 @@ impl Endpoint {
 
     /// Get the local address/name of the endpoint.
     pub fn name(&self) -> Result<Vec<u8>> {
-        Ok(ffi::ffi::endpoint_get_name(&self.inner)?)
+        Ok(ffi::ffi::endpoint_get_name(&self.state.inner.borrow())?)
     }
 }
 
-impl Drop for Endpoint {
+impl Drop for EndpointState {
     fn drop(&mut self) {
-        if self.close().is_err() {
+        if ffi::ffi::endpoint_close(self.inner.get_mut().pin_mut()) != 0 {
             // Native work may still reference the endpoint's entire resource
             // graph, including managed contexts retained by bound queues.
             // Drop cannot report the failure or prove quiescence. Retain the
             // graph rather than release storage the provider can still use.
-            std::mem::forget(std::mem::replace(&mut self.inner, UniquePtr::null()));
-            std::mem::forget(self._domain.clone());
-            std::mem::forget(std::mem::take(&mut self.bound_queues));
-            std::mem::forget(std::mem::take(&mut self.bound_vectors));
+            std::mem::forget(std::mem::replace(self.inner.get_mut(), UniquePtr::null()));
+            std::mem::forget(self.domain.clone());
+            std::mem::forget(std::mem::take(self.bound_queues.get_mut()));
+            std::mem::forget(std::mem::take(self.bound_vectors.get_mut()));
+            #[cfg(feature = "tokio")]
+            std::mem::forget(std::mem::take(self.deferred_queues.get_mut()));
+        } else {
+            #[cfg(feature = "tokio")]
+            for queue in self.deferred_queues.get_mut() {
+                queue.router.clear_after_close();
+            }
         }
     }
 }
@@ -1243,3 +1336,7 @@ mod completion_metadata;
 #[cfg(all(test, feature = "test_fixtures"))]
 #[path = "../tests/fixtures/raw_memory.rs"]
 mod raw_memory;
+
+#[cfg(all(test, feature = "test_fixtures"))]
+#[path = "../tests/fixtures/endpoint_memory.rs"]
+mod endpoint_memory;
