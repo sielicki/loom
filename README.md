@@ -873,11 +873,18 @@ storage. Buffers and registration remain borrowed until completion.
 Core `rma::readv_to` and `rma::writev_to` also accept a separate descriptor
 for each IOV and preserve multiple remote segments.
 
-The Asio and sender RMA paths explicitly request a CQ completion, including
-when the endpoint uses selective completion. They extend the endpoint's
-creation flags, preserving configured fence and delivery requirements.
+The Asio and sender messaging and RMA paths explicitly request a CQ
+completion, including when the endpoint uses selective completion. They
+extend the endpoint's creation flags for the operation's direction,
+preserving configured fence and delivery requirements.
 Configure those defaults before creating the endpoint or scalable context;
 subsequent raw `FI_SETOPSFLAG` changes are not tracked by Loom.
+
+Core `msg::sendmsg`, `msg::recvmsg`, `msg::tagged_sendmsg`, and
+`msg::tagged_recvmsg` also accept `<operation_defaults::inherit>` to extend
+the corresponding transmit or receive defaults. Their ordinary overloads
+use explicit replacement flags. Their message objects carry peers, IOVs,
+registrations, contexts, and applicable tag and immediate-data fields.
 
 Core `read_to`, `write_to`, `readv_to`, and `writev_to` accept an `op_flags`
 argument before the context. These overloads replace the defaults unless

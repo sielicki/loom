@@ -247,8 +247,10 @@ public:
 
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
                 if (result) {
-                    result = state->endpoint.sendv(ctx->buffers().iov,
-                                                   context_ptr<void>{ctx->as_fi_context()});
+                    const msg::send_message<> message{.iov = ctx->buffers().iov,
+                                                      .context = ctx->as_fi_context()};
+                    result = msg::sendmsg<operation_defaults::inherit>(
+                        state->endpoint, message, msg::send_flag::completion);
                 }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
@@ -280,8 +282,10 @@ public:
 
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::receive);
                 if (result) {
-                    result = state->endpoint.recvv(ctx->buffers().iov,
-                                                   context_ptr<void>{ctx->as_fi_context()});
+                    const msg::recv_message<> message{.iov = ctx->buffers().iov,
+                                                      .context = ctx->as_fi_context()};
+                    result = msg::recvmsg<operation_defaults::inherit>(
+                        state->endpoint, message, msg::recv_flag::completion);
                 }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
@@ -314,12 +318,10 @@ public:
 
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::transmit);
                 if (result) {
-                    result = loom::tagged_sendv(state->endpoint,
-                                                ctx->buffers().iov,
-                                                ctx->buffers().descriptors,
-                                                fabric_addrs::unspecified,
-                                                tag,
-                                                ctx->as_fi_context());
+                    const msg::tagged_send_message<> message{
+                        .iov = ctx->buffers().iov, .tag = tag, .context = ctx->as_fi_context()};
+                    result = msg::tagged_sendmsg<operation_defaults::inherit>(
+                        state->endpoint, message, msg::send_flag::completion);
                 }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
@@ -353,13 +355,12 @@ public:
 
                 auto result = ctx->bind_completion(state->endpoint, completion_direction::receive);
                 if (result) {
-                    result = loom::tagged_recvv(state->endpoint,
-                                                ctx->buffers().iov,
-                                                ctx->buffers().descriptors,
-                                                fabric_addrs::unspecified,
-                                                tag,
-                                                ignore,
-                                                ctx->as_fi_context());
+                    const msg::tagged_recv_message<> message{.iov = ctx->buffers().iov,
+                                                             .tag = tag,
+                                                             .ignore = ignore,
+                                                             .context = ctx->as_fi_context()};
+                    result = msg::tagged_recvmsg<operation_defaults::inherit>(
+                        state->endpoint, message, msg::recv_flag::completion);
                 }
                 finish_asio_submission(std::move(ctx), std::move(result));
             },

@@ -233,4 +233,18 @@ private:
     friend auto trigger::supports_trigger(const endpoint&) -> bool;
 };
 
+namespace detail {
+/// Preserve native bits when extending creation defaults for a message call.
+template <operation_defaults Defaults>
+[[nodiscard]] inline auto operation_flags(const endpoint& ep,
+                                          completion_direction direction,
+                                          std::uint64_t flags) noexcept -> std::uint64_t {
+    static_assert(Defaults == operation_defaults::replace ||
+                  Defaults == operation_defaults::inherit);
+    if constexpr (Defaults == operation_defaults::inherit)
+        flags |= ep.impl_operation_flags(direction);
+    return flags;
+}
+}  // namespace detail
+
 }  // namespace loom

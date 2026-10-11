@@ -28,13 +28,8 @@ namespace detail {
 template <operation_defaults Defaults>
 [[nodiscard]] inline auto operation_flags(const endpoint& ep, op_flags flags) noexcept
     -> std::uint64_t {
-    static_assert(Defaults == operation_defaults::replace ||
-                  Defaults == operation_defaults::inherit);
-    auto native = loom::detail::to_fi_op_flags(flags);
-    if constexpr (Defaults == operation_defaults::inherit) {
-        native |= ep.impl_operation_flags(completion_direction::transmit);
-    }
-    return native;
+    return loom::detail::operation_flags<Defaults>(
+        ep, completion_direction::transmit, loom::detail::to_fi_op_flags(flags));
 }
 }  // namespace detail
 

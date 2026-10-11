@@ -41,6 +41,17 @@ struct vector_provider {
         return capture(ep, msg->msg_iov, msg->iov_count, msg->context);
     }
 
+    static auto capture_message(fid_ep* ep,
+                                const auto* msg,
+                                std::uint64_t flags,
+                                loom::completion_direction direction) -> ssize_t {
+        auto& self = *static_cast<vector_provider*>(ep->fid.context);
+        self.submission_flags = flags;
+        REQUIRE(msg->addr == FI_ADDR_UNSPEC);
+        REQUIRE(msg->desc == nullptr);
+        return capture(ep, msg->msg_iov, msg->iov_count, msg->context, direction);
+    }
+
     static auto capture(fid_ep* ep,
                         const iovec* iov,
                         std::size_t count,
@@ -82,9 +93,17 @@ struct vector_provider {
             [](fid_ep* ep, const iovec* iov, void**, std::size_t count, fi_addr_t, void* context) {
                 return capture(ep, iov, count, context, loom::completion_direction::receive);
             },
+        .recvmsg =
+            [](fid_ep* ep, const fi_msg* msg, std::uint64_t flags) {
+                return capture_message(ep, msg, flags, loom::completion_direction::receive);
+            },
         .sendv =
             [](fid_ep* ep, const iovec* iov, void**, std::size_t count, fi_addr_t, void* context) {
                 return capture(ep, iov, count, context);
+            },
+        .sendmsg =
+            [](fid_ep* ep, const fi_msg* msg, std::uint64_t flags) {
+                return capture_message(ep, msg, flags, loom::completion_direction::transmit);
             },
     };
     fi_ops_tagged tags{
@@ -102,6 +121,12 @@ struct vector_provider {
                 REQUIRE(ignore == 0x80);
                 return capture(ep, iov, count, context, loom::completion_direction::receive);
             },
+        .recvmsg =
+            [](fid_ep* ep, const fi_msg_tagged* msg, std::uint64_t flags) {
+                REQUIRE(msg->tag == 42);
+                REQUIRE(msg->ignore == 0x80);
+                return capture_message(ep, msg, flags, loom::completion_direction::receive);
+            },
         .sendv =
             [](fid_ep* ep,
                const iovec* iov,
@@ -112,6 +137,11 @@ struct vector_provider {
                void* context) {
                 REQUIRE(tag == 42);
                 return capture(ep, iov, count, context);
+            },
+        .sendmsg =
+            [](fid_ep* ep, const fi_msg_tagged* msg, std::uint64_t flags) {
+                REQUIRE(msg->tag == 42);
+                return capture_message(ep, msg, flags, loom::completion_direction::transmit);
             },
     };
     fi_ops_rma rma{
@@ -136,7 +166,8 @@ struct vector_provider {
                                                                        0UZ,
                                                                        0UZ,
                                                                        loom::caps{},
-                                                                       FI_FENCE)};
+                                                                       FI_FENCE,
+                                                                       FI_MORE)};
         if (bindings.has(loom::cq_bind::transmit))
             REQUIRE(ep.bind_cq(tx, loom::cq_bind::transmit));
         if (bindings.has(loom::cq_bind::recv))
@@ -291,6 +322,8 @@ TEST_CASE("Asio operations register their buffer sequences before submission", "
     buffers = {};
     const_buffers = {};
     REQUIRE(completions == 0);
+    if (bound && operation < 4)
+        CHECK(native.submission_flags == (FI_COMPLETION | (receive ? FI_MORE : FI_FENCE)));
     if (expected) {
         REQUIRE(native.context == nullptr);
         REQUIRE((native.attempted_context != nullptr) == bound);

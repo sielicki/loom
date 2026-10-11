@@ -64,8 +64,38 @@ struct provider {
         .recv = [](fid_ep* ep, void*, std::size_t, void*, fi_addr_t, void* ctx) -> ssize_t {
             return static_cast<provider*>(ep->fid.context)->post(ctx);
         },
+        .recvmsg = [](fid_ep* ep, const fi_msg* message, std::uint64_t flags) -> ssize_t {
+            return static_cast<provider*>(ep->fid.context)->post_message(*message, flags);
+        },
         .send = [](fid_ep* ep, const void*, std::size_t, void*, fi_addr_t, void* ctx) -> ssize_t {
             return static_cast<provider*>(ep->fid.context)->post(ctx);
+        },
+        .sendmsg = [](fid_ep* ep, const fi_msg* message, std::uint64_t flags) -> ssize_t {
+            return static_cast<provider*>(ep->fid.context)->post_message(*message, flags);
+        },
+    };
+    fi_ops_tagged tagged{
+        .size = sizeof(fi_ops_tagged),
+        .recv = [](fid_ep* ep,
+                   void*,
+                   std::size_t,
+                   void*,
+                   fi_addr_t,
+                   std::uint64_t,
+                   std::uint64_t,
+                   void* ctx) -> ssize_t {
+            return static_cast<provider*>(ep->fid.context)->post(ctx);
+        },
+        .recvmsg = [](fid_ep* ep, const fi_msg_tagged* message, std::uint64_t flags) -> ssize_t {
+            REQUIRE(message->tag == 42);
+            REQUIRE(message->ignore == 0x80);
+            return static_cast<provider*>(ep->fid.context)->post_message(*message, flags);
+        },
+        .send = [](fid_ep* ep, const void*, std::size_t, void*, fi_addr_t, std::uint64_t, void* ctx)
+            -> ssize_t { return static_cast<provider*>(ep->fid.context)->post(ctx); },
+        .sendmsg = [](fid_ep* ep, const fi_msg_tagged* message, std::uint64_t flags) -> ssize_t {
+            REQUIRE(message->tag == 42);
+            return static_cast<provider*>(ep->fid.context)->post_message(*message, flags);
         },
     };
     fi_ops_rma rma{
@@ -158,8 +188,11 @@ struct provider {
         },
     };
     fid_cq cq_handle{.fid = {.context = this, .ops = &ops}, .ops = &completions};
-    fid_ep ep_handle{
-        .fid = {.context = this, .ops = &ops}, .msg = &messages, .rma = &rma, .atomic = &atomics};
+    fid_ep ep_handle{.fid = {.context = this, .ops = &ops},
+                     .msg = &messages,
+                     .rma = &rma,
+                     .tagged = &tagged,
+                     .atomic = &atomics};
     loom::completion_queue cq{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
         loom::get_default_resource(), &cq_handle)};
     loom::endpoint ep{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
@@ -170,14 +203,25 @@ struct provider {
         0UZ,
         0UZ,
         loom::caps{},
-        FI_FENCE)};
+        FI_FENCE,
+        FI_MORE)};
 
     auto post(void* ctx, std::uint64_t flags = 0) -> ssize_t {
+        if (submission_status)
+            return submission_status;
         // Exercise the provider's right to use all FI_CONTEXT2 storage.
         std::ranges::fill(static_cast<fi_context2*>(ctx)->internal, nullptr);
         if (!selective_completion || (flags & FI_COMPLETION))
             pending.push_back(ctx);
         return 0;
+    }
+    auto post_message(const auto& message, std::uint64_t flags) -> ssize_t {
+        submitted_flags = flags;
+        REQUIRE(message.iov_count == 1);
+        REQUIRE(message.addr == FI_ADDR_UNSPEC);
+        REQUIRE(message.msg_iov[0].iov_len == 16);
+        REQUIRE(message.desc == nullptr);
+        return post(message.context, flags);
     }
     auto post_rma(std::size_t length,
                   void* descriptor,
@@ -221,6 +265,45 @@ struct provider {
     }
 };
 }  // namespace
+
+TEST_CASE("message senders request selective completions", "[execution][progress][message]") {
+    const auto tagged = GENERATE(false, true);
+    const auto receive = GENERATE(false, true);
+    const auto selective = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
+    provider native;
+    native.selective_completion = selective;
+    native.submission_status = status;
+    std::array<std::byte, 16> storage{};
+    completion_state state;
+    auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        CHECK(native.submitted_flags == (FI_COMPLETION | (receive ? FI_MORE : FI_FENCE)));
+        if (status) {
+            REQUIRE(state.calls == 1);
+            REQUIRE(state.error == loom::make_error_code_from_fi_errno(-status));
+        } else {
+            REQUIRE(state.calls == 0);
+            REQUIRE(loom::execution::poll_completions(native.cq).value().completed == 1);
+            REQUIRE(state.calls == 1);
+            REQUIRE_FALSE(state.error);
+            REQUIRE(state.bytes == (receive ? native.completion_length : 0));
+        }
+        REQUIRE(native.pending.empty());
+    };
+    auto operations = loom::async(native.ep);
+    if (tagged) {
+        if (receive)
+            run(operations.tagged_recv(storage, 42, 0x80, &native.cq));
+        else
+            run(operations.tagged_send(storage, 42, &native.cq));
+    } else if (receive) {
+        run(operations.recv(storage, &native.cq));
+    } else {
+        run(operations.send(storage, &native.cq));
+    }
+}
 
 TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progress]") {
     const auto write = GENERATE(false, true);

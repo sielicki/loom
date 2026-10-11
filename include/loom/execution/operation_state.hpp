@@ -21,6 +21,7 @@
 
 #include "loom/async/completion_queue.hpp"
 #include "loom/core/endpoint.hpp"
+#include "loom/core/messaging.hpp"
 #include "loom/core/result.hpp"
 #include "loom/core/rma.hpp"
 #include "loom/core/safe_context.hpp"
@@ -205,7 +206,10 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result = ep_->send(buffer_, this->context());
+        const iovec buffer{const_cast<std::byte*>(buffer_.data()), buffer_.size()};
+        const msg::send_message<> message{.iov = {&buffer, 1}, .context = this->as_fi_context()};
+        auto result =
+            msg::sendmsg<operation_defaults::inherit>(*ep_, message, msg::send_flag::completion);
         if (!result) {
             this->complete_error(result.error());
         }
@@ -250,7 +254,10 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result = ep_->recv(buffer_, this->context());
+        const iovec buffer{buffer_.data(), buffer_.size()};
+        const msg::recv_message<> message{.iov = {&buffer, 1}, .context = this->as_fi_context()};
+        auto result =
+            msg::recvmsg<operation_defaults::inherit>(*ep_, message, msg::recv_flag::completion);
         if (!result) {
             this->complete_error(result.error());
         }
@@ -289,7 +296,11 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result = ep_->tagged_send(buffer_, tag_, this->context());
+        const iovec buffer{const_cast<std::byte*>(buffer_.data()), buffer_.size()};
+        const msg::tagged_send_message<> message{
+            .iov = {&buffer, 1}, .tag = tag_, .context = this->as_fi_context()};
+        auto result = msg::tagged_sendmsg<operation_defaults::inherit>(
+            *ep_, message, msg::send_flag::completion);
         if (!result) {
             this->complete_error(result.error());
         }
@@ -334,7 +345,11 @@ public:
         if (!this->register_completion()) {
             return;
         }
-        auto result = ep_->tagged_recv(buffer_, tag_, ignore_, this->context());
+        const iovec buffer{buffer_.data(), buffer_.size()};
+        const msg::tagged_recv_message<> message{
+            .iov = {&buffer, 1}, .tag = tag_, .ignore = ignore_, .context = this->as_fi_context()};
+        auto result = msg::tagged_recvmsg<operation_defaults::inherit>(
+            *ep_, message, msg::recv_flag::completion);
         if (!result) {
             this->complete_error(result.error());
         }

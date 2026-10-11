@@ -228,7 +228,10 @@ struct initiate_fabric_send {
         auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
-            result = ep_->sendv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+            const msg::send_message<> message{.iov = ctx->buffers().iov,
+                                              .context = ctx->as_fi_context()};
+            result = msg::sendmsg<operation_defaults::inherit>(
+                *ep_, message, msg::send_flag::completion);
         }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
@@ -258,7 +261,10 @@ struct initiate_fabric_recv {
         auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::receive)
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
-            result = ep_->recvv(ctx->buffers().iov, context_ptr<void>{ctx->as_fi_context()});
+            const msg::recv_message<> message{.iov = ctx->buffers().iov,
+                                              .context = ctx->as_fi_context()};
+            result = msg::recvmsg<operation_defaults::inherit>(
+                *ep_, message, msg::recv_flag::completion);
         }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
@@ -291,12 +297,10 @@ struct initiate_fabric_tagged_send {
         auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::transmit)
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
-            result = loom::tagged_sendv(*ep_,
-                                        ctx->buffers().iov,
-                                        ctx->buffers().descriptors,
-                                        fabric_addrs::unspecified,
-                                        tag,
-                                        ctx->as_fi_context());
+            const msg::tagged_send_message<> message{
+                .iov = ctx->buffers().iov, .tag = tag, .context = ctx->as_fi_context()};
+            result = msg::tagged_sendmsg<operation_defaults::inherit>(
+                *ep_, message, msg::send_flag::completion);
         }
         finish_asio_submission(std::move(ctx), std::move(result));
     }
@@ -331,13 +335,12 @@ struct initiate_fabric_tagged_recv {
         auto result = ep_ ? ctx->bind_completion(*ep_, completion_direction::receive)
                           : make_error_result<void>(errc::invalid_argument);
         if (result) {
-            result = loom::tagged_recvv(*ep_,
-                                        ctx->buffers().iov,
-                                        ctx->buffers().descriptors,
-                                        fabric_addrs::unspecified,
-                                        tag,
-                                        ignore,
-                                        ctx->as_fi_context());
+            const msg::tagged_recv_message<> message{.iov = ctx->buffers().iov,
+                                                     .tag = tag,
+                                                     .ignore = ignore,
+                                                     .context = ctx->as_fi_context()};
+            result = msg::tagged_recvmsg<operation_defaults::inherit>(
+                *ep_, message, msg::recv_flag::completion);
         }
         finish_asio_submission(std::move(ctx), std::move(result));
     }

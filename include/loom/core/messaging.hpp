@@ -198,7 +198,7 @@ inline constexpr std::size_t max_iov_count = 16;
  * @param flags Optional send flags.
  * @return Success or error result.
  */
-template <context_like Ctx>
+template <operation_defaults Defaults, context_like Ctx>
 [[nodiscard]] auto sendmsg(endpoint& ep,
                            const send_message<Ctx>& msg,
                            send_flags flags = send_flag::none) -> result<void> {
@@ -224,12 +224,22 @@ template <context_like Ctx>
     fi_m.context = to_raw_context(msg.context);
     fi_m.data = msg.data;
 
-    auto ret = ::fi_sendmsg(fid_ep, &fi_m, detail::translate_send_flags(flags));
+    const auto native_flags = loom::detail::operation_flags<Defaults>(
+        ep, completion_direction::transmit, detail::translate_send_flags(flags));
+    auto ret = ::fi_sendmsg(fid_ep, &fi_m, native_flags);
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
     }
 
     return make_success();
+}
+
+/// Per-call flags replace defaults unless an explicit inheritance policy is selected.
+template <context_like Ctx>
+[[nodiscard]] auto sendmsg(endpoint& ep,
+                           const send_message<Ctx>& msg,
+                           send_flags flags = send_flag::none) -> result<void> {
+    return sendmsg<operation_defaults::replace>(ep, msg, flags);
 }
 
 /**
@@ -240,7 +250,7 @@ template <context_like Ctx>
  * @param flags Optional receive flags.
  * @return Success or error result.
  */
-template <context_like Ctx>
+template <operation_defaults Defaults, context_like Ctx>
 [[nodiscard]] auto recvmsg(endpoint& ep,
                            const recv_message<Ctx>& msg,
                            recv_flags flags = recv_flag::none) -> result<void> {
@@ -266,12 +276,22 @@ template <context_like Ctx>
     fi_m.context = to_raw_context(msg.context);
     fi_m.data = 0;
 
-    auto ret = ::fi_recvmsg(fid_ep, &fi_m, detail::translate_recv_flags(flags));
+    const auto native_flags = loom::detail::operation_flags<Defaults>(
+        ep, completion_direction::receive, detail::translate_recv_flags(flags));
+    auto ret = ::fi_recvmsg(fid_ep, &fi_m, native_flags);
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
     }
 
     return make_success();
+}
+
+/// Per-call flags replace defaults unless an explicit inheritance policy is selected.
+template <context_like Ctx>
+[[nodiscard]] auto recvmsg(endpoint& ep,
+                           const recv_message<Ctx>& msg,
+                           recv_flags flags = recv_flag::none) -> result<void> {
+    return recvmsg<operation_defaults::replace>(ep, msg, flags);
 }
 
 /**
@@ -282,7 +302,7 @@ template <context_like Ctx>
  * @param flags Optional send flags.
  * @return Success or error result.
  */
-template <context_like Ctx>
+template <operation_defaults Defaults, context_like Ctx>
 [[nodiscard]] auto tagged_sendmsg(endpoint& ep,
                                   const tagged_send_message<Ctx>& msg,
                                   send_flags flags = send_flag::none) -> result<void> {
@@ -310,12 +330,22 @@ template <context_like Ctx>
     fi_m.context = to_raw_context(msg.context);
     fi_m.data = msg.data;
 
-    auto ret = ::fi_tsendmsg(fid_ep, &fi_m, detail::translate_send_flags(flags));
+    const auto native_flags = loom::detail::operation_flags<Defaults>(
+        ep, completion_direction::transmit, detail::translate_send_flags(flags));
+    auto ret = ::fi_tsendmsg(fid_ep, &fi_m, native_flags);
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
     }
 
     return make_success();
+}
+
+/// Per-call flags replace defaults unless an explicit inheritance policy is selected.
+template <context_like Ctx>
+[[nodiscard]] auto tagged_sendmsg(endpoint& ep,
+                                  const tagged_send_message<Ctx>& msg,
+                                  send_flags flags = send_flag::none) -> result<void> {
+    return tagged_sendmsg<operation_defaults::replace>(ep, msg, flags);
 }
 
 /**
@@ -326,7 +356,7 @@ template <context_like Ctx>
  * @param flags Optional receive flags.
  * @return Success or error result.
  */
-template <context_like Ctx>
+template <operation_defaults Defaults, context_like Ctx>
 [[nodiscard]] auto tagged_recvmsg(endpoint& ep,
                                   const tagged_recv_message<Ctx>& msg,
                                   recv_flags flags = recv_flag::none) -> result<void> {
@@ -354,12 +384,22 @@ template <context_like Ctx>
     fi_m.context = to_raw_context(msg.context);
     fi_m.data = 0;
 
-    auto ret = ::fi_trecvmsg(fid_ep, &fi_m, detail::translate_recv_flags(flags));
+    const auto native_flags = loom::detail::operation_flags<Defaults>(
+        ep, completion_direction::receive, detail::translate_recv_flags(flags));
+    auto ret = ::fi_trecvmsg(fid_ep, &fi_m, native_flags);
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
     }
 
     return make_success();
+}
+
+/// Per-call flags replace defaults unless an explicit inheritance policy is selected.
+template <context_like Ctx>
+[[nodiscard]] auto tagged_recvmsg(endpoint& ep,
+                                  const tagged_recv_message<Ctx>& msg,
+                                  recv_flags flags = recv_flag::none) -> result<void> {
+    return tagged_recvmsg<operation_defaults::replace>(ep, msg, flags);
 }
 
 /**

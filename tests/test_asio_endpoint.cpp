@@ -28,11 +28,10 @@ TEST_CASE("deferred operations retain their buffer descriptors", "[asio][endpoin
         loom::get_default_resource(), &cq_handle)};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
-        .sendv = [](fid_ep* ep, const iovec* iov, void**, std::size_t count, fi_addr_t, void*)
-            -> ssize_t {
+        .sendmsg = [](fid_ep* ep, const fi_msg* message, std::uint64_t) -> ssize_t {
             auto& length = *static_cast<std::size_t*>(ep->fid.context);
-            for (std::size_t i = 0; i < count; ++i) {
-                length += iov[i].iov_len;
+            for (std::size_t i = 0; i < message->iov_count; ++i) {
+                length += message->msg_iov[i].iov_len;
             }
             return -FI_EIO;
         },

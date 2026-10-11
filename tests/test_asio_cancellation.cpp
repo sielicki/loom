@@ -44,13 +44,12 @@ struct cancellation_provider {
     };
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
-        .recvv =
-            [](fid_ep* ep, const iovec*, void**, std::size_t, fi_addr_t, void* context) -> ssize_t {
+        .recvmsg = [](fid_ep* ep, const fi_msg* message, std::uint64_t) -> ssize_t {
             auto& self = *static_cast<cancellation_provider*>(ep->fid.context);
             if (self.fail_submission) {
                 return -FI_EIO;
             }
-            self.pending.push_back(context);
+            self.pending.push_back(message->context);
             return 0;
         },
     };
