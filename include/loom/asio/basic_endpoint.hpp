@@ -356,7 +356,8 @@ public:
      * @tparam ConstBufferSequence The buffer sequence type.
      * @tparam CompletionToken The completion token type.
      * @param buffers The local data to write.
-     * @param local_mr The memory region for the local buffer.
+     * @param local_mr The memory region, kept alive through completion.
+     * @param peer Destination peer (ignored by connected endpoints).
      * @param remote The remote memory descriptor.
      * @param token The completion token.
      * @return Depends on the completion token type.
@@ -366,10 +367,11 @@ public:
     auto
     async_write_to(const ConstBufferSequence& buffers,
                    memory_region& local_mr,
+                   fabric_addr peer,
                    remote_memory remote,
                    CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, buffers, &local_mr, remote](auto handler) {
+            [this, buffers, &local_mr, peer, remote](auto handler) {
                 auto state = operation_state();
                 auto ctx = make_buffered_asio_context<false>(std::move(handler),
                                                              executor_,
@@ -379,16 +381,39 @@ public:
                 ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
+                if (ctx->buffers().bytes > remote.length) {
+                    finish_asio_submission(std::move(ctx),
+                                           make_error_result<void>(errc::invalid_argument));
+                    return;
+                }
+
                 const std::array remote_iov{
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-                auto result = rma::writev(state->endpoint,
-                                          ctx->buffers().iov,
-                                          ctx->buffers().descriptors,
-                                          remote_iov,
-                                          ctx->as_fi_context());
+                auto result = rma::writev_to(state->endpoint,
+                                             ctx->buffers().iov,
+                                             ctx->buffers().descriptors,
+                                             peer,
+                                             remote_iov,
+                                             ctx->as_fi_context());
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
+    }
+
+    /// Connected-endpoint convenience. Buffers and registration remain borrowed
+    /// until completion. Use the peer overload for connectionless endpoints.
+    template <typename ConstBufferSequence,
+              typename CompletionToken = ::asio::default_completion_token_t<executor_type>>
+    auto
+    async_write_to(const ConstBufferSequence& buffers,
+                   memory_region& local_mr,
+                   remote_memory remote,
+                   CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
+        return async_write_to(buffers,
+                              local_mr,
+                              fabric_addrs::unspecified,
+                              remote,
+                              std::forward<CompletionToken>(token));
     }
 
     /**
@@ -397,7 +422,8 @@ public:
      * @tparam MutableBufferSequence The buffer sequence type.
      * @tparam CompletionToken The completion token type.
      * @param buffers The local buffer to read into.
-     * @param local_mr The memory region for the local buffer.
+     * @param local_mr The memory region, kept alive through completion.
+     * @param peer Destination peer (ignored by connected endpoints).
      * @param remote The remote memory descriptor.
      * @param token The completion token.
      * @return Depends on the completion token type.
@@ -407,10 +433,11 @@ public:
     auto
     async_read_from(const MutableBufferSequence& buffers,
                     memory_region& local_mr,
+                    fabric_addr peer,
                     remote_memory remote,
                     CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
         return ::asio::async_initiate<CompletionToken, void(std::error_code, std::size_t)>(
-            [this, buffers, &local_mr, remote](auto handler) {
+            [this, buffers, &local_mr, peer, remote](auto handler) {
                 auto state = operation_state();
                 auto ctx = make_buffered_asio_context<true>(std::move(handler),
                                                             executor_,
@@ -420,16 +447,39 @@ public:
                 ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
+                if (ctx->buffers().bytes > remote.length) {
+                    finish_asio_submission(std::move(ctx),
+                                           make_error_result<void>(errc::invalid_argument));
+                    return;
+                }
+
                 const std::array remote_iov{
                     rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-                auto result = rma::readv(state->endpoint,
-                                         ctx->buffers().iov,
-                                         ctx->buffers().descriptors,
-                                         remote_iov,
-                                         ctx->as_fi_context());
+                auto result = rma::readv_to(state->endpoint,
+                                            ctx->buffers().iov,
+                                            ctx->buffers().descriptors,
+                                            peer,
+                                            remote_iov,
+                                            ctx->as_fi_context());
                 finish_asio_submission(std::move(ctx), std::move(result));
             },
             token);
+    }
+
+    /// Connected-endpoint convenience. Buffers and registration remain borrowed
+    /// until completion. Use the peer overload for connectionless endpoints.
+    template <typename MutableBufferSequence,
+              typename CompletionToken = ::asio::default_completion_token_t<executor_type>>
+    auto
+    async_read_from(const MutableBufferSequence& buffers,
+                    memory_region& local_mr,
+                    remote_memory remote,
+                    CompletionToken&& token = ::asio::default_completion_token_t<executor_type>{}) {
+        return async_read_from(buffers,
+                               local_mr,
+                               fabric_addrs::unspecified,
+                               remote,
+                               std::forward<CompletionToken>(token));
     }
 
     /**

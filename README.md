@@ -762,6 +762,29 @@ auto main() -> int {
 
 #### RMA Operations with Senders
 
+Use `read_from` and `write_to` for registered buffers and explicit RDM
+peers. The sender copies the local descriptor and remote metadata; keep
+the endpoint, CQ, registration, and buffer alive until completion. The
+transfer length is the local span's size and must fit `remote.length`.
+Progress still comes from `loom::execution::poll_completions(cq)`.
+
+```cpp
+auto operations = loom::rma_async(ep);
+auto read = operations.read_from(buffer, local_mr, peer, remote, &cq);
+auto write = operations.write_to(buffer, local_mr, peer, remote, &cq);
+```
+
+Asio provides the same registered peer path through
+`ep.async_read_from(buffers, local_mr, peer, remote, token)` and
+`ep.async_write_to(buffers, local_mr, peer, remote, token)`. All buffers in
+that sequence use `local_mr`; callers must register the whole sequence's
+storage. Buffers and registration remain borrowed until completion.
+Core `rma::readv_to` and `rma::writev_to` also accept a separate descriptor
+for each IOV and preserve multiple remote segments.
+
+The original sender `read` and `write` overloads use an unspecified peer
+and no local descriptor, for configurations where those are valid:
+
 ```cpp
 #include <loom/execution.hpp>
 

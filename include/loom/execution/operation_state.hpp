@@ -21,6 +21,7 @@
 #include "loom/async/completion_queue.hpp"
 #include "loom/core/endpoint.hpp"
 #include "loom/core/result.hpp"
+#include "loom/core/rma.hpp"
 #include "loom/core/safe_context.hpp"
 #include "loom/core/types.hpp"
 #include "loom/execution/concepts.hpp"
@@ -341,8 +342,23 @@ public:
                          mr_key key,
                          completion_queue* cq,
                          Receiver receiver) noexcept
-        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), remote_addr_(remote_addr),
-          key_(key), cq_(cq) {}
+        : read_operation_state(ep,
+                               buffer,
+                               mr_descriptor{},
+                               fabric_addrs::unspecified,
+                               remote_memory{remote_addr.get(), key.get(), buffer.size()},
+                               cq,
+                               std::move(receiver)) {}
+
+    read_operation_state(endpoint* ep,
+                         std::span<std::byte> buffer,
+                         mr_descriptor descriptor,
+                         fabric_addr peer,
+                         remote_memory remote,
+                         completion_queue* cq,
+                         Receiver receiver) noexcept
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), descriptor_(descriptor),
+          peer_(peer), remote_(remote), cq_(cq) {}
 
     void start() & noexcept {
         if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
@@ -350,7 +366,12 @@ public:
             return;
         }
 
-        auto result = ep_->read(buffer_, remote_addr_, key_, this->context());
+        if (buffer_.size() > remote_.length) {
+            this->complete_error(make_error_code(errc::invalid_argument));
+            return;
+        }
+        auto result =
+            rma::read_to(*ep_, buffer_, descriptor_, peer_, remote_, this->as_fi_context());
         if (!result) {
             this->complete_error(result.error());
         }
@@ -361,8 +382,9 @@ public:
 private:
     endpoint* ep_;
     std::span<std::byte> buffer_;
-    rma_addr remote_addr_;
-    mr_key key_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
+    remote_memory remote_;
     completion_queue* cq_;
 };
 
@@ -383,8 +405,23 @@ public:
                           mr_key key,
                           completion_queue* cq,
                           Receiver receiver) noexcept
-        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), remote_addr_(remote_addr),
-          key_(key), cq_(cq) {}
+        : write_operation_state(ep,
+                                buffer,
+                                mr_descriptor{},
+                                fabric_addrs::unspecified,
+                                remote_memory{remote_addr.get(), key.get(), buffer.size()},
+                                cq,
+                                std::move(receiver)) {}
+
+    write_operation_state(endpoint* ep,
+                          std::span<const std::byte> buffer,
+                          mr_descriptor descriptor,
+                          fabric_addr peer,
+                          remote_memory remote,
+                          completion_queue* cq,
+                          Receiver receiver) noexcept
+        : base(std::move(receiver), cq), ep_(ep), buffer_(buffer), descriptor_(descriptor),
+          peer_(peer), remote_(remote), cq_(cq) {}
 
     void start() & noexcept {
         if (ep_ == nullptr || !ep_->impl_valid() || cq_ == nullptr || !*cq_) {
@@ -392,7 +429,12 @@ public:
             return;
         }
 
-        auto result = ep_->write(buffer_, remote_addr_, key_, this->context());
+        if (buffer_.size() > remote_.length) {
+            this->complete_error(make_error_code(errc::invalid_argument));
+            return;
+        }
+        auto result =
+            rma::write_to(*ep_, buffer_, descriptor_, peer_, remote_, this->as_fi_context());
         if (!result) {
             this->complete_error(result.error());
         }
@@ -401,8 +443,9 @@ public:
 private:
     endpoint* ep_;
     std::span<const std::byte> buffer_;
-    rma_addr remote_addr_;
-    mr_key key_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
+    remote_memory remote_;
     completion_queue* cq_;
 };
 

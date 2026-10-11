@@ -103,16 +103,18 @@ auto read(endpoint& ep,
  * @param ep The endpoint for the operation.
  * @param local_iov Local I/O vectors for scatter read.
  * @param desc Memory region descriptors for local buffers.
+ * @param dest_addr Destination peer (ignored by connected endpoints).
  * @param remote_iov Remote I/O vectors specifying source.
  * @param context Optional operation context.
  * @return Success or error result.
  */
 template <context_like Ctx = void*>
-auto readv(endpoint& ep,
-           std::span<const iovec> local_iov,
-           std::span<const mr_descriptor> desc,
-           std::span<const rma_iov> remote_iov,
-           Ctx context = {}) -> result<void> {
+auto readv_to(endpoint& ep,
+              std::span<const iovec> local_iov,
+              std::span<const mr_descriptor> desc,
+              fabric_addr dest_addr,
+              std::span<const rma_iov> remote_iov,
+              Ctx context = {}) -> result<void> {
     if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -120,6 +122,10 @@ auto readv(endpoint& ep,
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, readmsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     std::vector<void*> raw_desc;
@@ -136,7 +142,7 @@ auto readv(endpoint& ep,
         .msg_iov = local_iov.data(),
         .desc = raw_desc.empty() ? nullptr : raw_desc.data(),
         .iov_count = local_iov.size(),
-        .addr = FI_ADDR_UNSPEC,
+        .addr = dest_addr.get(),
         .rma_iov = raw_remote.data(),
         .rma_iov_count = raw_remote.size(),
         .context = to_raw_context(context),
@@ -148,6 +154,16 @@ auto readv(endpoint& ep,
     }
 
     return make_success();
+}
+
+/// Connected-endpoint convenience for vectored RMA.
+template <context_like Ctx = void*>
+auto readv(endpoint& ep,
+           std::span<const iovec> local_iov,
+           std::span<const mr_descriptor> desc,
+           std::span<const rma_iov> remote_iov,
+           Ctx context = {}) -> result<void> {
+    return readv_to(ep, local_iov, desc, fabric_addrs::unspecified, remote_iov, context);
 }
 
 /**
@@ -194,16 +210,18 @@ auto write(endpoint& ep,
  * @param ep The endpoint for the operation.
  * @param local_iov Local I/O vectors for gather write.
  * @param desc Memory region descriptors for local buffers.
+ * @param dest_addr Destination peer (ignored by connected endpoints).
  * @param remote_iov Remote I/O vectors specifying destination.
  * @param context Optional operation context.
  * @return Success or error result.
  */
 template <context_like Ctx = void*>
-auto writev(endpoint& ep,
-            std::span<const iovec> local_iov,
-            std::span<const mr_descriptor> desc,
-            std::span<const rma_iov> remote_iov,
-            Ctx context = {}) -> result<void> {
+auto writev_to(endpoint& ep,
+               std::span<const iovec> local_iov,
+               std::span<const mr_descriptor> desc,
+               fabric_addr dest_addr,
+               std::span<const rma_iov> remote_iov,
+               Ctx context = {}) -> result<void> {
     if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -211,6 +229,10 @@ auto writev(endpoint& ep,
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, writemsg)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     std::vector<void*> raw_desc;
@@ -227,7 +249,7 @@ auto writev(endpoint& ep,
         .msg_iov = local_iov.data(),
         .desc = raw_desc.empty() ? nullptr : raw_desc.data(),
         .iov_count = local_iov.size(),
-        .addr = FI_ADDR_UNSPEC,
+        .addr = dest_addr.get(),
         .rma_iov = raw_remote.data(),
         .rma_iov_count = raw_remote.size(),
         .context = to_raw_context(context),
@@ -239,6 +261,16 @@ auto writev(endpoint& ep,
     }
 
     return make_success();
+}
+
+/// Connected-endpoint convenience for vectored RMA.
+template <context_like Ctx = void*>
+auto writev(endpoint& ep,
+            std::span<const iovec> local_iov,
+            std::span<const mr_descriptor> desc,
+            std::span<const rma_iov> remote_iov,
+            Ctx context = {}) -> result<void> {
+    return writev_to(ep, local_iov, desc, fabric_addrs::unspecified, remote_iov, context);
 }
 
 /**
@@ -310,7 +342,7 @@ auto inject_write_data(endpoint& ep,
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param local_buffer Local buffer to read into.
- * @param local_mr Memory region for the local buffer.
+ * @param local_descriptor Descriptor for the local buffer, or empty when not required.
  * @param dest_addr Destination fabric address.
  * @param remote Remote memory descriptor.
  * @param context Optional operation context.
@@ -319,7 +351,7 @@ auto inject_write_data(endpoint& ep,
 template <context_like Ctx = void*>
 auto read_to(endpoint& ep,
              std::span<std::byte> local_buffer,
-             memory_region& local_mr,
+             mr_descriptor local_descriptor,
              fabric_addr dest_addr,
              remote_memory remote,
              Ctx context = {}) -> result<void> {
@@ -327,7 +359,10 @@ auto read_to(endpoint& ep,
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
-    auto* desc = local_mr.descriptor().raw();
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, read)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+    auto* desc = local_descriptor.raw();
 
     auto ret = ::fi_read(fid_ep,
                          local_buffer.data(),
@@ -345,12 +380,23 @@ auto read_to(endpoint& ep,
     return make_success();
 }
 
+/// Use a registration's descriptor for the local buffer.
+template <context_like Ctx = void*>
+auto read_to(endpoint& ep,
+             std::span<std::byte> local_buffer,
+             memory_region& local_mr,
+             fabric_addr dest_addr,
+             remote_memory remote,
+             Ctx context = {}) -> result<void> {
+    return read_to(ep, local_buffer, local_mr.descriptor(), dest_addr, remote, context);
+}
+
 /**
  * @brief Writes data from a local buffer to a specific remote address.
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param local_buffer Local buffer to write from.
- * @param local_mr Memory region for the local buffer.
+ * @param local_descriptor Descriptor for the local buffer, or empty when not required.
  * @param dest_addr Destination fabric address.
  * @param remote Remote memory descriptor.
  * @param context Optional operation context.
@@ -359,7 +405,7 @@ auto read_to(endpoint& ep,
 template <context_like Ctx = void*>
 auto write_to(endpoint& ep,
               std::span<const std::byte> local_buffer,
-              memory_region& local_mr,
+              mr_descriptor local_descriptor,
               fabric_addr dest_addr,
               remote_memory remote,
               Ctx context = {}) -> result<void> {
@@ -367,7 +413,10 @@ auto write_to(endpoint& ep,
     if (fid_ep == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
     }
-    auto* desc = local_mr.descriptor().raw();
+    if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, write)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+    auto* desc = local_descriptor.raw();
 
     auto ret = ::fi_write(fid_ep,
                           local_buffer.data(),
@@ -383,6 +432,17 @@ auto write_to(endpoint& ep,
     }
 
     return make_success();
+}
+
+/// Use a registration's descriptor for the local buffer.
+template <context_like Ctx = void*>
+auto write_to(endpoint& ep,
+              std::span<const std::byte> local_buffer,
+              memory_region& local_mr,
+              fabric_addr dest_addr,
+              remote_memory remote,
+              Ctx context = {}) -> result<void> {
+    return write_to(ep, local_buffer, local_mr.descriptor(), dest_addr, remote, context);
 }
 
 /**

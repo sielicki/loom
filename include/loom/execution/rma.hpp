@@ -90,13 +90,27 @@ public:
                 rma_addr remote_addr,
                 mr_key key,
                 completion_queue* cq) noexcept
-        : ep_(ep), buffer_(buffer), remote_addr_(remote_addr), key_(key), cq_(cq) {}
+        : read_sender(ep,
+                      buffer,
+                      mr_descriptor{},
+                      fabric_addrs::unspecified,
+                      remote_memory{remote_addr.get(), key.get(), buffer.size()},
+                      cq) {}
+
+    read_sender(endpoint* ep,
+                std::span<std::byte> buffer,
+                mr_descriptor descriptor,
+                fabric_addr peer,
+                remote_memory remote,
+                completion_queue* cq) noexcept
+        : ep_(ep), buffer_(buffer), descriptor_(descriptor), peer_(peer), remote_(remote), cq_(cq) {
+    }
 
     template <typename Receiver>
     [[nodiscard]] auto connect(Receiver receiver) && noexcept
         -> read_operation_state<std::decay_t<Receiver>> {
         return read_operation_state<std::decay_t<Receiver>>(
-            ep_, buffer_, remote_addr_, key_, cq_, std::move(receiver));
+            ep_, buffer_, descriptor_, peer_, remote_, cq_, std::move(receiver));
     }
 
     [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_}; }
@@ -104,8 +118,9 @@ public:
 private:
     endpoint* ep_;
     std::span<std::byte> buffer_;
-    rma_addr remote_addr_;
-    mr_key key_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
+    remote_memory remote_;
     completion_queue* cq_;
 };
 
@@ -135,13 +150,27 @@ public:
                  rma_addr remote_addr,
                  mr_key key,
                  completion_queue* cq) noexcept
-        : ep_(ep), buffer_(buffer), remote_addr_(remote_addr), key_(key), cq_(cq) {}
+        : write_sender(ep,
+                       buffer,
+                       mr_descriptor{},
+                       fabric_addrs::unspecified,
+                       remote_memory{remote_addr.get(), key.get(), buffer.size()},
+                       cq) {}
+
+    write_sender(endpoint* ep,
+                 std::span<const std::byte> buffer,
+                 mr_descriptor descriptor,
+                 fabric_addr peer,
+                 remote_memory remote,
+                 completion_queue* cq) noexcept
+        : ep_(ep), buffer_(buffer), descriptor_(descriptor), peer_(peer), remote_(remote), cq_(cq) {
+    }
 
     template <typename Receiver>
     [[nodiscard]] auto connect(Receiver receiver) && noexcept
         -> write_operation_state<std::decay_t<Receiver>> {
         return write_operation_state<std::decay_t<Receiver>>(
-            ep_, buffer_, remote_addr_, key_, cq_, std::move(receiver));
+            ep_, buffer_, descriptor_, peer_, remote_, cq_, std::move(receiver));
     }
 
     [[nodiscard]] auto get_env() const noexcept -> fabric_env { return fabric_env{cq_}; }
@@ -149,8 +178,9 @@ public:
 private:
     endpoint* ep_;
     std::span<const std::byte> buffer_;
-    rma_addr remote_addr_;
-    mr_key key_;
+    mr_descriptor descriptor_;
+    fabric_addr peer_;
+    remote_memory remote_;
     completion_queue* cq_;
 };
 
@@ -446,6 +476,27 @@ using atomic_sender = fetch_add_sender<T>;
 class rma_sender_factory {
 public:
     explicit rma_sender_factory(endpoint& ep) noexcept : ep_(&ep) {}
+
+    /// Read from an explicit peer using a local registration. The endpoint,
+    /// CQ, buffer, and registration must remain alive until completion.
+    /// The buffer size must fit the exported remote range.
+    [[nodiscard]] auto read_from(std::span<std::byte> buffer,
+                                 memory_region& local_mr,
+                                 fabric_addr peer,
+                                 remote_memory remote,
+                                 completion_queue* cq) const noexcept -> read_sender {
+        return read_sender(ep_, buffer, local_mr.descriptor(), peer, remote, cq);
+    }
+
+    /// Write to an explicit peer. Borrowed resources and the source buffer
+    /// must remain valid until completion; the source must fit the remote range.
+    [[nodiscard]] auto write_to(std::span<const std::byte> buffer,
+                                memory_region& local_mr,
+                                fabric_addr peer,
+                                remote_memory remote,
+                                completion_queue* cq) const noexcept -> write_sender {
+        return write_sender(ep_, buffer, local_mr.descriptor(), peer, remote, cq);
+    }
 
     /**
      * @brief Creates a read sender.

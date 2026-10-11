@@ -46,6 +46,12 @@ struct provider {
     void* expected_result{};
     void* expected_result_descriptor{};
     std::uint64_t remote_value{42};
+    void* local_descriptor{};
+    fi_addr_t peer{};
+    std::uint64_t remote_address{};
+    std::uint64_t remote_key{};
+    std::size_t submitted_bytes{};
+    int submission_status{};
     fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
@@ -60,23 +66,25 @@ struct provider {
         .size = sizeof(fi_ops_rma),
         .read = [](fid_ep* ep,
                    void*,
-                   std::size_t,
-                   void*,
-                   fi_addr_t,
-                   std::uint64_t,
-                   std::uint64_t,
+                   std::size_t length,
+                   void* descriptor,
+                   fi_addr_t peer,
+                   std::uint64_t address,
+                   std::uint64_t key,
                    void* ctx) -> ssize_t {
-            return static_cast<provider*>(ep->fid.context)->post(ctx);
+            return static_cast<provider*>(ep->fid.context)
+                ->post_rma(length, descriptor, peer, address, key, ctx);
         },
         .write = [](fid_ep* ep,
                     const void*,
-                    std::size_t,
-                    void*,
-                    fi_addr_t,
-                    std::uint64_t,
-                    std::uint64_t,
+                    std::size_t length,
+                    void* descriptor,
+                    fi_addr_t peer,
+                    std::uint64_t address,
+                    std::uint64_t key,
                     void* ctx) -> ssize_t {
-            return static_cast<provider*>(ep->fid.context)->post(ctx);
+            return static_cast<provider*>(ep->fid.context)
+                ->post_rma(length, descriptor, peer, address, key, ctx);
         },
     };
     fi_ops_atomic atomics{
@@ -154,6 +162,19 @@ struct provider {
         pending.push_back(ctx);
         return 0;
     }
+    auto post_rma(std::size_t length,
+                  void* descriptor,
+                  fi_addr_t destination,
+                  std::uint64_t address,
+                  std::uint64_t key,
+                  void* ctx) -> ssize_t {
+        submitted_bytes = length;
+        local_descriptor = descriptor;
+        peer = destination;
+        remote_address = address;
+        remote_key = key;
+        return submission_status ? submission_status : post(ctx);
+    }
     auto store_result(void* result, void* descriptor, void* ctx) -> ssize_t {
         if (expected_result &&
             (result != expected_result || descriptor != expected_result_descriptor)) {
@@ -169,6 +190,52 @@ struct provider {
     }
 };
 }  // namespace
+
+TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progress]") {
+    const auto write = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
+    const auto short_remote = GENERATE(false, true);
+    provider fabric;
+    fabric.submission_status = status;
+    std::array<std::byte, 16> storage{};
+    fid_mr native_mr{.fid = {.ops = &fabric.ops}, .mem_desc = &native_mr};
+    loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(), &native_mr, storage.data(), storage.size())};
+    const loom::fabric_addr peer{19};
+    const loom::remote_memory remote{24, 0x123456789abcdef0ULL, short_remote ? 15u : 16u};
+    completion_state state;
+    auto run = [&](auto sender) {
+        auto operation = loom::execution::connect(std::move(sender), receiver{&state});
+        loom::execution::start(operation);
+        if (short_remote) {
+            REQUIRE(state.calls == 1);
+            REQUIRE(state.error == loom::errc::invalid_argument);
+            REQUIRE(fabric.submitted_bytes == 0);
+        } else {
+            REQUIRE(fabric.submitted_bytes == storage.size());
+            REQUIRE(fabric.peer == peer.get());
+            REQUIRE(fabric.local_descriptor == &native_mr);
+            REQUIRE(fabric.remote_address == remote.addr);
+            REQUIRE(fabric.remote_key == remote.key);
+            if (status) {
+                REQUIRE(state.calls == 1);
+                REQUIRE(state.error == loom::make_error_code_from_fi_errno(-status));
+            } else {
+                REQUIRE(state.calls == 0);
+                REQUIRE(loom::execution::poll_completions(fabric.cq).value() == 1);
+                REQUIRE(state.calls == 1);
+                REQUIRE_FALSE(state.error);
+                REQUIRE(state.bytes == (write ? 0 : storage.size()));
+            }
+        }
+        REQUIRE(fabric.pending.empty());
+    };
+    const auto operations = loom::rma_async(fabric.ep);
+    if (write)
+        run(operations.write_to(storage, mr, peer, remote, &fabric.cq));
+    else
+        run(operations.read_from(storage, mr, peer, remote, &fabric.cq));
+}
 
 TEST_CASE("compare swap senders compare before replacing remote data", "[execution][progress]") {
     const auto expected = GENERATE(std::uint64_t{42}, std::uint64_t{84});

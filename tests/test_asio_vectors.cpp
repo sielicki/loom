@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/asio.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
+#include <loom/detail/impl/memory_impl.hpp>
 
 #include <array>
 #include <cstring>
@@ -18,6 +19,24 @@ struct vector_provider {
     void* context{};
     std::size_t remote_length{};
     bool throw_on_submit{};
+    fi_addr_t peer{};
+    std::uint64_t remote_address{};
+    std::uint64_t remote_key{};
+    std::vector<void*> descriptors;
+    int submission_status{};
+
+    static auto capture_rma(fid_ep* ep, const fi_msg_rma* msg) -> ssize_t {
+        auto& self = *static_cast<vector_provider*>(ep->fid.context);
+        REQUIRE(msg->rma_iov_count == 1);
+        self.remote_length = msg->rma_iov[0].len;
+        self.remote_address = msg->rma_iov[0].addr;
+        self.remote_key = msg->rma_iov[0].key;
+        self.peer = msg->addr;
+        if (msg->desc)
+            self.descriptors.assign(msg->desc, msg->desc + msg->iov_count);
+        return self.submission_status ? self.submission_status
+                                      : capture(ep, msg->msg_iov, msg->iov_count, msg->context);
+    }
 
     static auto capture(fid_ep* ep, const iovec* iov, std::size_t count, void* context) -> ssize_t {
         auto& self = *static_cast<vector_provider*>(ep->fid.context);
@@ -71,15 +90,9 @@ struct vector_provider {
     fi_ops_rma rma{
         .size = sizeof(fi_ops_rma),
         .readmsg =
-            [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) {
-                static_cast<vector_provider*>(ep->fid.context)->remote_length = msg->rma_iov[0].len;
-                return capture(ep, msg->msg_iov, msg->iov_count, msg->context);
-            },
+            [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) { return capture_rma(ep, msg); },
         .writemsg =
-            [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) {
-                static_cast<vector_provider*>(ep->fid.context)->remote_length = msg->rma_iov[0].len;
-                return capture(ep, msg->msg_iov, msg->iov_count, msg->context);
-            },
+            [](fid_ep* ep, const fi_msg_rma* msg, std::uint64_t) { return capture_rma(ep, msg); },
     };
     fid_ep handle{
         .fid = {.context = this, .ops = &ops}, .msg = &messages, .rma = &rma, .tagged = &tags};
@@ -93,6 +106,68 @@ struct vector_provider {
     }
 };
 }  // namespace
+
+TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpoint]") {
+    const auto read = GENERATE(false, true);
+    const auto helper = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
+    const auto short_remote = GENERATE(false, true);
+    vector_provider native;
+    native.submission_status = status;
+    ::asio::io_context ioc;
+    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    std::array<std::byte, 8> storage{};
+    fid_mr handle{.fid = {.ops = &native.ops}, .mem_desc = &handle};
+    loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(), &handle, storage.data(), storage.size())};
+    const loom::fabric_addr peer{23};
+    const loom::remote_memory remote{32, 0x123456789abcdef0ULL, short_remote ? 7u : 8u};
+    std::array buffers{::asio::buffer(storage.data(), 3), ::asio::buffer(storage.data() + 3, 5)};
+    int completed{};
+    auto handler =
+        ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
+            ++completed;
+            if (short_remote)
+                REQUIRE(error == loom::errc::invalid_argument);
+            else if (status)
+                REQUIRE(error == loom::make_error_code_from_fi_errno(-status));
+            else
+                REQUIRE_FALSE(error);
+            REQUIRE(bytes == (short_remote || status ? 0 : storage.size()));
+        });
+    if (helper) {
+        if (read)
+            loom::asio::initiate_fabric_read{ep.native_handle()}(
+                handler, buffers, mr, remote, peer);
+        else
+            loom::asio::initiate_fabric_write{ep.native_handle()}(
+                handler, buffers, mr, remote, peer);
+    } else if (read) {
+        ep.async_read_from(buffers, mr, peer, remote, handler);
+    } else {
+        ep.async_write_to(buffers, mr, peer, remote, handler);
+    }
+    REQUIRE(completed == 0);
+    if (!short_remote) {
+        REQUIRE(native.peer == peer.get());
+        REQUIRE(native.remote_address == remote.addr);
+        REQUIRE(native.remote_key == remote.key);
+        REQUIRE(native.remote_length == storage.size());
+        REQUIRE(native.descriptors == std::vector<void*>{&handle, &handle});
+    }
+    buffers = {};
+    if (!short_remote && !status) {
+        REQUIRE(native.buffers.size() == 2);
+        REQUIRE(native.buffers[0].iov_base == storage.data());
+        REQUIRE(native.buffers[1].iov_base == storage.data() + 3);
+        loom::completion_event event;
+        loom::asio::dispatch_asio_completion(native.context, event);
+    } else {
+        REQUIRE(native.context == nullptr);
+    }
+    ioc.run();
+    REQUIRE(completed == 1);
+}
 
 TEST_CASE("Asio operations retain and submit every buffer", "[asio][endpoint]") {
     const auto operation = GENERATE(0, 1, 2, 3, 4, 5);

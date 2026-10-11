@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace loom;
 
@@ -92,6 +93,36 @@ struct rma_provider {
     }
 };
 }  // namespace
+
+TEST_CASE("explicit-peer RMA rejects unavailable native operations", "[rma]") {
+    const auto missing = GENERATE(0, 1, 2, 3);
+    rma_provider native;
+    auto ep = native.endpoint();
+    if (missing == 0)
+        ep = {};
+    else if (missing == 1)
+        native.handle.rma = nullptr;
+    else if (missing == 2)
+        native.rma_ops = {.size = sizeof(fi_ops_rma)};
+    else
+        native.rma_ops.size = sizeof(std::size_t);
+    std::array<std::byte, 8> buffer{};
+    const remote_memory remote{0, 1, buffer.size()};
+    const fabric_addr peer{19};
+    const std::array iov{iovec{buffer.data(), buffer.size()}};
+    const std::array remote_iov{rma::rma_iov{remote}};
+    const std::array results{
+        rma::read_to(ep, buffer, mr_descriptor{}, peer, remote),
+        rma::write_to(ep, buffer, mr_descriptor{}, peer, remote),
+        rma::readv_to(ep, iov, {}, peer, remote_iov),
+        rma::writev_to(ep, iov, {}, peer, remote_iov),
+    };
+    for (const auto& result : results) {
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() == (missing == 0 ? errc::invalid_argument : errc::not_supported));
+    }
+    REQUIRE(native.calls == 0);
+}
 
 TEST_CASE("vectored RMA preserves every remote segment", "[rma]") {
     rma_provider native;

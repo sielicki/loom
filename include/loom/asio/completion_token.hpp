@@ -343,20 +343,31 @@ struct initiate_fabric_write {
      * @param buffers The local buffers.
      * @param mr The memory region.
      * @param remote The remote memory descriptor.
+     * @param peer Destination peer (ignored by connected endpoints).
      */
     template <typename Handler, typename ConstBufferSequence>
     void operator()(Handler&& handler,
                     const ConstBufferSequence& buffers,
                     memory_region& mr,
-                    remote_memory remote) const {
+                    remote_memory remote,
+                    fabric_addr peer = fabric_addrs::unspecified) const {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<false>(
             std::forward<Handler>(handler), executor, ep_, buffers, mr.descriptor());
         ctx->set_transfer_size(ctx->buffers().bytes);
 
+        if (ctx->buffers().bytes > remote.length) {
+            finish_asio_submission(std::move(ctx), make_error_result<void>(errc::invalid_argument));
+            return;
+        }
+
         const std::array remote_iov{rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-        auto result = rma::writev(
-            *ep_, ctx->buffers().iov, ctx->buffers().descriptors, remote_iov, ctx->as_fi_context());
+        auto result = rma::writev_to(*ep_,
+                                     ctx->buffers().iov,
+                                     ctx->buffers().descriptors,
+                                     peer,
+                                     remote_iov,
+                                     ctx->as_fi_context());
         finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
@@ -377,20 +388,31 @@ struct initiate_fabric_read {
      * @param buffers The local buffers.
      * @param mr The memory region.
      * @param remote The remote memory descriptor.
+     * @param peer Destination peer (ignored by connected endpoints).
      */
     template <typename Handler, typename MutableBufferSequence>
     void operator()(Handler&& handler,
                     const MutableBufferSequence& buffers,
                     memory_region& mr,
-                    remote_memory remote) const {
+                    remote_memory remote,
+                    fabric_addr peer = fabric_addrs::unspecified) const {
         auto executor = ::asio::get_associated_executor(handler);
         auto ctx = make_buffered_asio_context<true>(
             std::forward<Handler>(handler), executor, ep_, buffers, mr.descriptor());
         ctx->set_transfer_size(ctx->buffers().bytes);
 
+        if (ctx->buffers().bytes > remote.length) {
+            finish_asio_submission(std::move(ctx), make_error_result<void>(errc::invalid_argument));
+            return;
+        }
+
         const std::array remote_iov{rma::rma_iov{remote.addr, ctx->buffers().bytes, remote.key}};
-        auto result = rma::readv(
-            *ep_, ctx->buffers().iov, ctx->buffers().descriptors, remote_iov, ctx->as_fi_context());
+        auto result = rma::readv_to(*ep_,
+                                    ctx->buffers().iov,
+                                    ctx->buffers().descriptors,
+                                    peer,
+                                    remote_iov,
+                                    ctx->as_fi_context());
         finish_asio_submission(std::move(ctx), std::move(result));
     }
 };
