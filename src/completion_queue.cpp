@@ -103,6 +103,7 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
 
     completion_event event{};
     event.context = context_ptr<void>{entry.op_context};
+    event.buffer = entry.buf;
     event.error = std::error_code{};
     event.bytes_transferred = entry.len;
     event.flags = entry.flags;
@@ -145,6 +146,7 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
 
     completion_event event{};
     event.context = context_ptr<void>{entry.op_context};
+    event.buffer = entry.buf;
     event.error = std::error_code{};
     event.bytes_transferred = entry.len;
     event.flags = entry.flags;
@@ -181,6 +183,7 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
     for (auto i : std::views::iota(0uz, count)) {
         events[i] = {};
         events[i].context = context_ptr<void>{fi_entries[i].op_context};
+        events[i].buffer = fi_entries[i].buf;
         events[i].error = std::error_code{};
         events[i].bytes_transferred = fi_entries[i].len;
         events[i].flags = fi_entries[i].flags;
@@ -206,6 +209,7 @@ auto completion_queue::read_error(int status) const -> result<completion_event> 
 
     completion_event event{};
     event.context = context_ptr<void>{entry.op_context};
+    event.buffer = entry.buf;
     event.error = make_error_code_from_fi_errno(entry.err);
     event.flags = entry.flags;
     event.bytes_transferred = entry.len;

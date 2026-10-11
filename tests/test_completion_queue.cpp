@@ -5,12 +5,14 @@
 #include <array>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace {
 struct mock_cq {
     int read_status{-FI_EAVAIL};
     int error_reads{};
     int context{};
+    std::array<std::byte, 64> receive_buffer{};
     fi_wait_obj wait_object{FI_WAIT_FD};
     bool wait_requested{};
     fi_ops ops{
@@ -38,22 +40,33 @@ struct mock_cq {
             if (self.read_status != 1) {
                 return self.read_status;
             }
-            *static_cast<fi_cq_tagged_entry*>(buffer) = {
-                .op_context = &self.context, .len = 7, .tag = 99};
+            *static_cast<fi_cq_tagged_entry*>(buffer) = {.op_context = &self.context,
+                                                         .flags = FI_RECV | FI_MULTI_RECV,
+                                                         .len = 7,
+                                                         .buf = self.receive_buffer.data() + 16,
+                                                         .tag = 99};
             self.read_status = -FI_EAGAIN;
             return 1;
         },
         .readerr = [](fid_cq* cq, fi_cq_err_entry* error, std::uint64_t) -> ssize_t {
             auto& self = *static_cast<mock_cq*>(cq->fid.context);
             ++self.error_reads;
-            *error = {.op_context = &self.context, .len = 3, .tag = 42, .err = FI_ECANCELED};
+            *error = {.op_context = &self.context,
+                      .flags = FI_RECV,
+                      .len = 3,
+                      .buf = self.receive_buffer.data() + 32,
+                      .tag = 42,
+                      .err = FI_ECANCELED};
             self.read_status = 1;
             return 1;
+        },
+        .sread = [](fid_cq* cq, void* buffer, std::size_t count, const void*, int) -> ssize_t {
+            return cq->ops->read(cq, buffer, count);
         },
     };
     fid_cq handle{.fid = {.context = this, .ops = &ops}, .ops = &cq_ops};
     loom::completion_queue queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
-        loom::get_default_resource(), &handle)};
+        loom::get_default_resource(), &handle, loom::runtime_progress_policy{}, true)};
 };
 }  // namespace
 
@@ -129,4 +142,29 @@ TEST_CASE("native waits consult the fabric before blocking", "[completion_queue]
     state.status = -FI_EINVAL;
     REQUIRE(provider.queue.try_wait(fabric).error() == loom::errc::invalid_argument);
     REQUIRE_FALSE(provider.queue.try_wait(loom::fabric{}));
+}
+
+TEST_CASE("completion reads preserve received message locations", "[completion_queue][buffer]") {
+    const auto method = GENERATE(0, 1, 2);
+    const auto error = GENERATE(false, true);
+    mock_cq provider;
+    provider.read_status = error ? -FI_EAVAIL : 1;
+    loom::completion_event event;
+    if (method == 0) {
+        auto result = provider.queue.poll();
+        REQUIRE(result);
+        event = *result;
+    } else if (method == 1) {
+        auto result = provider.queue.wait(std::chrono::milliseconds{0});
+        REQUIRE(result);
+        event = *result;
+    } else {
+        std::array<loom::completion_event, 2> results;
+        REQUIRE(provider.queue.poll_batch(results) == 1);
+        event = results.front();
+    }
+    REQUIRE(event.buffer == provider.receive_buffer.data() + (error ? 32 : 16));
+    REQUIRE(event.bytes_transferred == (error ? 3 : 7));
+    REQUIRE(event.has_error() == error);
+    REQUIRE((event.flags & FI_RECV) != 0);
 }

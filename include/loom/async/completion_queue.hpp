@@ -71,6 +71,7 @@ struct completion_event : event_base<completion_event> {
     std::size_t len{0};                ///< Length of the data
     std::uint64_t data{0};             ///< Immediate data if present
     cq_error_info error_info{};        ///< Extended error information
+    void* buffer{nullptr};             ///< Received message location, including multi-receive
 
     /**
      * @brief Returns the error code from this completion.
