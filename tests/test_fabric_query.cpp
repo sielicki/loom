@@ -201,6 +201,9 @@ TEST_CASE("combined_capabilities multiple", "[fabric_query]") {
 TEST_CASE("combined_capabilities empty", "[fabric_query]") {
     using combined = loom::combined_capabilities<>;
 
+    static_assert(loom::fabric_capability<combined>);
+    static_assert(combined::required_caps == loom::caps{0ULL});
+    static_assert(combined::optional_caps == loom::caps{0ULL});
     static_assert(combined::ep_type == loom::endpoint_types::msg);
 }
 

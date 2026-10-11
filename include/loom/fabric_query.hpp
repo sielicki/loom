@@ -119,9 +119,11 @@ struct datagram_messaging {
  */
 template <fabric_capability... Caps>
 struct combined_capabilities {
-    static constexpr caps required_caps = (Caps::required_caps | ...);  ///< Combined required caps
+    static constexpr caps required_caps =
+        (caps{0ULL} | ... | Caps::required_caps);  ///< Combined required caps
 
-    static constexpr caps optional_caps = (Caps::optional_caps | ...);  ///< Combined optional caps
+    static constexpr caps optional_caps =
+        (caps{0ULL} | ... | Caps::optional_caps);  ///< Combined optional caps
 
     static constexpr loom::endpoint_type ep_type = []() consteval {
         if constexpr (sizeof...(Caps) == 0) {
