@@ -83,6 +83,7 @@
             patches = (old.patches or [ ]) ++ [
               ./nix/pkgs/libfabric/name-server-cleanup.patch
               ./nix/pkgs/libfabric/psm3-endpoint-cleanup.patch
+              ./nix/pkgs/libfabric/psm3-discovery-cleanup.patch
             ];
             doCheck = !isDarwin && pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
             checkPhase = ''
@@ -95,6 +96,16 @@
                 -o test-name-server
               ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
                 timeout 30 ./test-name-server
+            '' + lib.optionalString pkgs.stdenv.hostPlatform.isx86_64 ''
+              "$CC" -g -O1 -D_GNU_SOURCE -Iinclude \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                ${./nix/pkgs/libfabric/test-psm3-names.c} \
+                -Lsrc/.libs -Wl,-rpath,"$PWD/src/.libs" -lfabric \
+                -o test-psm3-names
+              ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+                PSM3_DEVICES=self FI_PSM3_NAME_SERVER=1 \
+                timeout 60 ./test-psm3-names
+            '' + ''
               runHook postCheck
             '';
           });

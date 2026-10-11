@@ -1,0 +1,46 @@
+Free successfully parsed addresses that are not PSM3 endpoint names.
+They are only probes; normal hostname/service lookup still follows.
+Retain ownership transfer for native PSM3 source and destination names.
+
+Based on ofiwg/libfabric v2.7.0.
+
+--- a/prov/psm3/src/psmx3_init.c
++++ b/prov/psm3/src/psmx3_init.c
+@@ -724,21 +724,23 @@
+ 	}
+ 
+ 	/* Set src or dest to used supplied address in native format */
+-	if (node &&
+-	    !ofi_str_toaddr(node, &fmt, &addr, &len) &&
+-	    fmt == FI_ADDR_PSMX3) {
+-		if (flags & FI_SOURCE) {
+-			src_addr = addr;
+-			PSMX3_INFO(&psmx3_prov, FI_LOG_CORE,
+-				"'%s' is taken as src_addr: <unit=%d, port=%d, service=%d>\n",
+-				node, src_addr->unit, src_addr->port, src_addr->service);
++	if (node && !ofi_str_toaddr(node, &fmt, &addr, &len)) {
++		if (fmt == FI_ADDR_PSMX3) {
++			if (flags & FI_SOURCE) {
++				src_addr = addr;
++				PSMX3_INFO(&psmx3_prov, FI_LOG_CORE,
++					"'%s' is taken as src_addr: <unit=%d, port=%d, service=%d>\n",
++					node, src_addr->unit, src_addr->port, src_addr->service);
++			} else {
++				dest_addr = addr;
++				PSMX3_INFO(&psmx3_prov, FI_LOG_CORE,
++					"'%s' is taken as dest_addr: <epid=%s>\n",
++					node, psm3_epid_fmt(dest_addr->epid, 0));
++			}
++			node = NULL;
+ 		} else {
+-			dest_addr = addr;
+-			PSMX3_INFO(&psmx3_prov, FI_LOG_CORE,
+-				"'%s' is taken as dest_addr: <epid=%s>\n",
+-				node, psm3_epid_fmt(dest_addr->epid, 0));
+-		}
+-		node = NULL;
++			free(addr);
++		}
+ 	}
+ 
+ 	/* Initialize src address based on the "host:unit:port" format */

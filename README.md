@@ -21,11 +21,13 @@ environment or `nix build .#libfabric` to build that dependency directly.
 `flake.lock` records the exact source revision. CMake can also use an
 installed libfabric through `pkg-config`.
 
-The Nix dependency patches name-server cleanup and PSM3 endpoint retirement:
-registrations left by clients are freed at shutdown, and endpoint close removes
-its matching name and releases its owned context. Native Linux builds test
+The Nix dependency patches name-server cleanup, PSM3 endpoint retirement,
+and discarded discovery addresses. Registrations left by clients are freed
+at shutdown, and endpoint close removes its matching name and releases its
+owned context. Native Linux builds test
 name-server cleanup with AddressSanitizer, LeakSanitizer, and
-UndefinedBehaviorSanitizer without requiring a fabric device. System
+UndefinedBehaviorSanitizer. On x86-64 they also test repeated PSM3 endpoint
+creation and close using its self transport, without a fabric device. System
 libfabric installations need their own fixes.
 
 Set `LOOM_LIBFABRIC_STATIC=ON` to link the libfabric archive, including its
