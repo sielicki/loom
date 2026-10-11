@@ -366,7 +366,10 @@
                 src = inputs.openmpi-src;
                 oacSource = inputs.openmpi-oac-src;
                 mpiStandardSource = inputs.mpi-standard-src;
+                pmix = self'.packages.openmpi-pmix;
+                prrte = pkgs.prrte.override { pmix = self'.packages.openmpi-pmix; };
               };
+              openmpi-pmix = pkgs.callPackage ./examples/openmpi/pmix.nix { };
               openmpi-bridge = pkgs.callPackage ./examples/openmpi/bridge.nix {
                 stdenv = pkgs.gcc15Stdenv;
                 inherit (self'.packages) loom;

@@ -1,0 +1,8 @@
+--- a/src/runtime/pmix_init.c
++++ b/src/runtime/pmix_init.c
+@@ -334,5 +334,4 @@
+     PMIX_CONSTRUCT(&pmix_globals.nspaces, pmix_list_t);
+     PMIX_CONSTRUCT(&pmix_globals.keyindex, pmix_keyindex_t);
+-    pmix_pointer_array_init(pmix_globals.keyindex.table, 1024, INT_MAX, 128);
+     PMIX_CONSTRUCT(&pmix_client_globals.groups, pmix_list_t);
+     /* need to hold off checking the hotel init return code

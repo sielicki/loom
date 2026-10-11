@@ -93,6 +93,10 @@ Its Open MPI Autoconf macros and MPI binding-generator metadata use the
 exact submodule revisions recorded by that commit. PMIx, PRRTE, hwloc,
 libevent and the compiler come from the locked Nix dependency set; libfabric
 uses Loom's pinned and patched build.
+PMIx retains the key-index allocation made by its constructor instead of
+initializing it a second time. Both Open MPI and its PRRTE launcher use this
+patched PMIx. The PMIx package runs an installed runtime initialization and
+finalization check under ASan/UBSan with leak detection.
 
 Develop against the same sources and configure options:
 
