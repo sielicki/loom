@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "loom/core/allocator.hpp"
@@ -128,6 +130,48 @@ struct event_queue_impl {
     bool wait_enabled{false};             ///< Whether a native wait object was requested.
     std::size_t capacity{};               ///< Requested minimum queue capacity.
 
+private:
+    std::atomic_flag buffer_busy_{};
+    std::optional<std::pmr::vector<std::max_align_t>> read_buffer_;
+
+public:
+    // Retain one aligned buffer for ordinary reads. A concurrent or reentrant
+    // read uses separate storage without waiting for an outstanding sread.
+    class buffer_lease {
+        struct claim {
+            std::atomic_flag& busy;
+            const bool acquired;
+
+            explicit claim(std::atomic_flag& flag) noexcept
+                : busy(flag), acquired(!busy.test_and_set(std::memory_order_acquire)) {}
+            ~claim() {
+                if (acquired)
+                    busy.clear(std::memory_order_release);
+            }
+            claim(const claim&) = delete;
+            auto operator=(const claim&) -> claim& = delete;
+        } claim_;
+        std::pmr::vector<std::max_align_t> fallback_;
+        std::span<std::byte> bytes_;
+
+    public:
+        buffer_lease(event_queue_impl& owner, memory_resource* resource)
+            : claim_(owner.buffer_busy_), fallback_(resource ? resource : get_default_resource()) {
+            auto* storage = &fallback_;
+            if (claim_.acquired) {
+                if (!owner.read_buffer_)
+                    owner.read_buffer_.emplace(fallback_.get_allocator());
+                storage = &*owner.read_buffer_;
+            }
+            const auto size = owner.event_buffer_size;
+            storage->resize(size / sizeof(std::max_align_t) +
+                            (size % sizeof(std::max_align_t) != 0));
+            bytes_ = std::as_writable_bytes(std::span{*storage}).first(size);
+        }
+
+        [[nodiscard]] auto bytes() const noexcept -> std::span<std::byte> { return bytes_; }
+    };
+
     event_queue_impl() = default;
 
     /// @brief Constructs event_queue_impl with a libfabric event queue handle.
@@ -217,12 +261,8 @@ auto event_queue::poll() -> std::optional<fabric_event> {
     }
 
     std::uint32_t event_type = 0;
-    const auto units = impl_->event_buffer_size / sizeof(std::max_align_t) +
-                       (impl_->event_buffer_size % sizeof(std::max_align_t) != 0);
-    auto* allocator = impl_.get_deleter().resource;
-    std::pmr::vector<std::max_align_t> storage(units,
-                                               allocator ? allocator : get_default_resource());
-    const auto buffer = std::as_writable_bytes(std::span{storage}).first(impl_->event_buffer_size);
+    detail::event_queue_impl::buffer_lease storage{*impl_, impl_.get_deleter().resource};
+    const auto buffer = storage.bytes();
     std::uint64_t flags = 0;
 
     ssize_t ret = ::fi_eq_read(impl_->eq, &event_type, buffer.data(), buffer.size(), flags);
@@ -285,12 +325,8 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
         timeout_ms = static_cast<int>(timeout->count());
     }
 
-    const auto units = impl_->event_buffer_size / sizeof(std::max_align_t) +
-                       (impl_->event_buffer_size % sizeof(std::max_align_t) != 0);
-    auto* allocator = impl_.get_deleter().resource;
-    std::pmr::vector<std::max_align_t> storage(units,
-                                               allocator ? allocator : get_default_resource());
-    const auto buffer = std::as_writable_bytes(std::span{storage}).first(impl_->event_buffer_size);
+    detail::event_queue_impl::buffer_lease storage{*impl_, impl_.get_deleter().resource};
+    const auto buffer = storage.bytes();
 
     ssize_t ret =
         ::fi_eq_sread(impl_->eq, &event_type, buffer.data(), buffer.size(), timeout_ms, flags);

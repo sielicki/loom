@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <semaphore>
+#include <thread>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -32,9 +34,13 @@ struct queue_provider {
     std::vector<std::byte> error_data;
     bool oversized_error{};
     bool missing_error_data{};
+    void* read_buffer{};
+    std::size_t read_capacity{};
 
     auto read_event(fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t length) -> ssize_t {
         ++calls;
+        read_buffer = buffer;
+        read_capacity = length;
         *type = native_event;
         if (status != 1)
             return status;
@@ -196,6 +202,7 @@ struct queue_provider {
 struct limited_resource : loom::memory_resource {
     int remaining{-1};
     int live{};
+    int allocations{};
 
     auto do_allocate(std::size_t bytes, std::size_t alignment) -> void* override {
         if (remaining == 0)
@@ -204,6 +211,7 @@ struct limited_resource : loom::memory_resource {
             --remaining;
         auto* ptr = std::pmr::new_delete_resource()->allocate(bytes, alignment);
         ++live;
+        ++allocations;
         return ptr;
     }
     void do_deallocate(void* ptr, std::size_t bytes, std::size_t alignment) override {
@@ -339,6 +347,96 @@ TEST_CASE("event polling returns no event after an empty read", "[queue][poll]")
     REQUIRE(provider.error_reads == 0);
 }
 
+TEST_CASE("event reads reuse native storage after moving the queue", "[queue][buffer_reuse]") {
+    const auto size = GENERATE(sizeof(fi_eq_entry), 1024UZ, 1025UZ, 65537UZ);
+    limited_resource resource;
+    queue_provider provider;
+    provider.status = -FI_EAGAIN;
+    auto created = loom::event_queue::create(
+        provider.fabric, {.wait_obj = true, .event_buffer_size = size}, &resource);
+    REQUIRE(created);
+    REQUIRE_FALSE(created->poll());
+    const auto warmed_allocations = resource.allocations;
+    auto queue = std::move(*created);
+    for (int i = 0; i < 100; ++i) {
+        REQUIRE_FALSE(queue.poll());
+        REQUIRE(queue.wait(std::chrono::milliseconds{0}).error() == loom::errc::again);
+        REQUIRE(provider.read_capacity == size);
+        REQUIRE(reinterpret_cast<std::uintptr_t>(provider.read_buffer) %
+                    alignof(std::max_align_t) ==
+                0);
+    }
+    CHECK(resource.allocations == warmed_allocations);
+    queue = {};
+    REQUIRE(resource.live == 0);
+}
+
+TEST_CASE("event polling progresses while another read is waiting", "[queue][buffer_reuse]") {
+    const auto size = GENERATE(1024UZ, 65537UZ);
+    limited_resource resource;
+    struct read_state {
+        std::binary_semaphore entered{0};
+        std::binary_semaphore release{0};
+        void* wait_buffer{};
+        void* poll_buffer{};
+        bool released{};
+
+        static auto
+        write(fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t size, std::byte value)
+            -> ssize_t {
+            *type = FI_CONNECTED;
+            auto bytes = std::span{static_cast<std::byte*>(buffer), size};
+            std::ranges::fill(bytes, value);
+            const fi_eq_cm_entry entry{.fid = &eq->fid};
+            std::memcpy(buffer, &entry, sizeof(entry));
+            return static_cast<ssize_t>(size);
+        }
+    } state;
+    queue_provider provider;
+    provider.native_eq.fid.context = &state;
+    provider.eq_ops.read = [](fid_eq* eq,
+                              std::uint32_t* type,
+                              void* buffer,
+                              std::size_t size,
+                              std::uint64_t) -> ssize_t {
+        auto& state = *static_cast<read_state*>(eq->fid.context);
+        state.poll_buffer = buffer;
+        return read_state::write(eq, type, buffer, size, std::byte{0x52});
+    };
+    provider.eq_ops.sread =
+        [](fid_eq* eq, std::uint32_t* type, void* buffer, std::size_t size, int, std::uint64_t)
+        -> ssize_t {
+        auto& state = *static_cast<read_state*>(eq->fid.context);
+        state.wait_buffer = buffer;
+        const auto count = read_state::write(eq, type, buffer, size, std::byte{0x41});
+        state.entered.release();
+        state.released = state.release.try_acquire_for(std::chrono::seconds{5});
+        return count;
+    };
+    auto queue = loom::event_queue::create(
+        provider.fabric, {.wait_obj = true, .event_buffer_size = size}, &resource);
+    REQUIRE(queue);
+    loom::result<loom::fabric_event> waited =
+        loom::make_error_result<loom::fabric_event>(loom::errc::again);
+    std::jthread reader{[&] { waited = queue->wait(std::chrono::seconds{5}); }};
+    REQUIRE(state.entered.try_acquire_for(std::chrono::seconds{5}));
+    // A failed fallback allocation must not release the waiting reader's claim.
+    resource.remaining = 0;
+    CHECK_THROWS_AS(queue->poll(), std::bad_alloc);
+    resource.remaining = -1;
+    const auto polled = queue->poll();
+    state.release.release();
+    reader.join();
+    REQUIRE(state.released);
+    REQUIRE(state.wait_buffer != state.poll_buffer);
+    REQUIRE(polled);
+    REQUIRE(waited);
+    REQUIRE(polled->info.size() == size - sizeof(fi_eq_cm_entry));
+    REQUIRE(waited->info.size() == polled->info.size());
+    REQUIRE(std::ranges::all_of(polled->info, [](auto byte) { return byte == std::byte{0x52}; }));
+    REQUIRE(std::ranges::all_of(waited->info, [](auto byte) { return byte == std::byte{0x41}; }));
+}
+
 TEST_CASE("event polling preserves read failures without consuming operation errors",
           "[queue][poll]") {
     const auto status = GENERATE(-FI_EINTR, -FI_EINVAL, -FI_EIO);
@@ -470,7 +568,7 @@ TEST_CASE("connection events own their native request information", "[queue][con
 
 TEST_CASE("connection information is released after allocation failures", "[queue][connreq]") {
     const auto waiting = GENERATE(false, true);
-    const auto remaining = GENERATE(1, 2, 3);
+    const auto remaining = GENERATE(0, 1, 2);
     limited_resource resource;
     queue_provider provider;
     provider.native_event = FI_CONNREQ;
@@ -480,6 +578,9 @@ TEST_CASE("connection information is released after allocation failures", "[queu
     provider.private_data.assign(64, std::byte{0x42});
     auto queue = loom::event_queue::create(provider.fabric, {.wait_obj = waiting}, &resource);
     REQUIRE(queue);
+    provider.status = -FI_EAGAIN;
+    REQUIRE_FALSE(queue->poll());
+    provider.status = 1;
     const auto before = resource.live;
     resource.remaining = remaining;
     if (waiting) {
@@ -490,6 +591,9 @@ TEST_CASE("connection information is released after allocation failures", "[queu
     REQUIRE(resource.live == before);
     REQUIRE_FALSE(provider.connection_request);
     REQUIRE(provider.freed_infos == 1);
+    provider.status = -FI_EAGAIN;
+    resource.remaining = 0;
+    REQUIRE_FALSE(queue->poll());
     *queue = {};
     REQUIRE(resource.live == 0);
 }
@@ -564,6 +668,13 @@ TEST_CASE("event read allocation failure leaves the native event queued", "[queu
     REQUIRE(provider.calls == 0);
     REQUIRE(provider.connection_request);
     REQUIRE(provider.freed_infos == 0);
+    resource.remaining = -1;
+    auto event = waiting ? std::optional{queue->wait().value()} : queue->poll();
+    REQUIRE(event);
+    REQUIRE(event->connection_info);
+    provider.status = -FI_EAGAIN;
+    resource.remaining = 0;
+    REQUIRE_FALSE(queue->poll());
 }
 
 TEST_CASE("invalid event timeouts fail before allocating a read buffer", "[queue][payload]") {

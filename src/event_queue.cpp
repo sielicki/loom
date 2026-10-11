@@ -78,12 +78,8 @@ auto event_queue::poll() -> std::optional<fabric_event> {
     }
 
     std::uint32_t event_type = 0;
-    const auto units = impl_->event_buffer_size / sizeof(std::max_align_t) +
-                       (impl_->event_buffer_size % sizeof(std::max_align_t) != 0);
-    auto* allocator = impl_.get_deleter().resource;
-    std::pmr::vector<std::max_align_t> storage(units,
-                                               allocator ? allocator : get_default_resource());
-    const auto buffer = std::as_writable_bytes(std::span{storage}).first(impl_->event_buffer_size);
+    detail::event_queue_impl::buffer_lease storage{*impl_, impl_.get_deleter().resource};
+    const auto buffer = storage.bytes();
     std::uint64_t flags = 0;
 
     ssize_t ret = ::fi_eq_read(impl_->eq, &event_type, buffer.data(), buffer.size(), flags);
@@ -146,12 +142,8 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
         timeout_ms = static_cast<int>(timeout->count());
     }
 
-    const auto units = impl_->event_buffer_size / sizeof(std::max_align_t) +
-                       (impl_->event_buffer_size % sizeof(std::max_align_t) != 0);
-    auto* allocator = impl_.get_deleter().resource;
-    std::pmr::vector<std::max_align_t> storage(units,
-                                               allocator ? allocator : get_default_resource());
-    const auto buffer = std::as_writable_bytes(std::span{storage}).first(impl_->event_buffer_size);
+    detail::event_queue_impl::buffer_lease storage{*impl_, impl_.get_deleter().resource};
+    const auto buffer = storage.bytes();
 
     ssize_t ret =
         ::fi_eq_sread(impl_->eq, &event_type, buffer.data(), buffer.size(), timeout_ms, flags);

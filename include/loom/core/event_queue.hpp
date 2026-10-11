@@ -89,7 +89,10 @@ struct event_queue_attr {
     std::uint64_t signaling_vector{0};  ///< Signaling vector for interrupts
     /// Bytes available for one native event, including its header. Size this
     /// for the largest expected connection payload; providers may truncate
-    /// data that does not fit. The queue's memory resource backs each read.
+    /// data that does not fit. The queue's memory resource backs one cached
+    /// read buffer, allocated on first use and retained until queue destruction.
+    /// Overlapping reads allocate separate temporary buffers without waiting
+    /// for the cached buffer. Returned event payloads own their storage.
     std::size_t event_buffer_size{1024};
 };
 
