@@ -229,7 +229,7 @@ public:
 
         remote_memory remote{remote_addr_.get(), key_.get(), sizeof(T)};
 
-        if (!this->register_completion()) {
+        if (!this->register_completion(*ep_, completion_direction::transmit)) {
             return;
         }
         auto result =
@@ -365,7 +365,7 @@ public:
 
         remote_memory remote{remote_addr_.get(), key_.get(), sizeof(T)};
 
-        if (!this->register_completion()) {
+        if (!this->register_completion(*ep_, completion_direction::transmit)) {
             return;
         }
         auto result = atomic::compare_swap_to<operation_defaults::inherit_without_more>(
@@ -531,7 +531,7 @@ public:
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }
-        if (!this->register_completion())
+        if (!this->register_completion(*ep_, completion_direction::transmit))
             return;
         this->submit([&] {
             if constexpr (Operation == atomic::operation::sum) {

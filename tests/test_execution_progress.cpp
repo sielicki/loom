@@ -74,7 +74,9 @@ struct provider {
     std::size_t submitted_bytes{};
     int submission_status{};
     void* submitted_context{};
-    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops ops{.size = sizeof(fi_ops),
+               .close = [](fid*) { return 0; },
+               .bind = [](fid*, fid*, std::uint64_t) { return 0; }};
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
         .recv = [](fid_ep* ep, void*, std::size_t, void*, fi_addr_t, void* ctx) -> ssize_t {
@@ -241,7 +243,8 @@ struct provider {
     loom::endpoint ep;
 
     explicit provider(std::uint64_t receive_defaults = FI_MORE,
-                      std::uint64_t transmit_defaults = FI_FENCE)
+                      std::uint64_t transmit_defaults = FI_FENCE,
+                      bool bind_completions = true)
         : ep{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
               loom::get_default_resource(),
               &ep_handle,
@@ -251,7 +254,10 @@ struct provider {
               0UZ,
               loom::caps{},
               transmit_defaults,
-              receive_defaults)} {}
+              receive_defaults)} {
+        if (bind_completions)
+            REQUIRE(ep.bind_cq(cq, loom::cq_bind::transmit | loom::cq_bind::recv));
+    }
 
     auto post(void* ctx, std::uint64_t flags = 0) -> ssize_t {
         if (submission_status)
@@ -373,6 +379,112 @@ struct provider {
 };
 }  // namespace
 
+TEST_CASE("senders validate their directional completion queue", "[execution][progress][binding]") {
+    provider native{0, 0, false}, other;
+    using namespace loom;
+    enum class route { correct, wrong, unbound };
+    const auto binding = GENERATE(route::correct, route::wrong, route::unbound);
+    CAPTURE(binding);
+    std::array<std::byte, 16> storage{};
+    std::uint64_t input{3}, comparison{42}, result{};
+    const remote_memory remote{0x1000, 1, sizeof(result)};
+    completion_state state;
+    auto run = [&](auto make_sender, bool receive = false) {
+        // Keep the opposite direction bound even when the required one is absent.
+        if (binding != route::unbound || receive)
+            REQUIRE(native.ep.bind_tx_cq(native.cq));
+        if (binding != route::unbound || !receive)
+            REQUIRE(native.ep.bind_rx_cq(other.cq));
+        // Validate the current wrappers, not their addresses at bind time.
+        auto ep = std::move(native.ep);
+        auto tx = std::move(native.cq);
+        auto rx = std::move(other.cq);
+        auto& actual = receive ? rx : tx;
+        auto& opposite = receive ? tx : rx;
+        auto& supplied = binding == route::wrong ? opposite : actual;
+        auto operation = execution::connect(make_sender(ep, &supplied), receiver{&state});
+        execution::start(operation);
+        const bool rejected = binding != route::correct;
+        CHECK(state.calls == (rejected ? 1 : 0));
+        CHECK(state.error ==
+              (rejected ? make_error_code(errc::invalid_argument) : std::error_code{}));
+        CHECK(native.pending.empty() == rejected);
+        CHECK(native.submitted_flags == (rejected ? 0 : FI_COMPLETION));
+        if (!native.pending.empty()) {
+            completion_event event{.context = context_ptr<void>{native.take()},
+                                   .bytes_transferred = native.completion_length};
+            if (!rejected) {
+                CHECK_FALSE(opposite.dispatch(event));
+                CHECK(actual.dispatch(event));
+                CHECK_FALSE(actual.dispatch(event));
+            } else {
+                // Retire a pre-fix submission before its borrowed state is destroyed.
+                (void)supplied.dispatch(event);
+            }
+        }
+        REQUIRE(state.calls == 1);
+        REQUIRE(native.pending.empty());
+        REQUIRE(native.atomic_pending.empty());
+    };
+    SECTION("send") {
+        run([&](endpoint& ep, completion_queue* cq) { return async(ep).send(storage, cq); });
+    }
+    SECTION("receive") {
+        run([&](endpoint& ep, completion_queue* cq) { return async(ep).recv(storage, cq); }, true);
+    }
+    SECTION("tagged send") {
+        run([&](endpoint& ep, completion_queue* cq) {
+            return async(ep).tagged_send(storage, 42, cq);
+        });
+    }
+    SECTION("tagged receive") {
+        run([&](endpoint& ep,
+                completion_queue* cq) { return async(ep).tagged_recv(storage, 42, 0x80, cq); },
+            true);
+    }
+    SECTION("read") {
+        run([&](endpoint& ep, completion_queue* cq) {
+            return rma_async(ep).read(storage, rma_addr{0x1000}, mr_key{1}, cq);
+        });
+    }
+    SECTION("write") {
+        run([&](endpoint& ep, completion_queue* cq) {
+            return rma_async(ep).write(storage, rma_addr{0x1000}, mr_key{1}, cq);
+        });
+    }
+    SECTION("fetch add") {
+        run([&](endpoint& ep, completion_queue* cq) {
+            return rma_async(ep).fetch_add<std::uint64_t>(
+                rma_addr{0x1000}, 3, mr_key{1}, nullptr, cq);
+        });
+    }
+    SECTION("compare swap") {
+        run([&](endpoint& ep, completion_queue* cq) {
+            return rma_async(ep).compare_swap<std::uint64_t>(
+                rma_addr{0x1000}, 42, 3, mr_key{1}, nullptr, cq);
+        });
+    }
+    SECTION("borrowed fetch add") {
+        run([&](endpoint& ep, completion_queue* cq) {
+            return rma_async(ep).fetch_add_to(
+                input, nullptr, result, nullptr, fabric_addrs::unspecified, remote, cq);
+        });
+    }
+    SECTION("borrowed compare swap") {
+        run([&](endpoint& ep, completion_queue* cq) {
+            return rma_async(ep).compare_swap_to(comparison,
+                                                 nullptr,
+                                                 input,
+                                                 nullptr,
+                                                 result,
+                                                 nullptr,
+                                                 fabric_addrs::unspecified,
+                                                 remote,
+                                                 cq);
+        });
+    }
+}
+
 TEST_CASE("message senders request selective completions", "[execution][progress][message]") {
     const auto tagged = GENERATE(false, true);
     const auto receive = GENERATE(false, true);
@@ -474,6 +586,7 @@ TEST_CASE("receive senders require completion lengths", "[execution][progress][m
             loom::runtime_progress_policy{},
             false,
             format)};
+    REQUIRE(native.ep.bind_cq(native.cq, loom::cq_bind::transmit | loom::cq_bind::recv));
     std::array<std::byte, 16> storage{};
     completion_state state;
     auto run = [&](auto sender) {

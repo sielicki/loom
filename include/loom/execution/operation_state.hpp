@@ -103,8 +103,14 @@ protected:
      */
     [[nodiscard]] auto as_fi_context() noexcept -> void* { return &fi_ctx_.provider; }
 
-    [[nodiscard]] auto register_completion() noexcept -> bool {
-        auto result = registration_.bind(*queue_,
+    [[nodiscard]] auto register_completion(endpoint& ep, completion_direction direction) noexcept
+        -> bool {
+        if (ep.bound_cq(direction) != queue_) {
+            complete_error(make_error_code(errc::invalid_argument));
+            return false;
+        }
+        auto result = registration_.bind(ep,
+                                         direction,
                                          context(),
                                          static_cast<Derived*>(this),
                                          [](void* object, const completion_event& event) noexcept {
@@ -217,7 +223,7 @@ public:
             return;
         }
 
-        if (!this->register_completion()) {
+        if (!this->register_completion(*ep_, completion_direction::transmit)) {
             return;
         }
         const iovec buffer{const_cast<std::byte*>(buffer_.data()), buffer_.size()};
@@ -280,7 +286,7 @@ public:
             return;
         }
 
-        if (!this->register_completion()) {
+        if (!this->register_completion(*ep_, completion_direction::receive)) {
             return;
         }
         const iovec buffer{buffer_.data(), buffer_.size()};
@@ -329,7 +335,7 @@ public:
             return;
         }
 
-        if (!this->register_completion()) {
+        if (!this->register_completion(*ep_, completion_direction::transmit)) {
             return;
         }
         const iovec buffer{const_cast<std::byte*>(buffer_.data()), buffer_.size()};
@@ -390,7 +396,7 @@ public:
             return;
         }
 
-        if (!this->register_completion()) {
+        if (!this->register_completion(*ep_, completion_direction::receive)) {
             return;
         }
         const iovec buffer{buffer_.data(), buffer_.size()};
@@ -461,7 +467,7 @@ public:
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }
-        if (!this->register_completion()) {
+        if (!this->register_completion(*ep_, completion_direction::transmit)) {
             return;
         }
         auto result = rma::read_to<operation_defaults::inherit_without_more>(
@@ -527,7 +533,7 @@ public:
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }
-        if (!this->register_completion()) {
+        if (!this->register_completion(*ep_, completion_direction::transmit)) {
             return;
         }
         auto result = rma::write_to<operation_defaults::inherit_without_more>(
