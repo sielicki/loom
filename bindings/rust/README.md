@@ -102,6 +102,21 @@ async fn main() -> loom_fabric::Result<()> {
 }
 ```
 
+### Submission errors and backpressure
+
+`send`, `recv`, tagged submissions, and `inject` return
+`Error::Submission { code }` when libfabric rejects an operation. `code`
+retains the negative native status. `error.is_would_block()` identifies
+`FI_EAGAIN` using the linked libfabric constants; `error.is_timeout()`
+likewise recognizes `FI_ETIMEDOUT`.
+
+A rejected submission accepted no work. Drive the progress required by
+the selected provider before retrying, and retry only rejected work in a
+partially accepted batch. Successful submissions keep their buffer and
+context lifetime obligations until completion. `Error::Completion`
+describes a failure after acceptance and is kept distinct from a retryable
+submission rejection. C++ exceptions remain `Error::Cxx`.
+
 ## Building from Source
 
 ```bash
@@ -112,6 +127,13 @@ cmake --build build
 # Or directly with cargo
 cd bindings/rust
 cargo build
+```
+
+Run the ordinary tests with `cargo test --all-features`. The TCP receive
+queue saturation regression requires that software provider explicitly:
+
+```bash
+cargo test --all-features receive_backpressure_survives_the_cpp_bridge -- --ignored
 ```
 
 ## License

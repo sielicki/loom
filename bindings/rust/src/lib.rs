@@ -508,7 +508,7 @@ impl Endpoint {
     /// not be accessed, and send buffers must not be mutated, before then.
     /// A successful return only means the operation was submitted.
     pub unsafe fn send(&mut self, data: &[u8], context: usize) -> Result<()> {
-        Ok(ffi::ffi::endpoint_send(
+        error::from_submission_status(ffi::ffi::endpoint_send(
             self.inner.pin_mut(),
             data,
             context,
@@ -529,7 +529,7 @@ impl Endpoint {
     /// not be accessed, and send buffers must not be mutated, before then.
     /// A successful return only means the operation was submitted.
     pub unsafe fn recv(&mut self, buf: &mut [u8], context: usize) -> Result<()> {
-        Ok(ffi::ffi::endpoint_recv(self.inner.pin_mut(), buf, context)?)
+        error::from_submission_status(ffi::ffi::endpoint_recv(self.inner.pin_mut(), buf, context)?)
     }
 
     /// Post a tagged send operation.
@@ -547,7 +547,7 @@ impl Endpoint {
     /// not be accessed, and send buffers must not be mutated, before then.
     /// A successful return only means the operation was submitted.
     pub unsafe fn tagged_send(&mut self, data: &[u8], tag: u64, context: usize) -> Result<()> {
-        Ok(ffi::ffi::endpoint_tagged_send(
+        error::from_submission_status(ffi::ffi::endpoint_tagged_send(
             self.inner.pin_mut(),
             data,
             tag,
@@ -577,7 +577,7 @@ impl Endpoint {
         ignore: u64,
         context: usize,
     ) -> Result<()> {
-        Ok(ffi::ffi::endpoint_tagged_recv(
+        error::from_submission_status(ffi::ffi::endpoint_tagged_recv(
             self.inner.pin_mut(),
             buf,
             tag,
@@ -591,7 +591,7 @@ impl Endpoint {
     /// This is more efficient for small messages but doesn't provide
     /// completion notification.
     pub fn inject(&mut self, data: &[u8]) -> Result<()> {
-        Ok(ffi::ffi::endpoint_inject(self.inner.pin_mut(), data)?)
+        error::from_submission_status(ffi::ffi::endpoint_inject(self.inner.pin_mut(), data)?)
     }
 
     /// Get the local address/name of the endpoint.
@@ -614,6 +614,58 @@ pub use async_cq::{AsyncCompletionQueue, AsyncEndpoint};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires the libfabric TCP provider"]
+    fn receive_backpressure_survives_the_cpp_bridge() {
+        #[repr(C)]
+        #[derive(Clone, Default)]
+        struct Receive {
+            context: [usize; 8],
+            buffer: [u8; 1],
+        }
+
+        // Each accepted receive owns distinct buffer and FI_CONTEXT2 storage.
+        // Declare these before the endpoint so even a panic closes it first.
+        let mut receives = vec![Receive::default(); 65_536];
+        let mut retry = Receive::default();
+        let info = query_fabric_with_hints("tcp", Capabilities::MSG, EndpointType::Msg).unwrap();
+        let fabric = Fabric::new(&info).unwrap();
+        let domain = Domain::new(&fabric, &info).unwrap();
+        let cq = CompletionQueue::with_options(&domain, 16, false).unwrap();
+        let mut endpoint = Endpoint::new(&domain, &info).unwrap();
+        endpoint
+            .bind_cq(&cq, CqBindFlags::TRANSMIT | CqBindFlags::RECV)
+            .unwrap();
+        endpoint.enable().unwrap();
+        let mut accepted = 0;
+        let mut rejected = None;
+        for receive in &mut receives {
+            let context = receive.context.as_mut_ptr() as usize;
+            // No peer is connected. Accepted buffers stay untouched until
+            // endpoint close discards the outstanding receives.
+            match unsafe { endpoint.recv(&mut receive.buffer, context) } {
+                Ok(()) => accepted += 1,
+                Err(error) => {
+                    rejected = Some(error);
+                    break;
+                }
+            }
+        }
+        let retry_error =
+            unsafe { endpoint.recv(&mut retry.buffer, retry.context.as_mut_ptr() as usize) }.err();
+        drop(endpoint);
+        assert!(accepted > 0);
+        let error = rejected.expect("TCP receive queue did not report backpressure");
+        assert!(
+            error.is_would_block(),
+            "lost FI_EAGAIN across FFI: {error:?}"
+        );
+        let again = ffi::ffi::error_again();
+        assert!(matches!(error, Error::Submission { code } if code == again));
+        assert!(matches!(retry_error, Some(Error::Submission { code }) if code == again));
+        eprintln!("TCP accepted {accepted} receives; both subsequent rejections retained {again}");
+    }
 
     #[test]
     fn error_completions_retain_their_context() {

@@ -92,40 +92,42 @@ void endpoint_bind_av(EndpointHandle& ep, const AddressVectorHandle& av) {
     unwrap_void_or_throw(ep.get().bind_av(av.get()));
 }
 
-void endpoint_send(EndpointHandle& ep, rust::Slice<const std::uint8_t> data, std::uintptr_t ctx) {
+auto endpoint_send(EndpointHandle& ep, rust::Slice<const std::uint8_t> data, std::uintptr_t ctx)
+    -> std::int32_t {
     auto span = std::span{reinterpret_cast<const std::byte*>(data.data()), data.size()};
     auto context = loom::context_ptr<void>{reinterpret_cast<void*>(ctx)};
-    unwrap_void_or_throw(ep.get().send(span, context));
+    return submission_status(ep.get().send(span, context));
 }
 
-void endpoint_recv(EndpointHandle& ep, rust::Slice<std::uint8_t> buf, std::uintptr_t ctx) {
+auto endpoint_recv(EndpointHandle& ep, rust::Slice<std::uint8_t> buf, std::uintptr_t ctx)
+    -> std::int32_t {
     auto span = std::span{reinterpret_cast<std::byte*>(buf.data()), buf.size()};
     auto context = loom::context_ptr<void>{reinterpret_cast<void*>(ctx)};
-    unwrap_void_or_throw(ep.get().recv(span, context));
+    return submission_status(ep.get().recv(span, context));
 }
 
-void endpoint_tagged_send(EndpointHandle& ep,
+auto endpoint_tagged_send(EndpointHandle& ep,
                           rust::Slice<const std::uint8_t> data,
                           std::uint64_t tag,
-                          std::uintptr_t ctx) {
+                          std::uintptr_t ctx) -> std::int32_t {
     auto span = std::span{reinterpret_cast<const std::byte*>(data.data()), data.size()};
     auto context = loom::context_ptr<void>{reinterpret_cast<void*>(ctx)};
-    unwrap_void_or_throw(ep.get().tagged_send(span, tag, context));
+    return submission_status(ep.get().tagged_send(span, tag, context));
 }
 
-void endpoint_tagged_recv(EndpointHandle& ep,
+auto endpoint_tagged_recv(EndpointHandle& ep,
                           rust::Slice<std::uint8_t> buf,
                           std::uint64_t tag,
                           std::uint64_t ignore,
-                          std::uintptr_t ctx) {
+                          std::uintptr_t ctx) -> std::int32_t {
     auto span = std::span{reinterpret_cast<std::byte*>(buf.data()), buf.size()};
     auto context = loom::context_ptr<void>{reinterpret_cast<void*>(ctx)};
-    unwrap_void_or_throw(ep.get().tagged_recv(span, tag, ignore, context));
+    return submission_status(ep.get().tagged_recv(span, tag, ignore, context));
 }
 
-void endpoint_inject(EndpointHandle& ep, rust::Slice<const std::uint8_t> data) {
+auto endpoint_inject(EndpointHandle& ep, rust::Slice<const std::uint8_t> data) -> std::int32_t {
     auto span = std::span{reinterpret_cast<const std::byte*>(data.data()), data.size()};
-    unwrap_void_or_throw(ep.get().inject(span));
+    return submission_status(ep.get().inject(span));
 }
 
 auto endpoint_get_name(const EndpointHandle& ep) -> rust::Vec<std::uint8_t> {

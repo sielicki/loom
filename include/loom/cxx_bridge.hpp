@@ -54,6 +54,20 @@ inline void unwrap_void_or_throw(loom::void_result&& res) {
     }
 }
 
+/// Submission rejection must retain its numeric libfabric status across FFI.
+[[nodiscard]] inline auto submission_status(loom::void_result result) noexcept -> std::int32_t {
+    return result ? 0 : result.error().value();
+}
+
+/// Use the target libfabric constants rather than hard-coded errno values in Rust.
+[[nodiscard]] inline auto error_again() noexcept -> std::int32_t {
+    return std::to_underlying(loom::errc::again);
+}
+
+[[nodiscard]] inline auto error_timeout() noexcept -> std::int32_t {
+    return std::to_underlying(loom::errc::timeout);
+}
+
 // ============================================================================
 // Shared structs for cxx bridge (must be trivially copyable)
 // ============================================================================
@@ -220,26 +234,28 @@ void endpoint_bind_cq(EndpointHandle& ep, const CompletionQueueHandle& cq, std::
 void endpoint_bind_av(EndpointHandle& ep, const AddressVectorHandle& av);
 
 /// Post a send operation
-void endpoint_send(EndpointHandle& ep, rust::Slice<const std::uint8_t> data, std::uintptr_t ctx);
+auto endpoint_send(EndpointHandle& ep, rust::Slice<const std::uint8_t> data, std::uintptr_t ctx)
+    -> std::int32_t;
 
 /// Post a receive operation
-void endpoint_recv(EndpointHandle& ep, rust::Slice<std::uint8_t> buf, std::uintptr_t ctx);
+auto endpoint_recv(EndpointHandle& ep, rust::Slice<std::uint8_t> buf, std::uintptr_t ctx)
+    -> std::int32_t;
 
 /// Post a tagged send operation
-void endpoint_tagged_send(EndpointHandle& ep,
+auto endpoint_tagged_send(EndpointHandle& ep,
                           rust::Slice<const std::uint8_t> data,
                           std::uint64_t tag,
-                          std::uintptr_t ctx);
+                          std::uintptr_t ctx) -> std::int32_t;
 
 /// Post a tagged receive operation
-void endpoint_tagged_recv(EndpointHandle& ep,
+auto endpoint_tagged_recv(EndpointHandle& ep,
                           rust::Slice<std::uint8_t> buf,
                           std::uint64_t tag,
                           std::uint64_t ignore,
-                          std::uintptr_t ctx);
+                          std::uintptr_t ctx) -> std::int32_t;
 
 /// Post an inject (small message, no completion)
-void endpoint_inject(EndpointHandle& ep, rust::Slice<const std::uint8_t> data);
+auto endpoint_inject(EndpointHandle& ep, rust::Slice<const std::uint8_t> data) -> std::int32_t;
 
 /// Get the local address of an endpoint
 auto endpoint_get_name(const EndpointHandle& ep) -> rust::Vec<std::uint8_t>;

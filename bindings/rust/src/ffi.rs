@@ -142,19 +142,27 @@ pub mod ffi {
             av: &AddressVectorHandle,
         ) -> Result<()>;
 
+        /// Target libfabric's negative FI_EAGAIN status.
+        fn error_again() -> i32;
+
+        /// Target libfabric's negative FI_ETIMEDOUT status.
+        fn error_timeout() -> i32;
+
+        // Submission calls return zero on acceptance or a negative numeric
+        // fabric status on rejection. Result errors preserve C++ exceptions.
         /// Post a send operation.
         fn endpoint_send(
             ep: Pin<&mut EndpointHandle>,
             data: &[u8],
             ctx: usize,
-        ) -> Result<()>;
+        ) -> Result<i32>;
 
         /// Post a receive operation.
         fn endpoint_recv(
             ep: Pin<&mut EndpointHandle>,
             buf: &mut [u8],
             ctx: usize,
-        ) -> Result<()>;
+        ) -> Result<i32>;
 
         /// Post a tagged send operation.
         fn endpoint_tagged_send(
@@ -162,7 +170,7 @@ pub mod ffi {
             data: &[u8],
             tag: u64,
             ctx: usize,
-        ) -> Result<()>;
+        ) -> Result<i32>;
 
         /// Post a tagged receive operation.
         fn endpoint_tagged_recv(
@@ -171,10 +179,10 @@ pub mod ffi {
             tag: u64,
             ignore: u64,
             ctx: usize,
-        ) -> Result<()>;
+        ) -> Result<i32>;
 
         /// Post an inject (small message, no completion).
-        fn endpoint_inject(ep: Pin<&mut EndpointHandle>, data: &[u8]) -> Result<()>;
+        fn endpoint_inject(ep: Pin<&mut EndpointHandle>, data: &[u8]) -> Result<i32>;
 
         /// Get the local address/name of an endpoint.
         fn endpoint_get_name(ep: &EndpointHandle) -> Result<Vec<u8>>;
