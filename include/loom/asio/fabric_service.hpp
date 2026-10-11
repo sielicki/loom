@@ -10,10 +10,12 @@
  * io_context run loop.
  */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -38,6 +40,9 @@ namespace loom::asio {
  * 2. FD-based integration: Uses the CQ's file descriptor with Asio's reactor (if supported)
  *
  * The service is registered per io_context and can manage multiple completion queues.
+ * Service calls and completion dispatch are serialized. Inline callbacks may reenter
+ * the service, but must not wait for another thread to call this same service.
+ * External submissions and progress must still obey the provider's threading rules.
  */
 /**
  * @brief Configuration options for the fabric service.
@@ -75,14 +80,27 @@ public:
      * @brief Registers a completion queue for polling.
      * @param cq The completion queue to register.
      * @param opts Configuration options.
+     * The queue must remain at the same address until deregistration completes.
+     * Registering an already registered queue leaves its existing options intact.
      */
     void register_cq(completion_queue& cq, const options& opts = options{});
 
     /**
      * @brief Unregisters a completion queue.
      * @param cq The completion queue to unregister.
+     * Waits for polling in other threads to finish. An inline callback may
+     * deregister its own queue; the service will not read that queue again.
+     * @return Any retained unclaimed event, transferred to the caller.
      */
-    void deregister_cq(completion_queue& cq);
+    [[nodiscard]] auto deregister_cq(completion_queue& cq) -> std::optional<completion_event>;
+
+    /**
+     * @brief Takes an event with no registered completion owner.
+     * The service preserves its metadata without interpreting its context and
+     * pauses reads from that queue until this call consumes the event. Other
+     * queues continue progressing. The caller must handle the returned event.
+     */
+    [[nodiscard]] auto take_unhandled(completion_queue& cq) -> std::optional<completion_event>;
 
     /**
      * @brief Starts polling for the registered completion queues.
@@ -106,7 +124,8 @@ public:
      * @brief Manually polls all registered completion queues once.
      *
      * This is useful for manual progress when not using the timer-based loop.
-     * @return The number of completions processed.
+     * @return The number of registered completions dispatched. Unclaimed events
+     * remain available through take_unhandled and do not contribute to the count.
      */
     auto poll_once() -> std::size_t;
 
@@ -130,17 +149,19 @@ private:
 
     void schedule_poll();
     void do_poll();
-    auto process_completions(completion_queue& cq, std::size_t max_count) -> std::size_t;
-
     struct cq_entry {
         completion_queue* cq;
         options opts;
+        std::optional<completion_event> unhandled;
     };
+    auto process_completions(cq_entry& entry) -> std::size_t;
 
     ::asio::io_context& io_context_;
     std::unique_ptr<::asio::steady_timer> poll_timer_;
-    std::vector<cq_entry> completion_queues_;
-    std::mutex mutex_;
+    std::vector<std::shared_ptr<cq_entry>> completion_queues_;
+    // Native reads and dispatch share this lock with deregistration. Recursion
+    // permits an inline handler to remove queues held by the polling snapshot.
+    std::recursive_mutex mutex_;
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdown_{false};
     bool resume_after_fork_{};
@@ -157,11 +178,13 @@ inline fabric_service::~fabric_service() {
 }
 
 inline void fabric_service::shutdown() {
+    const std::lock_guard lock{mutex_};
     shutdown_.store(true, std::memory_order_release);
     stop();
 }
 
 inline void fabric_service::notify_fork(::asio::execution_context::fork_event event) {
+    const std::lock_guard lock{mutex_};
     switch (event) {
         case ::asio::execution_context::fork_prepare:
             // Stop polling before fork to avoid issues with shared state
@@ -193,24 +216,41 @@ inline void fabric_service::notify_fork(::asio::execution_context::fork_event ev
 }
 
 inline void fabric_service::register_cq(completion_queue& cq, const options& opts) {
-    bool first_queue;
-    {
-        std::lock_guard lock(mutex_);
-        completion_queues_.push_back({&cq, opts});
-        first_queue = completion_queues_.size() == 1;
+    const std::lock_guard lock{mutex_};
+    if (std::ranges::any_of(completion_queues_,
+                            [&cq](const auto& entry) { return entry->cq == &cq; })) {
+        return;
     }
-
-    if (running_.load(std::memory_order_acquire) && first_queue) {
+    completion_queues_.push_back(std::make_shared<cq_entry>(&cq, opts, std::nullopt));
+    if (running_.load(std::memory_order_acquire) && completion_queues_.size() == 1) {
         schedule_poll();
     }
 }
 
-inline void fabric_service::deregister_cq(completion_queue& cq) {
-    std::lock_guard lock(mutex_);
-    std::erase_if(completion_queues_, [&cq](const cq_entry& entry) { return entry.cq == &cq; });
+inline auto fabric_service::deregister_cq(completion_queue& cq) -> std::optional<completion_event> {
+    const std::lock_guard lock{mutex_};
+    auto found = std::ranges::find_if(completion_queues_,
+                                      [&cq](const auto& entry) { return entry->cq == &cq; });
+    if (found == completion_queues_.end()) {
+        return std::nullopt;
+    }
+    auto entry = *found;
+    entry->cq = nullptr;
+    completion_queues_.erase(found);
+    return std::exchange(entry->unhandled, std::nullopt);
+}
+
+inline auto fabric_service::take_unhandled(completion_queue& cq)
+    -> std::optional<completion_event> {
+    const std::lock_guard lock{mutex_};
+    auto found = std::ranges::find_if(completion_queues_,
+                                      [&cq](const auto& entry) { return entry->cq == &cq; });
+    return found == completion_queues_.end() ? std::nullopt
+                                             : std::exchange((*found)->unhandled, std::nullopt);
 }
 
 inline void fabric_service::start() {
+    const std::lock_guard lock{mutex_};
     if (running_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
@@ -219,6 +259,7 @@ inline void fabric_service::start() {
 }
 
 inline void fabric_service::stop() {
+    const std::lock_guard lock{mutex_};
     running_.store(false, std::memory_order_release);
     if (poll_timer_) {
         poll_timer_->cancel();
@@ -230,32 +271,24 @@ inline auto fabric_service::is_running() const noexcept -> bool {
 }
 
 inline auto fabric_service::poll_once() -> std::size_t {
-    std::size_t total = 0;
-
-    std::vector<cq_entry> cqs_copy;
-    {
-        std::lock_guard lock(mutex_);
-        cqs_copy = completion_queues_;
+    const std::lock_guard lock{mutex_};
+    const auto queues = completion_queues_;
+    std::size_t total{};
+    for (const auto& entry : queues) {
+        total += process_completions(*entry);
     }
-
-    for (const auto& entry : cqs_copy) {
-        total += process_completions(*entry.cq, entry.opts.max_completions_per_poll);
-    }
-
     return total;
 }
 
 inline void fabric_service::schedule_poll() {
+    const std::lock_guard lock{mutex_};
     if (!running_.load(std::memory_order_acquire) || shutdown_.load(std::memory_order_acquire)) {
         return;
     }
 
     std::chrono::microseconds interval{100};
-    {
-        std::lock_guard lock(mutex_);
-        if (!completion_queues_.empty()) {
-            interval = completion_queues_.front().opts.poll_interval;
-        }
+    if (!completion_queues_.empty()) {
+        interval = completion_queues_.front()->opts.poll_interval;
     }
 
     poll_timer_->expires_after(interval);
@@ -268,28 +301,24 @@ inline void fabric_service::schedule_poll() {
 }
 
 inline void fabric_service::do_poll() {
-    std::vector<cq_entry> cqs_copy;
-    {
-        std::lock_guard lock(mutex_);
-        cqs_copy = completion_queues_;
-    }
-
-    for (const auto& entry : cqs_copy) {
-        process_completions(*entry.cq, entry.opts.max_completions_per_poll);
-    }
+    poll_once();
 }
 
-inline auto fabric_service::process_completions(completion_queue& cq, std::size_t max_count)
-    -> std::size_t {
+inline auto fabric_service::process_completions(cq_entry& entry) -> std::size_t {
+    if (entry.unhandled) {
+        return 0;
+    }
     std::size_t count{};
-    for (; count < max_count; ++count) {
-        auto event_opt = cq.poll();
-        if (!event_opt) {
+    while (entry.cq && !entry.unhandled && count < entry.opts.max_completions_per_poll) {
+        auto event = entry.cq->poll();
+        if (!event) {
             break;
         }
-
-        const auto& event = *event_opt;
-        dispatch_asio_completion(event.context.get(), event);
+        if (!entry.cq->dispatch(*event)) {
+            entry.unhandled = std::move(event);
+            break;
+        }
+        ++count;
     }
     return count;
 }

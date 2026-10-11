@@ -136,10 +136,12 @@ public:
     /**
      * @brief Recovers the derived context from a libfabric context pointer.
      *
-     * The context must remain alive until its completion is consumed.
+     * ctx must be null or have been returned by as_fi_context on a live object
+     * of this context type. Foreign and dangling pointers violate this
+     * precondition. Use completion_queue::dispatch to route arbitrary CQ events.
      *
-     * @param ctx The libfabric context pointer from a completion event.
-     * @return Pointer to the derived context, or nullptr if invalid.
+     * @param ctx A context pointer with known ownership.
+     * @return Pointer to the derived context, or nullptr for a null input.
      */
     [[nodiscard]] static auto from_fi_context(void* ctx) noexcept -> Derived* {
         return static_cast<Derived*>(recover_safe_context<asio_context_base>(ctx));
@@ -550,20 +552,6 @@ inline void finish_asio_submission(owned_asio_context context, void_result resul
     auto* pending = context.release();
     if (!result) {
         pending->fail(result.error());
-    }
-}
-
-/**
- * @brief Dispatches a completion event to the appropriate handler.
- * @param ctx The context pointer from the completion event.
- * @param event The completion event.
- *
- * Preserve the full event, including partial receive lengths on failure.
- */
-inline void dispatch_asio_completion(void* ctx, const completion_event& event) {
-    if (auto* asio_ctx = asio_context_erased::from_fi_context(ctx)) {
-        completion_event mutable_event = event;
-        asio_ctx->set_value(mutable_event);
     }
 }
 

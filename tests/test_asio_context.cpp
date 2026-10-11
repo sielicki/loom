@@ -173,7 +173,7 @@ TEST_CASE("Asio preserves partial receive lengths on failure", "[asio][context]"
     loom::completion_event event;
     event.bytes_transferred = 3;
     event.error = loom::make_error_code_from_fi_errno(FI_ETRUNC);
-    loom::asio::dispatch_asio_completion(ctx->as_fi_context(), event);
+    ctx->complete(event);
     ioc.run();
     REQUIRE(completed);
 }
@@ -191,7 +191,7 @@ TEST_CASE("Asio transfer failure does not report a successful send", "[asio][con
     ctx->set_transfer_size(42);
     loom::completion_event event;
     event.error = loom::make_error_code(loom::errc::io_error);
-    loom::asio::dispatch_asio_completion(ctx->as_fi_context(), event);
+    ctx->complete(event);
     ioc.run();
     REQUIRE(completed);
 }
@@ -257,7 +257,7 @@ TEST_CASE("asio_context fi_context round trip", "[asio][context]") {
     ioc.run();
 }
 
-TEST_CASE("dispatch_asio_completion with successful event", "[asio][context]") {
+TEST_CASE("Asio context completes with a successful event", "[asio][context]") {
     ::asio::io_context ioc;
     std::atomic<bool> handler_called{false};
     std::atomic<std::size_t> bytes_received{0};
@@ -276,7 +276,7 @@ TEST_CASE("dispatch_asio_completion with successful event", "[asio][context]") {
     event.error = {};
     event.context = loom::context_ptr<void>{ctx->as_fi_context()};
 
-    loom::asio::dispatch_asio_completion(ctx->as_fi_context(), event);
+    ctx->complete(event);
 
     ioc.run();
 
@@ -284,7 +284,7 @@ TEST_CASE("dispatch_asio_completion with successful event", "[asio][context]") {
     REQUIRE(bytes_received.load(std::memory_order_acquire) == 128);
 }
 
-TEST_CASE("dispatch_asio_completion with error event", "[asio][context]") {
+TEST_CASE("Asio context completes with an error event", "[asio][context]") {
     ::asio::io_context ioc;
     std::atomic<bool> handler_called{false};
     std::error_code received_ec;
@@ -301,7 +301,7 @@ TEST_CASE("dispatch_asio_completion with error event", "[asio][context]") {
     event.error = std::make_error_code(std::errc::connection_refused);
     event.context = loom::context_ptr<void>{ctx->as_fi_context()};
 
-    loom::asio::dispatch_asio_completion(ctx->as_fi_context(), event);
+    ctx->complete(event);
 
     ioc.run();
 

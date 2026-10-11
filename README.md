@@ -661,6 +661,22 @@ auto main() -> int {
 }
 ```
 
+Asio submissions register their contexts with the endpoint's bound TX/RX queues.
+Bind those queues before initiating operations and keep them alive through native
+completion. A manual progress loop can route events with `cq.dispatch(event)`;
+the old raw-pointer `dispatch_asio_completion` helper has been removed.
+
+The fabric service dispatches registered operations from any frontend. It retains
+the first event without a registered owner, including context-free remote events
+and errors, and pauses reads from that queue until
+`service.take_unhandled(cq)` transfers the event to the caller. Handle that event
+before continuing; other registered queues keep progressing. `poll_once()` counts
+only dispatched operations. `deregister_cq(cq)` returns any retained event and
+waits for concurrent polling to finish, so callers must inspect its return value
+before destroying the queue. Keep registered queue wrappers at stable addresses.
+Service calls and inline completion callbacks are serialized; callbacks may
+reenter the service but must not wait for another thread to call the same service.
+
 #### Coroutine Support
 
 ```cpp
