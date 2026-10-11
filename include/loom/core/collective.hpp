@@ -21,6 +21,11 @@
 /**
  * @namespace loom::collective
  * @brief Collective communication operations.
+ *
+ * Supplied memory regions must be enabled for the endpoint and cover the bytes
+ * accessed by the operation. Registrations for omitted non-root buffers or
+ * zero-byte transfers are ignored. Buffers and registrations remain borrowed
+ * through completion.
  */
 namespace loom::collective {
 
@@ -264,13 +269,17 @@ auto broadcast(endpoint& ep,
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
+    const auto descriptor =
+        detail::checked_descriptor(ep, mr, buffer.data(), transfer->input_bytes);
+    if (!descriptor) {
+        return std::unexpected(descriptor.error());
+    }
     auto* fid_ep = *native;
-    void* desc = mr ? mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_broadcast(fid_ep,
                               buffer.data(),
                               transfer->count.value,
-                              desc,
+                              descriptor->raw(),
                               grp.address().get(),
                               root_addr.get(),
                               transfer->datatype,
@@ -345,16 +354,19 @@ auto all_reduce(endpoint& ep,
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
+    const auto descriptors = detail::checked_descriptors(
+        ep, *transfer, send_buf.data(), recv_buf.data(), send_mr, recv_mr);
+    if (!descriptors) {
+        return std::unexpected(descriptors.error());
+    }
     auto* fid_ep = *native;
-    void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
-    void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_allreduce(fid_ep,
                               send_buf.data(),
                               transfer->count.value,
-                              send_desc,
+                              descriptors->input.raw(),
                               recv_buf.data(),
-                              recv_desc,
+                              descriptors->output.raw(),
                               grp.address().get(),
                               transfer->datatype,
                               detail::to_fi_op(op),
@@ -463,16 +475,19 @@ auto all_gather(endpoint& ep,
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
+    const auto descriptors = detail::checked_descriptors(
+        ep, *transfer, send_buf.data(), recv_buf.data(), send_mr, recv_mr);
+    if (!descriptors) {
+        return std::unexpected(descriptors.error());
+    }
     auto* fid_ep = *native;
-    void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
-    void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_allgather(fid_ep,
                               send_buf.data(),
                               transfer->count.value,
-                              send_desc,
+                              descriptors->input.raw(),
                               recv_buf.data(),
-                              recv_desc,
+                              descriptors->output.raw(),
                               grp.address().get(),
                               transfer->datatype,
                               0,
@@ -547,16 +562,19 @@ auto all_to_all(endpoint& ep,
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
+    const auto descriptors = detail::checked_descriptors(
+        ep, *transfer, send_buf.data(), recv_buf.data(), send_mr, recv_mr);
+    if (!descriptors) {
+        return std::unexpected(descriptors.error());
+    }
     auto* fid_ep = *native;
-    void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
-    void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_alltoall(fid_ep,
                              send_buf.data(),
                              transfer->count.value,
-                             send_desc,
+                             descriptors->input.raw(),
                              recv_buf.data(),
-                             recv_desc,
+                             descriptors->output.raw(),
                              grp.address().get(),
                              transfer->datatype,
                              0,
@@ -635,16 +653,19 @@ auto reduce(endpoint& ep,
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
+    const auto descriptors = detail::checked_descriptors(
+        ep, *transfer, send_buf.data(), recv_buf.data(), send_mr, recv_mr);
+    if (!descriptors) {
+        return std::unexpected(descriptors.error());
+    }
     auto* fid_ep = *native;
-    void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
-    void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_reduce(fid_ep,
                            send_buf.data(),
                            transfer->count.value,
-                           send_desc,
+                           descriptors->input.raw(),
                            recv_buf.data(),
-                           recv_desc,
+                           descriptors->output.raw(),
                            grp.address().get(),
                            root_addr.get(),
                            transfer->datatype,
@@ -729,16 +750,19 @@ auto scatter(endpoint& ep,
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
+    const auto descriptors = detail::checked_descriptors(
+        ep, *transfer, send_buf.data(), recv_buf.data(), send_mr, recv_mr);
+    if (!descriptors) {
+        return std::unexpected(descriptors.error());
+    }
     auto* fid_ep = *native;
-    void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
-    void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_scatter(fid_ep,
                             send_buf.data(),
                             transfer->count.value,
-                            send_desc,
+                            descriptors->input.raw(),
                             recv_buf.data(),
-                            recv_desc,
+                            descriptors->output.raw(),
                             grp.address().get(),
                             root_addr.get(),
                             transfer->datatype,
@@ -785,16 +809,19 @@ auto gather(endpoint& ep,
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
+    const auto descriptors = detail::checked_descriptors(
+        ep, *transfer, send_buf.data(), recv_buf.data(), send_mr, recv_mr);
+    if (!descriptors) {
+        return std::unexpected(descriptors.error());
+    }
     auto* fid_ep = *native;
-    void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
-    void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_gather(fid_ep,
                            send_buf.data(),
                            transfer->count.value,
-                           send_desc,
+                           descriptors->input.raw(),
                            recv_buf.data(),
-                           recv_desc,
+                           descriptors->output.raw(),
                            grp.address().get(),
                            root_addr.get(),
                            transfer->datatype,
@@ -841,16 +868,19 @@ auto reduce_scatter(endpoint& ep,
     if (!transfer) {
         return std::unexpected(transfer.error());
     }
+    const auto descriptors = detail::checked_descriptors(
+        ep, *transfer, send_buf.data(), recv_buf.data(), send_mr, recv_mr);
+    if (!descriptors) {
+        return std::unexpected(descriptors.error());
+    }
     auto* fid_ep = *native;
-    void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
-    void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_reduce_scatter(fid_ep,
                                    send_buf.data(),
                                    transfer->count.value,
-                                   send_desc,
+                                   descriptors->input.raw(),
                                    recv_buf.data(),
-                                   recv_desc,
+                                   descriptors->output.raw(),
                                    grp.address().get(),
                                    transfer->datatype,
                                    detail::to_fi_op(op),

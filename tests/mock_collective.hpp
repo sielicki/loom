@@ -101,6 +101,7 @@ struct collective_provider {
             },
     };
     fid_av native_av{.fid = {.context = this, .ops = &lifetime}, .ops = &av_ops};
+    fid_domain domain_handle{};
     fid_ep native_ep{.fid = {.context = this, .ops = &lifetime}, .cm = &cm_ops};
     loom::address_vector av{loom::detail::make_pmr_unique<loom::detail::address_vector_impl>(
         loom::get_default_resource(), &native_av, loom::av_type::map, loom::address_format::inet)};
@@ -108,6 +109,12 @@ struct collective_provider {
         loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
                                                                    &native_ep,
                                                                    loom::endpoint_types::rdm,
-                                                                   loom::address_format::inet)};
+                                                                   loom::address_format::inet,
+                                                                   0,
+                                                                   0,
+                                                                   loom::caps{},
+                                                                   0,
+                                                                   0,
+                                                                   &domain_handle)};
 };
 }  // namespace loom::test

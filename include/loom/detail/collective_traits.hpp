@@ -186,30 +186,39 @@ struct element_count {
 struct transfer_layout {
     element_count count;
     fi_datatype datatype;
+    std::size_t input_bytes;
+    std::size_t output_bytes;
 };
 
 template <buffer_extent Extent>
-constexpr auto fits_buffer(std::size_t bytes,
-                           element_layout element,
-                           element_count count,
-                           std::optional<std::size_t> members) noexcept -> bool {
+constexpr auto checked_extent(std::size_t bytes,
+                              element_layout element,
+                              element_count count,
+                              std::optional<std::size_t> members) noexcept
+    -> std::optional<std::size_t> {
     if constexpr (Extent == buffer_extent::unused) {
-        return true;
+        return 0;
     }
     if constexpr (Extent == buffer_extent::root_single || Extent == buffer_extent::root_group) {
         // Root-only buffers may be omitted by non-root participants.
         if (bytes == 0) {
-            return true;
+            return 0;
         }
     }
     auto capacity = bytes / element.size;
+    std::size_t multiplier = 1;
     if constexpr (Extent == buffer_extent::group || Extent == buffer_extent::root_group) {
         if (!members || *members == 0) {
-            return false;
+            return std::nullopt;
         }
         capacity /= *members;
+        multiplier = *members;
     }
-    return count.value <= capacity;
+    // Divide first to prove that the complete byte extent fits without overflow.
+    if (count.value > capacity) {
+        return std::nullopt;
+    }
+    return count.value * element.size * multiplier;
 }
 
 template <fi_collective_op Operation>
@@ -233,12 +242,48 @@ auto checked_transfer(std::size_t input_bytes,
         }
         count.value /= *members;
     }
-    // Division checks the full group extent without overflowing a byte-count product.
-    if (!fits_buffer<traits::input>(input_bytes, *element, count, members) ||
-        !fits_buffer<traits::output>(output_bytes, *element, count, members)) {
+    const auto input = checked_extent<traits::input>(input_bytes, *element, count, members);
+    const auto output = checked_extent<traits::output>(output_bytes, *element, count, members);
+    if (!input || !output) {
         return make_error_result<transfer_layout>(errc::invalid_argument);
     }
-    return transfer_layout{count, element->datatype};
+    return transfer_layout{count, element->datatype, *input, *output};
+}
+
+inline auto checked_descriptor(const endpoint& ep,
+                               const memory_region* region,
+                               const void* buffer,
+                               std::size_t bytes) -> result<mr_descriptor> {
+    if (!region || bytes == 0) {
+        return mr_descriptor{};
+    }
+    if (!region->usable_with(ep) || !region->contains(buffer, bytes)) {
+        return make_error_result<mr_descriptor>(errc::invalid_argument);
+    }
+    return region->descriptor();
+}
+
+struct transfer_descriptors {
+    mr_descriptor input;
+    mr_descriptor output;
+};
+
+inline auto checked_descriptors(const endpoint& ep,
+                                const transfer_layout& transfer,
+                                const void* input,
+                                const void* output,
+                                const memory_region* input_region,
+                                const memory_region* output_region)
+    -> result<transfer_descriptors> {
+    const auto in = checked_descriptor(ep, input_region, input, transfer.input_bytes);
+    if (!in) {
+        return std::unexpected(in.error());
+    }
+    const auto out = checked_descriptor(ep, output_region, output, transfer.output_bytes);
+    if (!out) {
+        return std::unexpected(out.error());
+    }
+    return transfer_descriptors{*in, *out};
 }
 
 }  // namespace loom::collective::detail

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/core/collective.hpp>
+#include <loom/detail/impl/memory_impl.hpp>
 
 #include <array>
 #include <complex>
@@ -62,6 +63,8 @@ struct transfer_provider : loom::test::collective_provider {
     fi_datatype type{};
     const void* input{};
     void* output{};
+    void* input_descriptor{};
+    void* output_descriptor{};
     void* transfer_context{};
     fi_addr_t address{};
 
@@ -72,13 +75,17 @@ struct transfer_provider : loom::test::collective_provider {
                        std::size_t count,
                        fi_datatype type,
                        fi_addr_t address,
-                       void* context) -> ssize_t {
+                       void* context,
+                       void* input_descriptor = nullptr,
+                       void* output_descriptor = nullptr) -> ssize_t {
         auto& self =
             static_cast<transfer_provider&>(*static_cast<collective_provider*>(ep->fid.context));
         ++self.calls;
         self.last_operation = op;
         self.input = input;
         self.output = output;
+        self.input_descriptor = input_descriptor;
+        self.output_descriptor = output_descriptor;
         self.count = count;
         self.type = type;
         self.address = address;
@@ -97,115 +104,181 @@ struct transfer_provider : loom::test::collective_provider {
             [](fid_ep* ep,
                void* input,
                std::size_t count,
-               void*,
+               void* input_descriptor,
                fi_addr_t address,
                fi_addr_t,
                fi_datatype type,
                std::uint64_t,
                void* context) {
-                return record(
-                    ep, operation::broadcast, input, nullptr, count, type, address, context);
+                return record(ep,
+                              operation::broadcast,
+                              input,
+                              nullptr,
+                              count,
+                              type,
+                              address,
+                              context,
+                              input_descriptor);
             },
         .alltoall =
             [](fid_ep* ep,
                const void* input,
                std::size_t count,
-               void*,
+               void* input_descriptor,
                void* output,
-               void*,
+               void* output_descriptor,
                fi_addr_t address,
                fi_datatype type,
                std::uint64_t,
                void* context) {
-                return record(
-                    ep, operation::all_to_all, input, output, count, type, address, context);
+                return record(ep,
+                              operation::all_to_all,
+                              input,
+                              output,
+                              count,
+                              type,
+                              address,
+                              context,
+                              input_descriptor,
+                              output_descriptor);
             },
         .allreduce =
             [](fid_ep* ep,
                const void* input,
                std::size_t count,
-               void*,
+               void* input_descriptor,
                void* output,
-               void*,
+               void* output_descriptor,
                fi_addr_t address,
                fi_datatype type,
                fi_op,
                std::uint64_t,
                void* context) {
-                return record(
-                    ep, operation::all_reduce, input, output, count, type, address, context);
+                return record(ep,
+                              operation::all_reduce,
+                              input,
+                              output,
+                              count,
+                              type,
+                              address,
+                              context,
+                              input_descriptor,
+                              output_descriptor);
             },
         .allgather =
             [](fid_ep* ep,
                const void* input,
                std::size_t count,
-               void*,
+               void* input_descriptor,
                void* output,
-               void*,
+               void* output_descriptor,
                fi_addr_t address,
                fi_datatype type,
                std::uint64_t,
                void* context) {
-                return record(
-                    ep, operation::all_gather, input, output, count, type, address, context);
+                return record(ep,
+                              operation::all_gather,
+                              input,
+                              output,
+                              count,
+                              type,
+                              address,
+                              context,
+                              input_descriptor,
+                              output_descriptor);
             },
         .reduce_scatter =
             [](fid_ep* ep,
                const void* input,
                std::size_t count,
-               void*,
+               void* input_descriptor,
                void* output,
-               void*,
+               void* output_descriptor,
                fi_addr_t address,
                fi_datatype type,
                fi_op,
                std::uint64_t,
                void* context) {
-                return record(
-                    ep, operation::reduce_scatter, input, output, count, type, address, context);
+                return record(ep,
+                              operation::reduce_scatter,
+                              input,
+                              output,
+                              count,
+                              type,
+                              address,
+                              context,
+                              input_descriptor,
+                              output_descriptor);
             },
         .reduce =
             [](fid_ep* ep,
                const void* input,
                std::size_t count,
-               void*,
+               void* input_descriptor,
                void* output,
-               void*,
+               void* output_descriptor,
                fi_addr_t address,
                fi_addr_t,
                fi_datatype type,
                fi_op,
                std::uint64_t,
                void* context) {
-                return record(ep, operation::reduce, input, output, count, type, address, context);
+                return record(ep,
+                              operation::reduce,
+                              input,
+                              output,
+                              count,
+                              type,
+                              address,
+                              context,
+                              input_descriptor,
+                              output_descriptor);
             },
         .scatter =
             [](fid_ep* ep,
                const void* input,
                std::size_t count,
-               void*,
+               void* input_descriptor,
                void* output,
-               void*,
+               void* output_descriptor,
                fi_addr_t address,
                fi_addr_t,
                fi_datatype type,
                std::uint64_t,
                void* context) {
-                return record(ep, operation::scatter, input, output, count, type, address, context);
+                return record(ep,
+                              operation::scatter,
+                              input,
+                              output,
+                              count,
+                              type,
+                              address,
+                              context,
+                              input_descriptor,
+                              output_descriptor);
             },
         .gather =
             [](fid_ep* ep,
                const void* input,
                std::size_t count,
-               void*,
+               void* input_descriptor,
                void* output,
-               void*,
+               void* output_descriptor,
                fi_addr_t address,
                fi_addr_t,
                fi_datatype type,
                std::uint64_t,
                void* context) {
-                return record(ep, operation::gather, input, output, count, type, address, context);
+                return record(ep,
+                              operation::gather,
+                              input,
+                              output,
+                              count,
+                              type,
+                              address,
+                              context,
+                              input_descriptor,
+                              output_descriptor);
             },
         .barrier2 =
             [](fid_ep* ep, fi_addr_t address, std::uint64_t, void* context) {
@@ -233,35 +306,177 @@ auto submit(operation op,
             std::span<std::byte> output,
             datatype type,
             void* context = nullptr,
-            loom::endpoint* target = nullptr) -> loom::result<void> {
+            loom::endpoint* target = nullptr,
+            loom::memory_region* input_mr = nullptr,
+            loom::memory_region* output_mr = nullptr) -> loom::result<void> {
     namespace coll = loom::collective;
     const auto root = loom::fabric_addr{5};
     const auto sum = loom::atomic::operation::sum;
     auto& ep = target ? *target : provider.ep;
     switch (op) {
         case operation::broadcast:
-            return coll::broadcast(ep, group, input, nullptr, root, type, context);
+            return coll::broadcast(ep, group, input, input_mr, root, type, context);
         case operation::all_reduce:
-            return coll::all_reduce(ep, group, input, output, nullptr, nullptr, sum, type, context);
+            return coll::all_reduce(
+                ep, group, input, output, input_mr, output_mr, sum, type, context);
         case operation::all_gather:
-            return coll::all_gather(ep, group, input, output, nullptr, nullptr, type, context);
+            return coll::all_gather(ep, group, input, output, input_mr, output_mr, type, context);
         case operation::all_to_all:
-            return coll::all_to_all(ep, group, input, output, nullptr, nullptr, type, context);
+            return coll::all_to_all(ep, group, input, output, input_mr, output_mr, type, context);
         case operation::reduce:
             return coll::reduce(
-                ep, group, input, output, nullptr, nullptr, root, sum, type, context);
+                ep, group, input, output, input_mr, output_mr, root, sum, type, context);
         case operation::scatter:
-            return coll::scatter(ep, group, input, output, nullptr, nullptr, root, type, context);
+            return coll::scatter(
+                ep, group, input, output, input_mr, output_mr, root, type, context);
         case operation::gather:
-            return coll::gather(ep, group, input, output, nullptr, nullptr, root, type, context);
+            return coll::gather(ep, group, input, output, input_mr, output_mr, root, type, context);
         case operation::reduce_scatter:
             return coll::reduce_scatter(
-                ep, group, input, output, nullptr, nullptr, sum, type, context);
+                ep, group, input, output, input_mr, output_mr, sum, type, context);
         default:
             return loom::make_error_result<void>(loom::errc::invalid_argument);
     }
 }
+
+struct registered_buffer {
+    fi_ops operations{
+        .size = sizeof(fi_ops),
+        .close = [](fid*) { return 0; },
+        .bind = [](fid*, fid*, std::uint64_t) { return 0; },
+        .control =
+            [](fid*, int command, void*) {
+                REQUIRE(command == FI_ENABLE);
+                return 0;
+            },
+    };
+    fid_mr handle{.fid = {.ops = &operations}, .mem_desc = &handle};
+    loom::memory_region region;
+
+    registered_buffer(std::span<std::byte> bytes, fid_domain* domain, int mode = 0)
+        : region(loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+              loom::get_default_resource(),
+              &handle,
+              bytes.data(),
+              bytes.size(),
+              loom::detail::mr_key_lease{},
+              0,
+              mode,
+              domain)) {}
+};
 }  // namespace
+
+TEST_CASE("collectives reject incompatible and out-of-range registrations",
+          "[collective][registration]") {
+    const auto op = GENERATE(operation::broadcast,
+                             operation::all_reduce,
+                             operation::all_gather,
+                             operation::all_to_all,
+                             operation::reduce,
+                             operation::scatter,
+                             operation::gather,
+                             operation::reduce_scatter);
+    const auto check_output = GENERATE(false, true);
+    if (op == operation::broadcast && check_output)
+        return;
+    enum class condition {
+        valid,
+        bound,
+        foreign,
+        unknown,
+        disabled,
+        other_endpoint,
+        undersized,
+        unrelated,
+        empty
+    };
+    const auto state = GENERATE(condition::valid,
+                                condition::bound,
+                                condition::foreign,
+                                condition::unknown,
+                                condition::disabled,
+                                condition::other_endpoint,
+                                condition::undersized,
+                                condition::unrelated,
+                                condition::empty);
+    const auto null_descriptor = GENERATE(false, true);
+    const auto error = GENERATE(FI_EAGAIN, FI_EIO);
+    CAPTURE(op, check_output, state, null_descriptor, error);
+    transfer_provider provider;
+    provider.status = -error;
+    auto group = provider.join();
+    std::array<std::uint32_t, 8> input{}, output{}, unrelated{};
+    std::span<std::byte> in = std::as_writable_bytes(std::span{input});
+    std::span<std::byte> out = std::as_writable_bytes(std::span{output});
+    const auto input_count =
+        op == operation::all_to_all || op == operation::scatter || op == operation::reduce_scatter
+            ? 6u
+            : 2u;
+    const auto output_count =
+        op == operation::all_to_all || op == operation::all_gather || op == operation::gather ? 6u
+                                                                                              : 2u;
+    const auto input_bytes = input_count * sizeof(std::uint32_t);
+    const auto output_bytes = output_count * sizeof(std::uint32_t);
+    auto registered_bytes = check_output ? out.first(output_bytes) : in.first(input_bytes);
+    if (state == condition::undersized)
+        registered_bytes = registered_bytes.first(registered_bytes.size() - 1);
+    if (state == condition::unrelated)
+        registered_bytes = std::as_writable_bytes(std::span{unrelated});
+    fid_domain foreign_domain{};
+    auto* domain = state == condition::foreign   ? &foreign_domain
+                   : state == condition::unknown ? nullptr
+                                                 : &provider.domain_handle;
+    const bool endpoint_bound = state == condition::bound || state == condition::disabled ||
+                                state == condition::other_endpoint;
+    transfer_provider other;
+    auto other_ep = loom::endpoint{
+        loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
+                                                                   &other.native_ep,
+                                                                   loom::endpoint_types::rdm,
+                                                                   loom::address_format::inet,
+                                                                   0,
+                                                                   0,
+                                                                   loom::caps{},
+                                                                   0,
+                                                                   0,
+                                                                   &provider.domain_handle)};
+    registered_buffer registration{registered_bytes, domain, endpoint_bound ? FI_MR_ENDPOINT : 0};
+    if (endpoint_bound && state != condition::disabled) {
+        REQUIRE(
+            registration.region.bind(state == condition::other_endpoint ? other_ep : provider.ep));
+        REQUIRE(registration.region.enable());
+    }
+    if (state == condition::empty)
+        registration.region = {};
+    if (null_descriptor)
+        registration.handle.mem_desc = nullptr;
+    // Spare capacity is legal: only the prefix accessed by libfabric needs registration.
+    if (op != operation::scatter && op != operation::reduce_scatter)
+        in = in.first(input_bytes);
+    else
+        out = out.first(output_bytes);
+    const auto result = submit(op,
+                               provider,
+                               group,
+                               in,
+                               out,
+                               datatype::uint32,
+                               nullptr,
+                               nullptr,
+                               check_output ? nullptr : &registration.region,
+                               check_output ? &registration.region : nullptr);
+    const bool valid = state == condition::valid || state == condition::bound;
+    REQUIRE_FALSE(result);
+    CHECK(result.error() == (valid ? loom::make_error_code_from_fi_errno(error)
+                                   : loom::make_error_code(loom::errc::invalid_argument)));
+    CHECK(provider.calls == (valid ? 1 : 0));
+    if (valid) {
+        CHECK(provider.count == 2);
+        CHECK(provider.input_descriptor == (check_output ? nullptr : registration.handle.mem_desc));
+        CHECK(provider.output_descriptor ==
+              (check_output ? registration.handle.mem_desc : nullptr));
+    }
+}
 
 TEST_CASE("collectives pass element counts with the correct per-member extent",
           "[collective][count]") {
@@ -302,6 +517,68 @@ TEST_CASE("collectives pass element counts with the correct per-member extent",
     REQUIRE(provider.input == input.data());
     REQUIRE(provider.address == 999);
     REQUIRE(provider.transfer_context == &context);
+}
+
+TEST_CASE("collectives ignore registrations for omitted non-root buffers",
+          "[collective][registration]") {
+    const auto op = GENERATE(operation::reduce, operation::scatter, operation::gather);
+    const auto opaque_membership = GENERATE(false, true);
+    transfer_provider provider;
+    loom::collective::group_attr attributes;
+    if (opaque_membership)
+        attributes.set_flags = FI_UNIVERSE;
+    auto group = provider.join(attributes);
+    std::array<std::uint32_t, 2> values{};
+    auto buffer = std::as_writable_bytes(std::span{values});
+    fid_domain foreign_domain{};
+    registered_buffer active{buffer, &provider.domain_handle};
+    registered_buffer omitted{buffer, &foreign_domain, FI_MR_ENDPOINT};
+    const auto scatter = op == operation::scatter;
+    REQUIRE(submit(op,
+                   provider,
+                   group,
+                   scatter ? std::span<std::byte>{} : buffer,
+                   scatter ? buffer : std::span<std::byte>{},
+                   datatype::uint32,
+                   nullptr,
+                   nullptr,
+                   scatter ? &omitted.region : &active.region,
+                   scatter ? &active.region : &omitted.region));
+    CHECK(provider.calls == 1);
+    CHECK(provider.count == 2);
+    CHECK(provider.input_descriptor == (scatter ? nullptr : active.handle.mem_desc));
+    CHECK(provider.output_descriptor == (scatter ? active.handle.mem_desc : nullptr));
+}
+
+TEST_CASE("collectives ignore registrations for zero-byte transfers",
+          "[collective][registration]") {
+    const auto op = GENERATE(operation::broadcast,
+                             operation::all_reduce,
+                             operation::all_gather,
+                             operation::all_to_all,
+                             operation::reduce,
+                             operation::scatter,
+                             operation::gather,
+                             operation::reduce_scatter);
+    transfer_provider provider;
+    auto group = provider.join();
+    fid_domain foreign_domain{};
+    std::array<std::byte, 8> storage{};
+    registered_buffer unused{storage, &foreign_domain, FI_MR_ENDPOINT};
+    REQUIRE(submit(op,
+                   provider,
+                   group,
+                   std::span{storage}.first(0),
+                   {},
+                   datatype::uint32,
+                   nullptr,
+                   nullptr,
+                   &unused.region,
+                   &unused.region));
+    CHECK(provider.calls == 1);
+    CHECK(provider.count == 0);
+    CHECK(provider.input_descriptor == nullptr);
+    CHECK(provider.output_descriptor == nullptr);
 }
 
 TEST_CASE("collective byte spans use the native datatype width", "[collective][count]") {
