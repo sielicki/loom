@@ -9,7 +9,7 @@ pub mod ffi {
     // ========================================================================
 
     /// Completion event data from the completion queue.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Default)]
     pub struct CompletionEventData {
         /// User-provided context pointer (as uintptr_t).
         pub context: usize,
@@ -25,6 +25,20 @@ pub mod ffi {
         pub has_error: bool,
         /// Negative error code for an actual error completion.
         pub error_code: i32,
+        /// Received message location; zero means unavailable.
+        pub buffer: usize,
+        /// Whether a source address was supplied.
+        pub has_source: bool,
+        /// Native fabric address, including the valid value zero.
+        pub source: u64,
+        /// Whether a native error entry supplied extended information.
+        pub has_error_info: bool,
+        /// Provider-specific error number, independent of the fabric error.
+        pub provider_error: i32,
+        /// Owned diagnostic bytes, including any embedded zero bytes.
+        pub error_data: Vec<u8>,
+        /// Received bytes discarded by truncation.
+        pub overflow_length: usize,
     }
 
     /// Distinguish native events from empty reads and failed waits.
@@ -37,7 +51,7 @@ pub mod ffi {
     }
 
     /// The read status is independent of an operation's completion status.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone)]
     pub struct CqReadResult {
         pub kind: CqReadKind,
         pub event: CompletionEventData,
@@ -51,6 +65,8 @@ pub mod ffi {
         pub size: usize,
         /// Enable wait object (fd) for async notification.
         pub wait_obj: bool,
+        /// Request source-preserving completion reads.
+        pub source_addresses: bool,
     }
 
     /// Endpoint kinds across FFI; native values are mapped explicitly.
@@ -280,6 +296,30 @@ pub mod ffi {
         pub completion: RmaCompletion,
         /// Order this operation after earlier endpoint transmissions using FI_FENCE.
         pub fence: bool,
+    }
+
+    #[cfg(feature = "test_fixtures")]
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum TestCompletionKind {
+        Success,
+        Error,
+        QueueFailure,
+        Empty,
+    }
+
+    #[cfg(feature = "test_fixtures")]
+    unsafe extern "C++" {
+        include!("tests/completion_fixture.hpp");
+
+        fn test_completion_read(
+            kind: TestCompletionKind,
+            attributes: &CqAttributes,
+            context: usize,
+            source: u64,
+            buffer: bool,
+            zero_error_info: bool,
+        ) -> Result<CqReadResult>;
     }
 
     // ========================================================================

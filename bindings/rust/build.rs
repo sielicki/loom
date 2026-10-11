@@ -58,6 +58,13 @@ fn main() {
         build.file(loom_src.join(src));
     }
 
+    if env::var_os("CARGO_FEATURE_TEST_FIXTURES").is_some() {
+        build.include(&manifest_dir);
+        build.file("tests/completion_fixture.cpp");
+    }
+    println!("cargo:rerun-if-changed=tests/completion_fixture.hpp");
+    println!("cargo:rerun-if-changed=tests/completion_fixture.cpp");
+
     // Compiler flags
     build.flag_if_supported("-Wno-unused-parameter");
     build.flag_if_supported("-Wno-missing-field-initializers");

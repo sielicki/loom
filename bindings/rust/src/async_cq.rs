@@ -6,8 +6,8 @@
 //! that integrate with the tokio runtime.
 
 use crate::{
-    CompletionEvent, CompletionQueue, CqBindFlags, Domain, Endpoint, Error, FabricInfo,
-    MemoryRegion, OperationContext, Result, RmaOptions, RmaTarget,
+    CompletionEvent, CompletionQueue, CompletionQueueOptions, CqBindFlags, Domain, Endpoint, Error,
+    FabricInfo, MemoryRegion, OperationContext, Result, RmaOptions, RmaTarget,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
@@ -43,28 +43,43 @@ impl AsyncCompletionQueue {
     /// * `domain` - The parent domain.
     /// * `size` - Number of entries in the queue.
     pub fn new(domain: &Domain, size: usize) -> Result<Self> {
-        // Create CQ with wait object enabled
-        let inner = CompletionQueue::with_options(domain, size, true)?;
-
-        // An unspecified provider wait object need not expose a descriptor.
-        // CQ polling remains valid when the native handle query is unsupported.
-        let async_fd = inner
-            .wait_fd()
-            .ok()
-            .map(|fd| AsyncFd::new(fd).map_err(Error::Io))
-            .transpose()?;
-
-        Ok(Self { inner, async_fd })
+        Self::with_attributes(
+            domain,
+            CompletionQueueOptions {
+                size,
+                ..Default::default()
+            },
+        )
     }
 
     /// Create a queue without requesting a native wait object.
     /// Progress uses the Tokio timer, for providers that reject wait objects.
     /// The runtime must enable time; each empty poll yields for one millisecond.
     pub fn with_polling(domain: &Domain, size: usize) -> Result<Self> {
-        Ok(Self {
-            inner: CompletionQueue::with_options(domain, size, false)?,
-            async_fd: None,
-        })
+        Self::with_attributes(
+            domain,
+            CompletionQueueOptions {
+                size,
+                wait_obj: false,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Create a queue with explicit source-address and wait options.
+    pub fn with_attributes(domain: &Domain, options: CompletionQueueOptions) -> Result<Self> {
+        let inner = CompletionQueue::with_attributes(domain, options)?;
+        // An unspecified provider wait object need not expose a descriptor.
+        let async_fd = if options.wait_obj {
+            inner
+                .wait_fd()
+                .ok()
+                .map(|fd| AsyncFd::new(fd).map_err(Error::Io))
+                .transpose()?
+        } else {
+            None
+        };
+        Ok(Self { inner, async_fd })
     }
 
     /// Borrow the native wait descriptor, if this queue has one.
@@ -151,7 +166,6 @@ impl AsyncCompletionQueue {
 }
 
 /// One result slot per observer; provider scratch storage is owned separately.
-#[derive(Clone, Copy)]
 enum OperationState {
     Pending,
     Complete(CompletionEvent),
@@ -226,30 +240,24 @@ impl CompletionRouter {
         // Unknown contexts are opaque integers, never application pointers.
         let pending = self.pending.borrow_mut().remove(&event.context);
         if let Some(pending) = pending {
-            let delivered = {
-                let mut state = pending.result.state.borrow_mut();
-                if matches!(*state, OperationState::Pending) {
-                    *state = OperationState::Complete(event);
-                    true
-                } else {
-                    false
-                }
-            };
-            if delivered {
+            let mut state = pending.result.state.borrow_mut();
+            if matches!(*state, OperationState::Pending) {
+                *state = OperationState::Complete(event);
+                drop(state);
                 pending.result.changed.notify_waiters();
             } else {
                 // Detached observers and operations already notified of a
                 // queue failure still need their actual retirement preserved.
+                drop(state);
                 self.preserve(event);
             }
         } else {
             // Establish a queue failure before waking any public consumer;
             // a reentrant waker must not admit more managed submissions.
+            let fault = (event.context == 0).then_some(event.error).flatten();
             self.events.borrow_mut().push_back(event);
-            if event.context == 0 {
-                if let Some(code) = event.error {
-                    self.fail(code);
-                }
+            if let Some(code) = fault {
+                self.fail(code);
             }
             self.available.notify_waiters();
         }
@@ -745,7 +753,7 @@ mod tests {
             let expected = event(91, None);
             let delivery = async {
                 tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-                queue.inner.router.route(expected);
+                queue.inner.router.route(expected.clone());
             };
             let wait = tokio::time::timeout(std::time::Duration::from_secs(1), queue.wait_async());
             let (received, ()) = futures::future::join(wait, delivery).await;
@@ -905,6 +913,71 @@ mod tests {
             tag: 9,
             data: 11,
             error,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn routing_preserves_metadata_through_observation_and_retirement() {
+        #[derive(Clone, Copy)]
+        enum Observer {
+            Attached,
+            DroppedBefore,
+            DroppedAfter,
+            QueueFailed,
+        }
+        for observer in [
+            Observer::Attached,
+            Observer::DroppedBefore,
+            Observer::DroppedAfter,
+            Observer::QueueFailed,
+        ] {
+            for failed in [false, true] {
+                let router = Rc::new(CompletionRouter::default());
+                let ticket = router.allocate().unwrap();
+                let expected = CompletionEvent {
+                    buffer: Some(0x4321),
+                    source: Some(0),
+                    error_info: failed.then_some(crate::CompletionErrorInfo {
+                        provider_error: -37,
+                        data: vec![0x52, 0, 0xff, 0x79],
+                        overflow_length: 17,
+                    }),
+                    ..event(ticket.address, failed.then_some(-125))
+                };
+                let actual = match observer {
+                    Observer::Attached => {
+                        router.route(expected.clone());
+                        match ticket.take_result().unwrap() {
+                            Ok(event) => event,
+                            Err(Error::Completion { event }) => *event,
+                            Err(error) => panic!("unexpected completion error: {error:?}"),
+                        }
+                    }
+                    Observer::DroppedBefore => {
+                        drop(ticket);
+                        router.route(expected.clone());
+                        router.pop_event().unwrap()
+                    }
+                    Observer::DroppedAfter => {
+                        router.route(expected.clone());
+                        drop(ticket);
+                        router.pop_event().unwrap()
+                    }
+                    Observer::QueueFailed => {
+                        router.fail(-5);
+                        assert!(matches!(
+                            ticket.take_result(),
+                            Some(Err(Error::Queue { code: -5 }))
+                        ));
+                        router.route(expected.clone());
+                        router.pop_event().unwrap()
+                    }
+                };
+                assert_eq!(actual, expected);
+                assert!(router.pending.borrow().is_empty());
+                assert!(router.pop_event().is_none());
+            }
         }
     }
 
@@ -923,7 +996,7 @@ mod tests {
         assert!(first.take_result().is_none());
         let error = second.take_result().unwrap().unwrap_err();
         assert!(
-            matches!(error, Error::Completion { context, code: -125 } if context == second.address)
+            matches!(error, Error::Completion { event } if event.context == second.address && event.error == Some(-125))
         );
         assert_eq!(router.pending.borrow().len(), 1);
         assert_eq!(router.pop_event().unwrap().context, 1);
@@ -970,7 +1043,16 @@ mod tests {
         let router = Rc::new(CompletionRouter::default());
         let first = router.allocate().unwrap();
         let second = router.allocate().unwrap();
-        router.route(event(0, Some(-5)));
+        let failure = CompletionEvent {
+            source: Some(0),
+            error_info: Some(crate::CompletionErrorInfo {
+                provider_error: -37,
+                data: vec![0x52, 0, 0xff, 0x79],
+                overflow_length: 0,
+            }),
+            ..event(0, Some(-5))
+        };
+        router.route(failure.clone());
         assert_eq!(router.pending.borrow().len(), 2);
         assert!(matches!(
             first.take_result(),
@@ -981,7 +1063,7 @@ mod tests {
             Some(Err(Error::Queue { code: -5 }))
         ));
         assert!(matches!(router.allocate(), Err(Error::Queue { code: -5 })));
-        assert_eq!(router.pop_event().unwrap().context, 0);
+        assert_eq!(router.pop_event().unwrap(), failure);
         // A later completion is the first proof that this native context is
         // reusable. Preserve it even after the queue error was observed.
         router.route(event(first.address, None));
@@ -1056,7 +1138,7 @@ mod tests {
         assert!(timeouts[1] < timeouts[0]);
         assert!(matches!(
             ticket.take_result(),
-            Some(Err(Error::Completion { code: -125, .. }))
+            Some(Err(Error::Completion { event })) if event.error == Some(-125)
         ));
         assert!(router.check_fault().is_ok());
         let ticket = router.allocate().unwrap();
@@ -1157,7 +1239,7 @@ mod tests {
         assert_eq!(second_wake.0.load(Ordering::Relaxed), 1);
         let error = wait_second.await.unwrap_err();
         assert!(
-            matches!(error, Error::Completion { context, code: -125 } if context == second.address)
+            matches!(error, Error::Completion { event } if event.context == second.address && event.error == Some(-125))
         );
         assert!(observer.poll().is_none()); // must not steal first's result
         observer.router.route(event(first.address, None));

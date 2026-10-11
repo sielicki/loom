@@ -297,10 +297,25 @@ impl Domain {
 // CompletionQueue
 // ============================================================================
 
+/// Extended information supplied by a native completion error entry.
+///
+/// Diagnostic bytes are owned and remain valid after further queue reads or
+/// queue destruction. A zero provider error or overflow length is a value,
+/// distinct from the absence of an error entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompletionErrorInfo {
+    /// Provider-specific error number, independent of the fabric error code.
+    pub provider_error: i32,
+    /// Diagnostic bytes, preserved verbatim rather than interpreted as text.
+    pub data: Vec<u8>,
+    /// Received bytes discarded by truncation (native `olen`).
+    pub overflow_length: usize,
+}
+
 /// A completion event from the completion queue.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionEvent {
-    /// User-provided context.
+    /// User-provided context. Its numeric value does not retain native storage.
     pub context: usize,
     /// Number of bytes transferred.
     pub bytes_transferred: usize,
@@ -312,6 +327,14 @@ pub struct CompletionEvent {
     pub data: u64,
     /// Fabric error code, if this is an error completion.
     pub error: Option<i32>,
+    /// Received message address, when supplied. This does not own the buffer
+    /// or grant permission to dereference it after its allocation is released.
+    pub buffer: Option<usize>,
+    /// Receive source, when requested and supplied by the provider.
+    pub source: Option<u64>,
+    /// Extended native error entry; absent for successful events and queue
+    /// read failures which have no attributable native error entry.
+    pub error_info: Option<CompletionErrorInfo>,
 }
 
 impl CompletionEvent {
@@ -323,14 +346,46 @@ impl CompletionEvent {
             tag: data.tag,
             data: data.data,
             error: data.has_error.then_some(data.error_code),
+            buffer: (data.buffer != 0).then_some(data.buffer),
+            source: data.has_source.then_some(data.source),
+            error_info: data.has_error_info.then_some(CompletionErrorInfo {
+                provider_error: data.provider_error,
+                data: data.error_data,
+                overflow_length: data.overflow_length,
+            }),
         }
     }
 
-    /// Return the completion or an error retaining its operation context.
+    /// Return the completion or an error owning the entire failed event.
     pub fn into_result(self) -> Result<Self> {
-        match self.error {
-            Some(code) => Err(Error::Completion { context: self.context, code }),
-            None => Ok(self),
+        if self.error.is_some() {
+            Err(Error::Completion {
+                event: Box::new(self),
+            })
+        } else {
+            Ok(self)
+        }
+    }
+}
+
+/// Options for creating a completion queue with tagged completion entries.
+#[derive(Debug, Clone, Copy)]
+pub struct CompletionQueueOptions {
+    /// Number of entries requested from the provider.
+    pub size: usize,
+    /// Request a native wait object. Providers may supply a non-FD object.
+    pub wait_obj: bool,
+    /// Preserve receive source addresses. Bound endpoints must negotiate
+    /// [`Capabilities::SOURCE`]; providers may still report unavailable sources.
+    pub source_addresses: bool,
+}
+
+impl Default for CompletionQueueOptions {
+    fn default() -> Self {
+        Self {
+            size: 1024,
+            wait_obj: true,
+            source_addresses: false,
         }
     }
 }
@@ -363,7 +418,23 @@ impl CompletionQueue {
     /// * `size` - Number of entries in the queue.
     /// * `wait_obj` - Enable wait object for async notification.
     pub fn with_options(domain: &Domain, size: usize, wait_obj: bool) -> Result<Self> {
-        let attr = ffi::CqAttributes { size, wait_obj };
+        Self::with_attributes(
+            domain,
+            CompletionQueueOptions {
+                size,
+                wait_obj,
+                ..CompletionQueueOptions::default()
+            },
+        )
+    }
+
+    /// Create a queue with explicit source-address and wait options.
+    pub fn with_attributes(domain: &Domain, options: CompletionQueueOptions) -> Result<Self> {
+        let attr = ffi::CqAttributes {
+            size: options.size,
+            wait_obj: options.wait_obj,
+            source_addresses: options.source_addresses,
+        };
         let inner = ffi::ffi::create_completion_queue(&domain.inner, &attr)?;
         Ok(Self {
             inner: Rc::new(inner),
@@ -1069,20 +1140,39 @@ mod tests {
                 data: 0,
                 has_error: true,
                 error_code: ffi::ffi::error_timeout(),
+                ..Default::default()
             },
             error_code: ffi::ffi::error_timeout(),
         };
-        assert!(matches!(queue.decode_wait(read), Err(Error::Timeout)));
+        assert!(matches!(
+            queue.decode_wait(read.clone()),
+            Err(Error::Timeout)
+        ));
         read.error_code = ffi::ffi::error_again();
-        assert!(matches!(queue.decode_wait(read), Err(Error::WouldBlock)));
+        assert!(matches!(
+            queue.decode_wait(read.clone()),
+            Err(Error::WouldBlock)
+        ));
         read.error_code = -1_234_567;
-        assert!(matches!(queue.decode_wait(read), Err(Error::Queue { code: -1_234_567 })));
+        assert!(matches!(
+            queue.decode_wait(read.clone()),
+            Err(Error::Queue { code: -1_234_567 })
+        ));
         read.kind = ffi::CqReadKind::Event;
-        let error = queue.decode_wait(read).unwrap().into_result().unwrap_err();
-        assert!(matches!(error, Error::Completion { context: 0, code } if code == ffi::ffi::error_timeout()));
+        let error = queue
+            .decode_wait(read.clone())
+            .unwrap()
+            .into_result()
+            .unwrap_err();
+        assert!(
+            matches!(&error, Error::Completion { event } if event.context == 0 && event.error == Some(ffi::ffi::error_timeout()))
+        );
         assert!(!error.is_timeout());
         read.kind = ffi::CqReadKind::Empty;
-        assert!(matches!(queue.decode_wait(read), Err(Error::WouldBlock)));
+        assert!(matches!(
+            queue.decode_wait(read.clone()),
+            Err(Error::WouldBlock)
+        ));
     }
 
     #[test]
@@ -1095,10 +1185,13 @@ mod tests {
             data: 0,
             has_error: true,
             error_code: -125,
+            ..Default::default()
         });
         assert_eq!(event.error, Some(-125));
         assert_eq!(event.tag, 9);
-        assert!(matches!(event.into_result(), Err(Error::Completion { context: 73, code: -125 })));
+        assert!(
+            matches!(event.into_result(), Err(Error::Completion { event }) if event.context == 73 && event.error == Some(-125))
+        );
     }
 
     #[test]
@@ -1141,3 +1234,7 @@ mod tests {
         assert!(flags.contains(CqBindFlags::RECV));
     }
 }
+
+#[cfg(all(test, feature = "test_fixtures"))]
+#[path = "../tests/fixtures/completion_metadata.rs"]
+mod completion_metadata;

@@ -205,6 +205,25 @@ context lifetime obligations until completion. `Error::Completion`
 describes a failure after acceptance and is kept distinct from a retryable
 submission rejection. C++ exceptions remain `Error::Cxx`.
 
+`CompletionEvent` preserves the receive-buffer address, optional source address,
+and native error metadata. `error_info: Some(...)` distinguishes an error entry
+with zero-valued fields from an event without that information. Provider error
+numbers, binary diagnostic bytes (including embedded zeros), and truncation
+overflow length survive further reads and queue destruction. Buffer and context
+addresses are opaque values; the event does not retain those allocations.
+
+Use `CompletionQueue::with_attributes` or `AsyncCompletionQueue::with_attributes`
+with `CompletionQueueOptions { source_addresses: true, ..Default::default() }`
+to request source-preserving reads. Bound endpoints must negotiate
+`Capabilities::SOURCE`; unavailable sources remain `None`, while address zero
+is preserved as `Some(0)`.
+
+API change: `CompletionEvent` is `Clone` rather than `Copy`, and
+`Error::Completion { event }` now owns the complete failed event. Match
+`event.context` and `event.error` in place of the former `context` and `code`
+fields. `into_result()`, synchronous waits and async routing preserve the same
+metadata, including when an observer is dropped before taking its result.
+
 Async submissions allocate native `fi_context2` scratch storage. The bound
 completion queue retains it when a future is dropped and releases it when
 the matching completion is consumed. Polling a clone of the underlying
@@ -233,8 +252,11 @@ cd bindings/rust
 cargo build
 ```
 
-Run the ordinary tests with `cargo test --all-features`. The TCP receive
-queue saturation regression requires that software provider explicitly:
+Run the ordinary tests with `cargo test --all-features`. This includes the
+`test_fixtures` feature, which builds deterministic native CQ fixtures to check
+metadata ownership across the bridge without hardware. It is disabled by default.
+The TCP receive queue saturation regression requires that software provider
+explicitly:
 
 ```bash
 cargo test --all-features receive_backpressure_survives_the_cpp_bridge -- --ignored

@@ -30,12 +30,10 @@ pub enum Error {
         code: i32,
     },
     /// An operation failed after submission.
-    #[error("Fabric completion {context} failed with code {code}")]
+    #[error("Fabric completion {} failed with code {}", .event.context, .event.error.unwrap_or_default())]
     Completion {
-        /// The context submitted with the operation.
-        context: usize,
-        /// The negative fabric error code.
-        code: i32,
+        /// The complete failed event, including owned provider diagnostics.
+        event: Box<crate::CompletionEvent>,
     },
     /// A fabric operation failed.
     #[error("Fabric error: {0}")]
@@ -142,8 +140,11 @@ mod tests {
         assert!(Error::Timeout.is_timeout());
         // An error after acceptance must not invite a duplicate submission.
         assert!(!Error::Completion {
-            context: 1,
-            code: again
+            event: Box::new(crate::CompletionEvent {
+                context: 1,
+                error: Some(again),
+                ..Default::default()
+            })
         }
         .is_would_block());
     }

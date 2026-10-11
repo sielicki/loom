@@ -32,6 +32,8 @@ tokio = { version = "1.0", features = ["full"] }
 
 [features]
 default = []
+# Deterministic native CQ fixtures for bridge regression tests only.
+test_fixtures = []
 tokio = ["dep:tokio", "dep:futures"]
 
 [package.metadata.docs.rs]

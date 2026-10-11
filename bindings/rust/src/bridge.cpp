@@ -236,6 +236,7 @@ auto create_completion_queue(const DomainHandle& dom, const CqAttributes& attr)
     loom::completion_queue_attr cq_attr{};
     cq_attr.size = loom::queue_size{attr.size};
     cq_attr.wait_obj = attr.wait_obj;
+    cq_attr.source_addresses = attr.source_addresses;
 
     auto result = loom::completion_queue::create(dom.get(), cq_attr);
     return std::make_unique<CompletionQueueHandle>(unwrap_or_throw(std::move(result)));
@@ -427,17 +428,30 @@ auto endpoint_get_name(const EndpointHandle& ep) -> rust::Vec<std::uint8_t> {
 
 namespace {
 auto encode_completion(const loom::completion_event& event) -> CqReadResult {
+    rust::Vec<std::uint8_t> diagnostic;
+    diagnostic.reserve(event.error_info.err_data_size);
+    for (const auto byte :
+         std::span{event.error_info.err_data.get(), event.error_info.err_data_size})
+        diagnostic.push_back(std::to_integer<std::uint8_t>(byte));
     return {
         .kind = CqReadKind::Event,
-        .event = {
-            .context = std::bit_cast<std::uintptr_t>(event.context.raw()),
-            .bytes_transferred = event.bytes_transferred,
-            .flags = event.flags,
-            .tag = event.tag,
-            .data = event.data,
-            .has_error = event.has_error(),
-            .error_code = event.error ? event.error.value() : 0,
-        },
+        .event =
+            {
+                .context = std::bit_cast<std::uintptr_t>(event.context.raw()),
+                .bytes_transferred = event.bytes_transferred,
+                .flags = event.flags,
+                .tag = event.tag,
+                .data = event.data,
+                .has_error = event.has_error(),
+                .error_code = event.error ? event.error.value() : 0,
+                .buffer = reinterpret_cast<std::uintptr_t>(event.buffer),
+                .has_source = event.source != loom::fabric_addrs::unspecified,
+                .source = event.source.get(),
+                .has_error_info = event.error_info.available,
+                .provider_error = event.error_info.prov_errno,
+                .error_data = std::move(diagnostic),
+                .overflow_length = event.error_info.overflow_length,
+            },
     };
 }
 }  // namespace
