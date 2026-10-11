@@ -44,17 +44,17 @@ reported 2.5.0a1; 1.22.0 was the initial local review build.
 | [2.0.0](https://github.com/ofiwg/libfabric/releases/tag/v2.0.0) | API simplifications, `fi_fabric2`, sub-MRs and single-use registrations | Existing calls remain usable; the new registration APIs need separate lifetime designs. |
 | [2.1.0](https://github.com/ofiwg/libfabric/releases/tag/v2.1.0) | EFA-direct context requirements and provider fixes | Preserve `FI_CONTEXT2` and keep application metadata outside provider storage. |
 | [2.2.0](https://github.com/ofiwg/libfabric/releases/tag/v2.2.0) | Interface rescanning and firewall addresses | Add typed `FI_RESCAN` query and `FI_FIREWALL_ADDR` insertion options. |
-| [2.3.0](https://github.com/ofiwg/libfabric/releases/tag/v2.3.0) | Mixed IPv4/IPv6 address format | Expose `FI_SOCKADDR_IP` without discarding it during conversion. |
+| [2.3.0](https://github.com/ofiwg/libfabric/releases/tag/v2.3.0) | Mixed IPv4/IPv6 address format | Discovery now preserves `FI_SOCKADDR_IP`. |
 | [2.3.1](https://github.com/ofiwg/libfabric/releases/tag/v2.3.1) | Provider corrections | Receive the fixes through the dependency update. |
 | [2.4.0](https://github.com/ofiwg/libfabric/releases/tag/v2.4.0) | Upstream Rust bindings and clarified wait-object contracts | Keep loom's higher-level binding; query the wait-object type before retrieving a descriptor. |
-| [2.5.0](https://github.com/ofiwg/libfabric/releases/tag/v2.5.0) | Counter limits and ROCr device ordinals | Expose runtime counter ranges; pass the selected device during registration. |
+| [2.5.0](https://github.com/ofiwg/libfabric/releases/tag/v2.5.0) | Counter limits and ROCr device ordinals | Runtime counter limits are exposed and checked; registration passes the selected device. |
 | [2.5.1](https://github.com/ofiwg/libfabric/releases/tag/v2.5.1) | Memory-registration and provider corrections | Receive the fixes through the update; callers still own buffer lifetimes. |
 | [2.6.0](https://github.com/ofiwg/libfabric/releases/tag/v2.6.0) | EFA feature discovery and hardware counters | Use runtime provider limits and capabilities for operational decisions. |
 | [2.7.0](https://github.com/ofiwg/libfabric/releases/tag/v2.7.0) | XPU contexts, device exports, address lookup and MR descriptors | A new XPU integration needs context ownership, export wrappers and device-side APIs. |
 
-The context and device-registration corrections are implemented. Portable
-feature additions to prioritize are rescan/firewall options, mixed IP
-addresses and counter limits. XPU support is a separate feature project,
+The context, device-registration, address-format, and counter-limit corrections
+are implemented. Remaining portable additions include rescan/firewall options.
+XPU support is a separate feature project,
 particularly relevant to the GPU communication work listed below; adding
 only the capability bit would not provide a usable implementation.
 
