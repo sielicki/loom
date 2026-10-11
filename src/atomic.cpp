@@ -16,18 +16,28 @@ auto inject(endpoint& ep,
             const void* buf,
             std::size_t count,
             remote_memory remote) -> result<void> {
+    return inject_to(ep, op, dt, buf, count, fabric_addrs::unspecified, remote);
+}
+
+auto inject_to(endpoint& ep,
+               operation op,
+               datatype dt,
+               const void* buf,
+               std::size_t count,
+               fabric_addr dest_addr,
+               remote_memory remote) -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
-    if (!fid_ep->atomic || !fid_ep->atomic->inject) {
+    if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, inject)) {
         return make_error_result<void>(errc::not_supported);
     }
 
     auto ret = fi_inject_atomic(fid_ep,
                                 buf,
                                 count,
-                                FI_ADDR_UNSPEC,
+                                dest_addr.get(),
                                 remote.addr,
                                 remote.key,
                                 detail::to_fi_datatype(dt),

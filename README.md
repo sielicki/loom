@@ -139,57 +139,54 @@ support with `atomic::is_valid`, `is_fetch_valid`, or `is_compare_valid`.
 staging entry points submit provider atomic operations rather than a separate
 RMA read/modify/write sequence, which cannot guarantee atomicity.
 
+For RDM endpoints, use `execute_to`, `fetch_to`, `compare_swap_to`, or
+`inject_to` with the peer's address-vector handle. Typed `add_to`,
+`fetch_add_to`, and `cas_to` preserve the same destination and independent
+operand registrations. The original helpers use an unspecified destination
+for connected endpoints. `compare_swap_to` accepts separate comparison,
+replacement, and result registrations.
+
+Ordinary atomic calls borrow every operand, result, registration, and
+context until completion. Keep typed arguments alive; passing a temporary
+does not extend its lifetime. `inject_to` releases its input on return and
+generates no success completion. Provider operation/type/count and inject
+limits still apply.
+
 ```cpp
-#include <loom/loom.hpp>
-#include <loom/async/completion_queue.hpp>
+// ep is bound to a dedicated cq and an AV containing peer_address.
+// remote is the target's exported remote_memory, exchanged with that peer.
+std::uint64_t increment = 42;
+std::uint64_t previous = 0;
+auto input_mr = loom::memory_region::register_memory(
+    domain, std::as_writable_bytes(std::span{&increment, 1}),
+    loom::mr_access_flags::read).value();
+auto result_mr = loom::memory_region::register_memory(
+    domain, std::as_writable_bytes(std::span{&previous, 1}),
+    loom::mr_access_flags::write).value();
 
-// Assuming endpoint and memory regions are already set up...
-// remote_mr_info contains {addr, key, length} received from peer
-
-auto main() -> int {
-    using namespace loom;
-
-    // ... fabric/domain/endpoint setup as above ...
-
-    // Register buffers for atomic operations
-    std::uint64_t local_value = 42;
-    std::uint64_t result_value = 0;
-
-    auto local_mr = memory_region::register_memory(
-        domain,
-        static_cast<void*>(&local_value), sizeof(local_value),
-        mr_access_flags::read | mr_access_flags::write
-    ).value();
-
-    auto result_mr = memory_region::register_memory(
-        domain,
-        static_cast<void*>(&result_value), sizeof(result_value),
-        mr_access_flags::read | mr_access_flags::write
-    ).value();
-
-    // Describe the remote memory location (received out-of-band from peer)
-    remote_memory remote{
-        .addr = peer_remote_addr,
-        .key = peer_remote_key,
-        .length = sizeof(std::uint64_t)
-    };
-
-    // Atomic fetch-and-add: adds local_value to remote, returns old value
-    atomic::fetch_add(ep, local_value, &result_value, result_mr, remote).value();
-
-    // Typed compare-and-swap: if remote == 100, set to 200
-    std::uint64_t compare = 100;
-    std::uint64_t swap = 200;
-    std::uint64_t old_val = 0;
-    atomic::cas(ep, compare, swap, &old_val, result_mr, remote).value();
-
-    // Check if atomic operations are supported before using them
-    if (atomic::is_valid(ep, atomic::operation::sum, atomic::datatype::uint64)) {
-        atomic::add(ep, local_value, remote).value();
-    }
-
-    return 0;
+std::size_t max_count{};
+if (!loom::atomic::is_fetch_valid(ep, loom::atomic::operation::sum,
+                                  loom::atomic::datatype::uint64, &max_count)
+    || max_count < 1) {
+    // Reject this transport profile before submitting work.
+    return;
 }
+loom::request_context context;
+auto submitted = loom::atomic::fetch_add_to(
+    ep, increment, &previous, &input_mr, &result_mr,
+    peer_address, remote, &context);
+if (!submitted) {
+    // Nothing was accepted. Preserve the numeric error, including EAGAIN.
+    return;
+}
+for (;;) {
+    if (auto event = cq.poll()) {
+        // Check event->error before using previous. This dedicated CQ has
+        // only this operation; a shared CQ needs dispatch by context.
+        break;
+    }
+}
+// The completion retires the borrowed buffers and registrations.
 ```
 
 ### Triggered Operations

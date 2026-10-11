@@ -64,6 +64,7 @@ loom_add_test(test_concepts)
 loom_add_test(test_rma)
 loom_add_test(test_messaging_vectors)
 loom_add_test(test_atomic)
+loom_add_test(test_atomic_peers)
 loom_add_test(test_collective)
 loom_add_test(test_collective_join)
 loom_add_test(test_collective_transfers)
@@ -104,6 +105,7 @@ add_executable(test_implementation
     test_resource_allocations.cpp
     test_empty_resources.cpp
     test_atomic.cpp
+    test_atomic_peers.cpp
     test_address_transport.cpp
     test_collective_join.cpp
     test_collective_transfers.cpp

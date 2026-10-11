@@ -16,6 +16,11 @@
 /**
  * @namespace loom::atomic
  * @brief Atomic remote memory operations.
+ *
+ * Ordinary submissions borrow operands, results, registrations, and context
+ * until completion. Keep referenced values alive, including typed operands;
+ * passing a temporary does not extend its lifetime. Injection releases only
+ * its input on return. Query operation/type/count support before submission.
  */
 namespace loom::atomic {
 
@@ -243,24 +248,26 @@ namespace detail {
  * @param buf Pointer to the local operand buffer.
  * @param count Number of elements.
  * @param mr Memory region for the local buffer (may be null).
+ * @param dest_addr Destination peer (ignored by connected endpoints).
  * @param remote Remote memory location.
  * @param context Optional user context.
  * @return Success or error result.
  */
 template <context_like Ctx = void*>
-auto execute(endpoint& ep,
-             operation op,
-             datatype dt,
-             const void* buf,
-             std::size_t count,
-             memory_region* mr,
-             remote_memory remote,
-             Ctx context = {}) -> loom::result<void> {
+auto execute_to(endpoint& ep,
+                operation op,
+                datatype dt,
+                const void* buf,
+                std::size_t count,
+                memory_region* mr,
+                fabric_addr dest_addr,
+                remote_memory remote,
+                Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
-    if (!fid_ep->atomic || !fid_ep->atomic->write) {
+    if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, write)) {
         return make_error_result<void>(errc::not_supported);
     }
     void* desc = mr ? mr->descriptor().raw() : nullptr;
@@ -269,7 +276,7 @@ auto execute(endpoint& ep,
                            buf,
                            count,
                            desc,
-                           FI_ADDR_UNSPEC,
+                           dest_addr.get(),
                            remote.addr,
                            remote.key,
                            detail::to_fi_datatype(dt),
@@ -281,6 +288,19 @@ auto execute(endpoint& ep,
     }
 
     return make_success();
+}
+
+/// Connected-endpoint convenience; buffers remain borrowed until completion.
+template <context_like Ctx = void*>
+auto execute(endpoint& ep,
+             operation op,
+             datatype dt,
+             const void* buf,
+             std::size_t count,
+             memory_region* mr,
+             remote_memory remote,
+             Ctx context = {}) -> loom::result<void> {
+    return execute_to(ep, op, dt, buf, count, mr, fabric_addrs::unspecified, remote, context);
 }
 
 /**
@@ -300,6 +320,15 @@ auto inject(endpoint& ep,
             std::size_t count,
             remote_memory remote) -> loom::result<void>;
 
+/// Inject an atomic operand to an explicit peer, releasing the input on return.
+auto inject_to(endpoint& ep,
+               operation op,
+               datatype dt,
+               const void* buf,
+               std::size_t count,
+               fabric_addr dest_addr,
+               remote_memory remote) -> loom::result<void>;
+
 /**
  * @brief Executes a fetch-atomic operation, returning the original value.
  * @tparam Ctx The context type.
@@ -311,26 +340,28 @@ auto inject(endpoint& ep,
  * @param count Number of elements.
  * @param mr_buf Memory region for the operand buffer (may be null).
  * @param mr_result Memory region for the result buffer (may be null).
+ * @param dest_addr Destination peer (ignored by connected endpoints).
  * @param remote Remote memory location.
  * @param context Optional user context.
  * @return Success or error result.
  */
 template <context_like Ctx = void*>
-auto fetch(endpoint& ep,
-           operation op,
-           datatype dt,
-           const void* buf,
-           void* result,
-           std::size_t count,
-           memory_region* mr_buf,
-           memory_region* mr_result,
-           remote_memory remote,
-           Ctx context = {}) -> loom::result<void> {
+auto fetch_to(endpoint& ep,
+              operation op,
+              datatype dt,
+              const void* buf,
+              void* result,
+              std::size_t count,
+              memory_region* mr_buf,
+              memory_region* mr_result,
+              fabric_addr dest_addr,
+              remote_memory remote,
+              Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
-    if (!fid_ep->atomic || !fid_ep->atomic->readwrite) {
+    if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, readwrite)) {
         return make_error_result<void>(errc::not_supported);
     }
     void* desc_buf = mr_buf ? mr_buf->descriptor().raw() : nullptr;
@@ -342,7 +373,7 @@ auto fetch(endpoint& ep,
                                  desc_buf,
                                  result,
                                  desc_result,
-                                 FI_ADDR_UNSPEC,
+                                 dest_addr.get(),
                                  remote.addr,
                                  remote.key,
                                  detail::to_fi_datatype(dt),
@@ -356,6 +387,31 @@ auto fetch(endpoint& ep,
     return make_success();
 }
 
+/// Connected-endpoint convenience; operands and result are borrowed until completion.
+template <context_like Ctx = void*>
+auto fetch(endpoint& ep,
+           operation op,
+           datatype dt,
+           const void* buf,
+           void* result,
+           std::size_t count,
+           memory_region* mr_buf,
+           memory_region* mr_result,
+           remote_memory remote,
+           Ctx context = {}) -> loom::result<void> {
+    return fetch_to(ep,
+                    op,
+                    dt,
+                    buf,
+                    result,
+                    count,
+                    mr_buf,
+                    mr_result,
+                    fabric_addrs::unspecified,
+                    remote,
+                    context);
+}
+
 /**
  * @brief Executes a compare-and-swap atomic operation.
  * @tparam Ctx The context type.
@@ -366,41 +422,46 @@ auto fetch(endpoint& ep,
  * @param result Pointer to receive the original remote value.
  * @param count Number of elements.
  * @param mr_compare Memory region for the compare buffer (may be null).
+ * @param mr_swap Memory region for the replacement buffer (may be null).
  * @param mr_result Memory region for the result buffer (may be null).
+ * @param dest_addr Destination peer (ignored by connected endpoints).
  * @param remote Remote memory location.
  * @param context Optional user context.
  * @return Success or error result.
  */
 template <context_like Ctx = void*>
-auto compare_swap(endpoint& ep,
-                  datatype dt,
-                  const void* compare,
-                  const void* swap,
-                  void* result,
-                  std::size_t count,
-                  memory_region* mr_compare,
-                  memory_region* mr_result,
-                  remote_memory remote,
-                  Ctx context = {}) -> loom::result<void> {
+auto compare_swap_to(endpoint& ep,
+                     datatype dt,
+                     const void* compare,
+                     const void* swap,
+                     void* result,
+                     std::size_t count,
+                     memory_region* mr_compare,
+                     memory_region* mr_swap,
+                     memory_region* mr_result,
+                     fabric_addr dest_addr,
+                     remote_memory remote,
+                     Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     if (!fid_ep) {
         return make_error_result<void>(errc::invalid_argument);
     }
-    if (!fid_ep->atomic || !fid_ep->atomic->compwrite) {
+    if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, compwrite)) {
         return make_error_result<void>(errc::not_supported);
     }
     void* desc_compare = mr_compare ? mr_compare->descriptor().raw() : nullptr;
+    void* desc_swap = mr_swap ? mr_swap->descriptor().raw() : nullptr;
     void* desc_result = mr_result ? mr_result->descriptor().raw() : nullptr;
 
     auto ret = ::fi_compare_atomic(fid_ep,
                                    swap,
                                    count,
-                                   nullptr,
+                                   desc_swap,
                                    compare,
                                    desc_compare,
                                    result,
                                    desc_result,
-                                   FI_ADDR_UNSPEC,
+                                   dest_addr.get(),
                                    remote.addr,
                                    remote.key,
                                    detail::to_fi_datatype(dt),
@@ -412,6 +473,94 @@ auto compare_swap(endpoint& ep,
     }
 
     return make_success();
+}
+
+/// Connected-endpoint convenience for replacement operands needing no local descriptor.
+/// Use compare_swap_to when the replacement operand requires registration.
+template <context_like Ctx = void*>
+auto compare_swap(endpoint& ep,
+                  datatype dt,
+                  const void* compare,
+                  const void* swap,
+                  void* result,
+                  std::size_t count,
+                  memory_region* mr_compare,
+                  memory_region* mr_result,
+                  remote_memory remote,
+                  Ctx context = {}) -> loom::result<void> {
+    return compare_swap_to(ep,
+                           dt,
+                           compare,
+                           swap,
+                           result,
+                           count,
+                           mr_compare,
+                           nullptr,
+                           mr_result,
+                           fabric_addrs::unspecified,
+                           remote,
+                           context);
+}
+
+/// Typed addition with an explicit peer and optional operand registration.
+template <atomic_type T, context_like Ctx = void*>
+auto add_to(endpoint& ep,
+            const T& value,
+            memory_region* mr_value,
+            fabric_addr dest_addr,
+            remote_memory remote,
+            Ctx context = {}) -> loom::result<void> {
+    return execute_to(
+        ep, operation::sum, get_datatype<T>(), &value, 1, mr_value, dest_addr, remote, context);
+}
+
+/// Typed fetch-add; both the operand and result remain borrowed until completion.
+template <atomic_type T, context_like Ctx = void*>
+auto fetch_add_to(endpoint& ep,
+                  const T& value,
+                  T* result,
+                  memory_region* mr_value,
+                  memory_region* mr_result,
+                  fabric_addr dest_addr,
+                  remote_memory remote,
+                  Ctx context = {}) -> loom::result<void> {
+    return fetch_to(ep,
+                    operation::sum,
+                    get_datatype<T>(),
+                    &value,
+                    result,
+                    1,
+                    mr_value,
+                    mr_result,
+                    dest_addr,
+                    remote,
+                    context);
+}
+
+/// Typed compare-and-swap with independent registrations for all three buffers.
+template <atomic_type T, context_like Ctx = void*>
+auto cas_to(endpoint& ep,
+            const T& compare_value,
+            const T& swap_value,
+            T* old_value,
+            memory_region* mr_compare,
+            memory_region* mr_swap,
+            memory_region* mr_old,
+            fabric_addr dest_addr,
+            remote_memory remote,
+            Ctx context = {}) -> loom::result<void> {
+    return compare_swap_to(ep,
+                           get_datatype<T>(),
+                           &compare_value,
+                           &swap_value,
+                           old_value,
+                           1,
+                           mr_compare,
+                           mr_swap,
+                           mr_old,
+                           dest_addr,
+                           remote,
+                           context);
 }
 
 /**
