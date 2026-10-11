@@ -12,6 +12,7 @@
 #include "loom/core/endpoint.hpp"
 #include "loom/core/error.hpp"
 #include "loom/detail/conversions.hpp"
+#include "loom/detail/unique_fid.hpp"
 
 /**
  * @namespace loom
@@ -114,14 +115,10 @@ auto memory_region::register_memory(const domain& dom,
         return make_error_result_from_fi_errno<memory_region>(-ret);
     }
 
-    if (resource) {
-        auto impl = detail::make_pmr_unique<detail::memory_region_impl>(resource, mr, addr, length);
-        return memory_region{std::move(impl)};
-    }
-
-    auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::memory_region_impl>(default_resource, mr, addr, length);
+    detail::unique_fid<fid_mr> pending{mr};
+    auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
+        resource ? resource : get_default_resource(), mr, addr, length);
+    (void)pending.release();
     return memory_region{std::move(impl)};
 }
 
@@ -190,14 +187,10 @@ auto memory_region::register_hmem(const domain& dom,
         return make_error_result_from_fi_errno<memory_region>(-ret);
     }
 
-    if (resource) {
-        auto impl = detail::make_pmr_unique<detail::memory_region_impl>(resource, mr, addr, length);
-        return memory_region{std::move(impl)};
-    }
-
-    auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::memory_region_impl>(default_resource, mr, addr, length);
+    detail::unique_fid<fid_mr> pending{mr};
+    auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
+        resource ? resource : get_default_resource(), mr, addr, length);
+    (void)pending.release();
     return memory_region{std::move(impl)};
 }
 
@@ -234,14 +227,10 @@ auto memory_region::register_dmabuf(const domain& dom,
         return make_error_result_from_fi_errno<memory_region>(-ret);
     }
 
-    if (resource) {
-        auto impl = detail::make_pmr_unique<detail::memory_region_impl>(resource, mr, addr, length);
-        return memory_region{std::move(impl)};
-    }
-
-    auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::memory_region_impl>(default_resource, mr, addr, length);
+    detail::unique_fid<fid_mr> pending{mr};
+    auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
+        resource ? resource : get_default_resource(), mr, addr, length);
+    (void)pending.release();
     return memory_region{std::move(impl)};
 }
 

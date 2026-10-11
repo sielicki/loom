@@ -58,6 +58,7 @@ endfunction()
 loom_add_test(test_types)
 loom_add_test(test_error)
 loom_add_test(test_memory)
+loom_add_test(test_resource_allocations)
 loom_add_test(test_mr_cache)
 loom_add_test(test_concepts)
 loom_add_test(test_rma)
@@ -94,6 +95,7 @@ target_link_libraries(loom_test_implementation
     PUBLIC loom_sanitizers ${LOOM_LIBFABRIC_TARGET} Threads::Threads
 )
 add_executable(test_implementation
+    test_resource_allocations.cpp
     test_empty_resources.cpp
     test_atomic.cpp
     test_address_transport.cpp

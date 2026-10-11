@@ -494,6 +494,7 @@ target_sources(loom PUBLIC
         # Detail headers
         include/loom/detail/conversions.hpp
         include/loom/detail/native_address.hpp
+        include/loom/detail/unique_fid.hpp
 
         # Definitions for single translation unit implementation mode
         include/loom/detail/impl/address_impl.hpp
