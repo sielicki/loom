@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 
 #include "loom/core/allocator.hpp"
@@ -57,7 +58,7 @@ enum class hmem_iface : std::uint32_t {
 struct hmem_device {
     hmem_iface iface{hmem_iface::system};  ///< Memory interface type
     std::int64_t device_id{0};             ///< Device identifier
-    void* hmem_data{nullptr};              ///< Provider-specific device data
+    void* hmem_data{nullptr};              ///< Reserved; must remain null
 
     /**
      * @brief Default constructor creating a system memory device.
@@ -120,6 +121,27 @@ private:
         : iface(iface_), device_id(id_), hmem_data(data_) {}
 };
 
+/// Allocation made through the selected device API. Unspecified also covers
+/// managed/shared allocations; device and host select exclusive native flags.
+enum class hmem_allocation_kind { unspecified, device, host };
+
+/// Borrowed DMA-BUF backing. The descriptor and allocation must outlive the MR.
+/// The registered range starts at base address + offset in virtual-address mode.
+struct dmabuf_registration {
+    int fd{-1};
+    std::uint64_t offset{};
+};
+
+/// Registration attributes kept together for host, device, and DMA-BUF memory.
+/// Device allocations require a domain negotiated with capability::hmem.
+/// Registration does not take allocation ownership or establish GPU visibility.
+struct memory_registration {
+    mr_access access{};
+    hmem_device device{};
+    hmem_allocation_kind allocation{hmem_allocation_kind::unspecified};
+    std::optional<dmabuf_registration> dmabuf{};
+};
+
 /**
  * @class memory_region
  * @brief Represents a registered memory region for RDMA operations.
@@ -176,6 +198,13 @@ public:
                                 void* addr,
                                 std::size_t length,
                                 mr_access access,
+                                memory_resource* resource = nullptr) -> result<memory_region>;
+
+    [[nodiscard("memory registration result must be checked for errors")]]
+    static auto register_memory(const domain& dom,
+                                void* addr,
+                                std::size_t length,
+                                const memory_registration& attributes,
                                 memory_resource* resource = nullptr) -> result<memory_region>;
 
     [[nodiscard("hmem registration result must be checked for errors")]]

@@ -129,6 +129,76 @@ TEST_CASE("device registrations retain nonzero ordinals", "[memory]") {
     }
 }
 
+TEST_CASE("device registration combines allocation and DMA-BUF metadata", "[memory][hmem]") {
+    test::mock_domain provider(FI_MR_VIRT_ADDR);
+    std::array<std::byte, 8192> buffer{};
+    const auto allocation = GENERATE(hmem_allocation_kind::unspecified,
+                                     hmem_allocation_kind::device,
+                                     hmem_allocation_kind::host);
+    const auto dma = GENERATE(false, true);
+    memory_registration attributes{
+        .access = mr_access_flags::send | mr_access_flags::recv,
+        .device = hmem_device::cuda(3),
+        .allocation = allocation,
+    };
+    if (dma)
+        attributes.dmabuf = dmabuf_registration{17, 4096};
+    auto region = memory_region::register_memory(provider.dom, buffer.data(), 128, attributes);
+    REQUIRE(region);
+    const auto expected = allocation == hmem_allocation_kind::device ? FI_HMEM_DEVICE_ONLY
+                          : allocation == hmem_allocation_kind::host ? FI_HMEM_HOST_ALLOC
+                                                                     : 0;
+    REQUIRE(provider.flags == (expected | (dma ? FI_MR_DMABUF : 0)));
+    REQUIRE(provider.iface == FI_HMEM_CUDA);
+    REQUIRE(provider.device_id == 3);
+    REQUIRE(provider.access == (FI_SEND | FI_RECV));
+    REQUIRE(provider.hmem_data == nullptr);
+    REQUIRE(provider.address == buffer.data());
+    REQUIRE(provider.length == 128);
+    REQUIRE(provider.registration_offset == 0);
+    REQUIRE(region->remote_address() ==
+            reinterpret_cast<std::uintptr_t>(buffer.data()) + (dma ? 4096 : 0));
+    if (dma) {
+        REQUIRE(provider.dmabuf_fd == 17);
+        REQUIRE(provider.dmabuf_offset == 4096);
+    }
+}
+
+TEST_CASE("invalid device registration metadata never reaches the provider", "[memory][hmem]") {
+    test::mock_domain provider;
+    std::array<std::byte, 64> buffer{};
+    memory_registration attributes{.access = mr_access_flags::recv, .device = hmem_device::cuda(0)};
+    SECTION("reserved HMEM data") {
+        attributes.device.hmem_data = buffer.data();
+    }
+    SECTION("unknown interface") {
+        attributes.device.iface = static_cast<hmem_iface>(99);
+    }
+    SECTION("out of range device") {
+        attributes.device.device_id = std::int64_t{1} << 32;
+    }
+    SECTION("unknown allocation") {
+        attributes.allocation = static_cast<hmem_allocation_kind>(99);
+    }
+    SECTION("device flag without a device API") {
+        attributes.device = {};
+        attributes.allocation = hmem_allocation_kind::device;
+    }
+    SECTION("host flag without a device API") {
+        attributes.device = {};
+        attributes.allocation = hmem_allocation_kind::host;
+    }
+    SECTION("invalid DMA-BUF descriptor") {
+        attributes.dmabuf = dmabuf_registration{};
+    }
+    auto region =
+        memory_region::register_memory(provider.dom, buffer.data(), buffer.size(), attributes);
+    REQUIRE_FALSE(region);
+    REQUIRE(region.error() == errc::invalid_argument);
+    REQUIRE(provider.requested_keys.empty());
+    REQUIRE(provider.live_regions == 0);
+}
+
 TEST_CASE("hmem device creation", "[memory]") {
     auto cuda_dev = hmem_device::cuda(0);
     REQUIRE(cuda_dev.iface == hmem_iface::cuda);

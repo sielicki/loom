@@ -87,16 +87,66 @@ auto memory_region::register_memory(const domain& dom,
     return memory_region{std::move(impl)};
 }
 
-auto memory_region::register_hmem(const domain& dom,
-                                  void* addr,
-                                  std::size_t length,
-                                  mr_access access,
-                                  hmem_device device,
-                                  memory_resource* resource) -> result<memory_region> {
-    if (!dom) {
+auto memory_region::register_memory(const domain& dom,
+                                    void* addr,
+                                    std::size_t length,
+                                    const memory_registration& attributes,
+                                    memory_resource* resource) -> result<memory_region> {
+    if (!dom || attributes.device.hmem_data || !std::in_range<int>(attributes.device.device_id) ||
+        (attributes.dmabuf && attributes.dmabuf->fd < 0)) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
-    auto remote_address = detail::mr_remote_address(dom.impl_->mr_mode, addr);
+    fi_mr_attr mr_attr{};
+    const auto ordinal = static_cast<int>(attributes.device.device_id);
+    switch (attributes.device.iface) {
+        case hmem_iface::system:
+            mr_attr.iface = FI_HMEM_SYSTEM;
+            break;
+        case hmem_iface::cuda:
+            mr_attr.iface = FI_HMEM_CUDA;
+            mr_attr.device.cuda = ordinal;
+            break;
+        case hmem_iface::rocr:
+#if FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION) >= FI_VERSION(2, 5)
+            mr_attr.iface = FI_HMEM_ROCR;
+            mr_attr.device.rocr = ordinal;
+            break;
+#else
+            return make_error_result<memory_region>(errc::not_supported);
+#endif
+        case hmem_iface::level_zero:
+            mr_attr.iface = FI_HMEM_ZE;
+            mr_attr.device.ze = ordinal;
+            break;
+        case hmem_iface::neuron:
+            mr_attr.iface = FI_HMEM_NEURON;
+            mr_attr.device.neuron = ordinal;
+            break;
+        case hmem_iface::synapseai:
+            mr_attr.iface = FI_HMEM_SYNAPSEAI;
+            mr_attr.device.synapseai = ordinal;
+            break;
+        default:
+            return make_error_result<memory_region>(errc::invalid_argument);
+    }
+    std::uint64_t flags{};
+    switch (attributes.allocation) {
+        case hmem_allocation_kind::unspecified:
+            break;
+        case hmem_allocation_kind::device:
+            flags = FI_HMEM_DEVICE_ONLY;
+            break;
+        case hmem_allocation_kind::host:
+            flags = FI_HMEM_HOST_ALLOC;
+            break;
+        default:
+            return make_error_result<memory_region>(errc::invalid_argument);
+    }
+    if (flags && attributes.device.iface == hmem_iface::system) {
+        return make_error_result<memory_region>(errc::invalid_argument);
+    }
+    auto remote_address = detail::mr_remote_address(
+        dom.impl_->mr_mode, addr, attributes.dmabuf ? attributes.dmabuf->offset : 0);
     if (!remote_address) {
         return std::unexpected(remote_address.error());
     }
@@ -104,62 +154,28 @@ auto memory_region::register_hmem(const domain& dom,
     if (!requested_key) {
         return std::unexpected(requested_key.error());
     }
-    auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
-
-    fi_mr_attr mr_attr{};
-    mr_attr.mr_iov = nullptr;
-    mr_attr.iov_count = 0;
-    mr_attr.access = detail::to_fi_mr_access(access);
-    mr_attr.offset = 0;
-    mr_attr.requested_key = requested_key->get();
-    mr_attr.context = nullptr;
-    mr_attr.auth_key_size = 0;
-    mr_attr.auth_key = nullptr;
-    mr_attr.iface = static_cast<fi_hmem_iface>(device.iface);
-    mr_attr.hmem_data = device.hmem_data;
-    if (!std::in_range<int>(device.device_id)) {
-        return make_error_result<memory_region>(errc::invalid_argument);
+    iovec iov{.iov_base = addr, .iov_len = length};
+    fi_mr_dmabuf dmabuf{};
+    if (attributes.dmabuf) {
+        dmabuf.fd = attributes.dmabuf->fd;
+        dmabuf.offset = attributes.dmabuf->offset;
+        dmabuf.len = length;
+        dmabuf.base_addr = addr;
+        mr_attr.dmabuf = &dmabuf;
+        flags |= FI_MR_DMABUF;
+    } else {
+        mr_attr.mr_iov = &iov;
     }
-    const auto ordinal = static_cast<int>(device.device_id);
-    switch (device.iface) {
-        case hmem_iface::system:
-            break;
-        case hmem_iface::cuda:
-            mr_attr.device.cuda = ordinal;
-            break;
-        case hmem_iface::rocr:
-#if FI_VERSION(FI_MAJOR_VERSION, FI_MINOR_VERSION) >= FI_VERSION(2, 5)
-            mr_attr.device.rocr = ordinal;
-            break;
-#else
-            return make_error_result<memory_region>(errc::not_supported);
-#endif
-        case hmem_iface::level_zero:
-            mr_attr.device.ze = ordinal;
-            break;
-        case hmem_iface::neuron:
-            mr_attr.device.neuron = ordinal;
-            break;
-        case hmem_iface::synapseai:
-            mr_attr.device.synapseai = ordinal;
-            break;
-        default:
-            return make_error_result<memory_region>(errc::invalid_argument);
-    }
-
-    iovec iov{};
-    iov.iov_base = addr;
-    iov.iov_len = length;
-    mr_attr.mr_iov = &iov;
     mr_attr.iov_count = 1;
+    mr_attr.access = detail::to_fi_mr_access(attributes.access);
+    mr_attr.requested_key = requested_key->get();
 
     fid_mr* mr = nullptr;
-    auto ret = fi_mr_regattr(fid_dom, &mr_attr, 0, &mr);
-
+    const auto ret =
+        fi_mr_regattr(static_cast<fid_domain*>(dom.internal_ptr()), &mr_attr, flags, &mr);
     if (ret != 0) {
         return make_error_result_from_fi_errno<memory_region>(-ret);
     }
-
     detail::unique_fid<fid_mr> pending{mr};
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
         resource ? resource : get_default_resource(),
@@ -172,6 +188,16 @@ auto memory_region::register_hmem(const domain& dom,
     return memory_region{std::move(impl)};
 }
 
+auto memory_region::register_hmem(const domain& dom,
+                                  void* addr,
+                                  std::size_t length,
+                                  mr_access access,
+                                  hmem_device device,
+                                  memory_resource* resource) -> result<memory_region> {
+    return register_memory(
+        dom, addr, length, memory_registration{.access = access, .device = device}, resource);
+}
+
 auto memory_region::register_dmabuf(const domain& dom,
                                     void* addr,
                                     std::size_t length,
@@ -179,50 +205,12 @@ auto memory_region::register_dmabuf(const domain& dom,
                                     int fd,
                                     std::uint64_t offset,
                                     memory_resource* resource) -> result<memory_region> {
-    if (!dom) {
-        return make_error_result<memory_region>(errc::invalid_argument);
-    }
-    auto remote_address = detail::mr_remote_address(dom.impl_->mr_mode, addr, offset);
-    if (!remote_address) {
-        return std::unexpected(remote_address.error());
-    }
-    auto requested_key = detail::mr_key_lease::acquire(dom.impl_->mr_keys);
-    if (!requested_key) {
-        return std::unexpected(requested_key.error());
-    }
-    auto* fid_dom = static_cast<fid_domain*>(dom.internal_ptr());
-
-    fi_mr_dmabuf dmabuf{};
-    dmabuf.fd = fd;
-    dmabuf.offset = offset;
-    dmabuf.len = length;
-    dmabuf.base_addr = addr;
-
-    fi_mr_attr mr_attr{};
-    mr_attr.dmabuf = &dmabuf;
-    mr_attr.iov_count = 1;
-    mr_attr.access = detail::to_fi_mr_access(access);
-    mr_attr.offset = 0;
-    mr_attr.requested_key = requested_key->get();
-    mr_attr.context = nullptr;
-
-    fid_mr* mr = nullptr;
-    auto ret = fi_mr_regattr(fid_dom, &mr_attr, FI_MR_DMABUF, &mr);
-
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<memory_region>(-ret);
-    }
-
-    detail::unique_fid<fid_mr> pending{mr};
-    auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
-        resource ? resource : get_default_resource(),
-        mr,
+    return register_memory(
+        dom,
         addr,
         length,
-        std::move(*requested_key),
-        *remote_address);
-    (void)pending.release();
-    return memory_region{std::move(impl)};
+        memory_registration{.access = access, .dmabuf = dmabuf_registration{fd, offset}},
+        resource);
 }
 
 auto memory_region::descriptor() const noexcept -> mr_descriptor {

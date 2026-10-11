@@ -22,6 +22,10 @@ struct mock_domain {
     std::uint64_t flags{};
     std::uint64_t registration_offset{};
     std::uint64_t dmabuf_offset{};
+    int dmabuf_fd{-1};
+    void* address{};
+    std::size_t length{};
+    void* hmem_data{};
     fi_hmem_iface iface{};
     int device_id{};
     std::size_t registrations{};
@@ -66,8 +70,16 @@ struct mock_domain {
                 auto& self = *static_cast<mock_domain*>(handle->context);
                 self.iface = attr->iface;
                 self.registration_offset = attr->offset;
-                if (flags & FI_MR_DMABUF)
+                self.hmem_data = attr->hmem_data;
+                if (flags & FI_MR_DMABUF) {
                     self.dmabuf_offset = attr->dmabuf[0].offset;
+                    self.dmabuf_fd = attr->dmabuf[0].fd;
+                    self.address = attr->dmabuf[0].base_addr;
+                    self.length = attr->dmabuf[0].len;
+                } else {
+                    self.address = attr->mr_iov[0].iov_base;
+                    self.length = attr->mr_iov[0].iov_len;
+                }
                 switch (attr->iface) {
                     case FI_HMEM_CUDA:
                         self.device_id = attr->device.cuda;
