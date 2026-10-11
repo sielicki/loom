@@ -23,6 +23,12 @@ pub enum Error {
         /// The negative libfabric error code, preserved without message parsing.
         code: i32,
     },
+    /// A queue read failed without reporting an operation completion.
+    #[error("Fabric queue read failed with code {code}")]
+    Queue {
+        /// The negative libfabric error code.
+        code: i32,
+    },
     /// An operation failed after submission.
     #[error("Fabric completion {context} failed with code {code}")]
     Completion {
@@ -94,14 +100,14 @@ pub(crate) fn from_submission_status(code: i32) -> Result<()> {
     }
 }
 
-/// Convert a completion event error code to an Error.
-pub(crate) fn from_completion_error(code: i32) -> Error {
-    match code {
-        -11 => Error::WouldBlock,                                 // EAGAIN
-        -110 => Error::Timeout,                                   // ETIMEDOUT
-        -22 => Error::InvalidArgument("invalid argument".into()), // EINVAL
-        -95 => Error::NotSupported,                               // EOPNOTSUPP
-        code => Error::Fabric(format!("error code {}", code)),
+/// A failed wait does not establish completion of any accepted operation.
+pub(crate) fn from_queue_status(code: i32) -> Error {
+    if code == crate::ffi::ffi::error_again() {
+        Error::WouldBlock
+    } else if code == crate::ffi::ffi::error_timeout() {
+        Error::Timeout
+    } else {
+        Error::Queue { code }
     }
 }
 

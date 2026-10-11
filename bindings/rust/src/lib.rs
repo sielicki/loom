@@ -323,28 +323,34 @@ impl CompletionQueue {
     ///
     /// Returns `None` if no completion is available.
     pub fn poll(&self) -> Option<CompletionEvent> {
-        let data = ffi::ffi::cq_poll(&self.inner);
-
-        // EAGAIN means no completion available
-        if data.error_code == -11 && !data.has_error {
-            return None;
+        let read = ffi::ffi::cq_poll(&self.inner);
+        match read.kind {
+            ffi::CqReadKind::Empty => None,
+            ffi::CqReadKind::Event => Some(self.decode_completion(read.event)),
+            // Native poll encodes read errors as context-free events. Failure
+            // is used only by wait, whose public API returns Result.
+            _ => unreachable!("invalid completion poll result"),
         }
-
-        Some(self.decode_completion(data))
     }
 
     /// Wait for a completion with timeout.
     ///
-    /// The queue must have been created with `wait_obj` enabled.
-    ///
-    /// # Arguments
+    /// The queue must have been created with `wait_obj` enabled. An empty or
+    /// timed-out wait does not report completion or retire an operation.
     ///
     /// * `timeout_ms` - Timeout in milliseconds, or `None` for infinite.
     pub fn wait(&self, timeout_ms: Option<i32>) -> Result<CompletionEvent> {
-        let timeout = timeout_ms.unwrap_or(-1);
-        let data = ffi::ffi::cq_wait(&self.inner, timeout);
+        let read = ffi::ffi::cq_wait(&self.inner, timeout_ms.unwrap_or(-1));
+        self.decode_wait(read)
+    }
 
-        self.decode_completion(data).into_result()
+    fn decode_wait(&self, read: ffi::CqReadResult) -> Result<CompletionEvent> {
+        match read.kind {
+            ffi::CqReadKind::Empty => Err(Error::WouldBlock),
+            ffi::CqReadKind::Event => self.decode_completion(read.event).into_result(),
+            ffi::CqReadKind::Failure => Err(error::from_queue_status(read.error_code)),
+            _ => unreachable!("invalid completion wait result"),
+        }
     }
 
     fn decode_completion(&self, data: ffi::CompletionEventData) -> CompletionEvent {
@@ -710,6 +716,43 @@ mod tests {
         assert!(matches!(error, Error::Submission { code } if code == again));
         assert!(matches!(retry_error, Some(Error::Submission { code }) if code == again));
         eprintln!("TCP accepted {accepted} receives; both subsequent rejections retained {again}");
+    }
+
+    #[test]
+    #[ignore = "requires the libfabric TCP provider with wait descriptors"]
+    fn queue_wait_failures_are_not_completions() {
+        let info = query_fabric_with_hints("tcp", Capabilities::MSG, EndpointType::Msg).unwrap();
+        let fabric = Fabric::new(&info).unwrap();
+        let domain = Domain::new(&fabric, &info).unwrap();
+        let queue = CompletionQueue::new(&domain, 16).unwrap();
+        assert!(queue.poll().is_none());
+        let error = queue.wait(Some(1)).unwrap_err();
+        assert!(error.is_would_block() || error.is_timeout(), "{error:?}");
+        assert!(!matches!(error, Error::Completion { .. }));
+        let mut read = ffi::CqReadResult {
+            kind: ffi::CqReadKind::Failure,
+            event: ffi::CompletionEventData {
+                context: 0,
+                bytes_transferred: 0,
+                flags: 0,
+                tag: 0,
+                data: 0,
+                has_error: true,
+                error_code: ffi::ffi::error_timeout(),
+            },
+            error_code: ffi::ffi::error_timeout(),
+        };
+        assert!(matches!(queue.decode_wait(read), Err(Error::Timeout)));
+        read.error_code = ffi::ffi::error_again();
+        assert!(matches!(queue.decode_wait(read), Err(Error::WouldBlock)));
+        read.error_code = -1_234_567;
+        assert!(matches!(queue.decode_wait(read), Err(Error::Queue { code: -1_234_567 })));
+        read.kind = ffi::CqReadKind::Event;
+        let error = queue.decode_wait(read).unwrap_err();
+        assert!(matches!(error, Error::Completion { context: 0, code } if code == ffi::ffi::error_timeout()));
+        assert!(!error.is_timeout());
+        read.kind = ffi::CqReadKind::Empty;
+        assert!(matches!(queue.decode_wait(read), Err(Error::WouldBlock)));
     }
 
     #[test]

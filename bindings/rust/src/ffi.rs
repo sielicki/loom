@@ -23,7 +23,24 @@ pub mod ffi {
         pub data: u64,
         /// Whether an error occurred.
         pub has_error: bool,
-        /// Error code (0 = success, -11 = EAGAIN/no completion).
+        /// Negative error code for an actual error completion.
+        pub error_code: i32,
+    }
+
+    /// Distinguish native events from empty reads and failed waits.
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum CqReadKind {
+        Empty,
+        Event,
+        Failure,
+    }
+
+    /// The read status is independent of an operation's completion status.
+    #[derive(Debug, Clone, Copy)]
+    pub struct CqReadResult {
+        pub kind: CqReadKind,
+        pub event: CompletionEventData,
         pub error_code: i32,
     }
 
@@ -202,15 +219,15 @@ pub mod ffi {
         // ====================================================================
 
         /// Poll for a completion (non-blocking).
-        /// Returns CompletionEventData with error_code=-11 if no completion available.
-        fn cq_poll(cq: &CompletionQueueHandle) -> CompletionEventData;
+        /// An empty queue returns CqReadKind::Empty, without fabric errno sentinels.
+        fn cq_poll(cq: &CompletionQueueHandle) -> CqReadResult;
 
         /// Return whether the provider permits blocking on this queue's native wait object.
         fn cq_try_wait(cq: &CompletionQueueHandle, fabric: &FabricHandle) -> Result<bool>;
 
         /// Wait for a completion with optional timeout.
         /// timeout_ms: -1 = infinite, 0 = non-blocking, >0 = milliseconds.
-        fn cq_wait(cq: &CompletionQueueHandle, timeout_ms: i32) -> CompletionEventData;
+        fn cq_wait(cq: &CompletionQueueHandle, timeout_ms: i32) -> CqReadResult;
 
         /// Get the wait file descriptor for async integration.
         fn cq_get_wait_fd(cq: &CompletionQueueHandle) -> Result<i32>;
@@ -265,6 +282,7 @@ pub mod ffi {
 // Re-export the shared types
 pub use ffi::CompletionEventData;
 pub use ffi::CqAttributes;
+pub use ffi::{CqReadKind, CqReadResult};
 pub use ffi::FabricHints;
 pub use ffi::MrInfo;
 pub use ffi::RemoteMemory;

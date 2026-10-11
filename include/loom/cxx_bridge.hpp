@@ -74,6 +74,7 @@ inline void unwrap_void_or_throw(loom::void_result&& res) {
 
 /// Completion event data passed to Rust
 struct CompletionEventData;
+struct CqReadResult;
 
 /// Completion queue attributes for creation
 struct CqAttributes;
@@ -292,13 +293,13 @@ auto endpoint_get_name(const EndpointHandle& ep) -> rust::Vec<std::uint8_t>;
 // ============================================================================
 
 /// Poll for a completion (non-blocking)
-auto cq_poll(const CompletionQueueHandle& cq) -> CompletionEventData;
+auto cq_poll(const CompletionQueueHandle& cq) -> CqReadResult;
 
 /// Prepare the provider for a native wait on the CQ descriptor.
 auto cq_try_wait(const CompletionQueueHandle& cq, const FabricHandle& fabric) -> bool;
 
 /// Wait for a completion with optional timeout (milliseconds, -1 = infinite)
-auto cq_wait(const CompletionQueueHandle& cq, std::int32_t timeout_ms) -> CompletionEventData;
+auto cq_wait(const CompletionQueueHandle& cq, std::int32_t timeout_ms) -> CqReadResult;
 
 /// Get the wait file descriptor for async integration
 auto cq_get_wait_fd(const CompletionQueueHandle& cq) -> std::int32_t;

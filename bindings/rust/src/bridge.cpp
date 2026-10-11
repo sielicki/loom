@@ -158,55 +158,38 @@ auto endpoint_get_name(const EndpointHandle& ep) -> rust::Vec<std::uint8_t> {
     return vec;
 }
 
-auto cq_poll(const CompletionQueueHandle& cq) -> CompletionEventData {
-    auto event_opt = cq.get().poll();
+namespace {
+auto encode_completion(const loom::completion_event& event) -> CqReadResult {
+    return {
+        .kind = CqReadKind::Event,
+        .event = {
+            .context = std::bit_cast<std::uintptr_t>(event.context.raw()),
+            .bytes_transferred = event.bytes_transferred,
+            .flags = event.flags,
+            .tag = event.tag,
+            .data = event.data,
+            .has_error = event.has_error(),
+            .error_code = event.error ? event.error.value() : 0,
+        },
+    };
+}
+}  // namespace
 
-    CompletionEventData data{};
-    if (!event_opt) {
-        data.context = 0;
-        data.has_error = false;
-        data.error_code = -11;  // EAGAIN
-        return data;
-    }
-
-    const auto& event = *event_opt;
-    data.context = std::bit_cast<std::uintptr_t>(event.context.raw());
-    data.bytes_transferred = event.bytes_transferred;
-    data.flags = event.flags;
-    data.tag = event.tag;
-    data.data = event.data;
-    data.has_error = event.has_error();
-    data.error_code = event.error ? event.error.value() : 0;
-
-    return data;
+auto cq_poll(const CompletionQueueHandle& cq) -> CqReadResult {
+    const auto event = cq.get().poll();
+    return event ? encode_completion(*event) : CqReadResult{.kind = CqReadKind::Empty};
 }
 
-auto cq_wait(const CompletionQueueHandle& cq, std::int32_t timeout_ms) -> CompletionEventData {
+auto cq_wait(const CompletionQueueHandle& cq, std::int32_t timeout_ms) -> CqReadResult {
     std::optional<std::chrono::milliseconds> timeout;
     if (timeout_ms >= 0) {
         timeout = std::chrono::milliseconds{timeout_ms};
     }
-
-    auto result = cq.get().wait(timeout);
-
-    CompletionEventData data{};
+    const auto result = cq.get().wait(timeout);
     if (!result) {
-        data.context = 0;
-        data.has_error = true;
-        data.error_code = result.error().value();
-        return data;
+        return {.kind = CqReadKind::Failure, .error_code = result.error().value()};
     }
-
-    const auto& event = *result;
-    data.context = std::bit_cast<std::uintptr_t>(event.context.raw());
-    data.bytes_transferred = event.bytes_transferred;
-    data.flags = event.flags;
-    data.tag = event.tag;
-    data.data = event.data;
-    data.has_error = event.has_error();
-    data.error_code = event.error ? event.error.value() : 0;
-
-    return data;
+    return encode_completion(*result);
 }
 
 auto cq_try_wait(const CompletionQueueHandle& cq, const FabricHandle& fabric) -> bool {
