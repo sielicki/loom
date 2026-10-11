@@ -22,6 +22,7 @@ namespace loom {
  * @brief Context structure for tracking asynchronous fabric operations.
  *
  * Wraps a libfabric fi_context2 structure and provides user data storage.
+ * Do not move or destroy a context while an operation still uses its address.
  */
 class request_context {
 public:
@@ -129,7 +130,11 @@ public:
     /**
      * @brief Default constructor.
      */
-    typed_request_context() noexcept = default;
+    typed_request_context() noexcept(std::is_nothrow_default_constructible_v<UserData>)
+        requires std::is_default_constructible_v<UserData>
+        : data_{} {
+        set_user_data(std::addressof(data_));
+    }
 
     /**
      * @brief Constructs with initial user data.
@@ -138,7 +143,29 @@ public:
     explicit typed_request_context(UserData data) noexcept(
         std::is_nothrow_move_constructible_v<UserData>)
         : data_(std::move(data)) {
-        set_user_data(&data_);
+        set_user_data(std::addressof(data_));
+    }
+
+    /// Move the payload and bind the destination's user data to its own storage.
+    typed_request_context(typed_request_context&& other) noexcept(
+        std::is_nothrow_move_constructible_v<UserData>)
+        requires std::is_move_constructible_v<UserData>
+        : request_context(std::move(other)), data_(std::move(other.data_)) {
+        set_user_data(std::addressof(data_));
+    }
+
+    auto
+    operator=(typed_request_context&& other) noexcept(std::is_nothrow_move_assignable_v<UserData>)
+        -> typed_request_context&
+        requires std::is_move_assignable_v<UserData>
+    {
+        if (this != &other) {
+            // Preserve the existing binding if assigning the payload throws.
+            data_ = std::move(other.data_);
+            request_context::operator=(std::move(other));
+            set_user_data(std::addressof(data_));
+        }
+        return *this;
     }
 
     /**

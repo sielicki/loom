@@ -2,6 +2,8 @@
 #include <loom/core/request_context.hpp>
 
 #include <array>
+#include <stdexcept>
+#include <string>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -23,6 +25,18 @@ struct test_resource : std::pmr::memory_resource {
     }
     auto do_is_equal(const memory_resource& other) const noexcept -> bool override {
         return this == &other;
+    }
+};
+
+struct throwing_default {
+    throwing_default() { throw std::runtime_error{"payload construction"}; }
+};
+
+struct throwing_assignment {
+    throwing_assignment() = default;
+    throwing_assignment(throwing_assignment&&) = default;
+    auto operator=(throwing_assignment&&) -> throwing_assignment& {
+        throw std::runtime_error{"payload assignment"};
     }
 };
 }  // namespace
@@ -96,4 +110,45 @@ TEST_CASE("preallocated request contexts need no allocation to acquire", "[conte
         REQUIRE(pool.in_use_count() == 0);
     }
     REQUIRE(resource.live_allocations == 0);
+}
+
+TEST_CASE("default typed contexts bind initialized payloads", "[context][typed]") {
+    loom::typed_request_context<int> context;
+    REQUIRE(context.user_data<int>() == &context.data());
+    REQUIRE(context.data() == 0);
+}
+
+TEST_CASE("typed context moves bind their own payloads", "[context][typed]") {
+    auto moved = [] {
+        loom::typed_request_context<std::string> source{"message"};
+        loom::typed_request_context<std::string> destination{std::move(source)};
+        REQUIRE(destination.user_data<std::string>() == &destination.data());
+        REQUIRE(source.user_data<std::string>() == &source.data());
+        return destination;
+    }();
+    REQUIRE(*moved.user_data<std::string>() == "message");
+    loom::typed_request_context<std::string> assigned{"old"};
+    assigned = std::move(moved);
+    REQUIRE(assigned.user_data<std::string>() == &assigned.data());
+    REQUIRE(*assigned.user_data<std::string>() == "message");
+    REQUIRE(moved.user_data<std::string>() == &moved.data());
+    auto& alias = assigned;
+    assigned = std::move(alias);
+    REQUIRE(assigned.user_data<std::string>() == &assigned.data());
+    REQUIRE(assigned.data() == "message");
+}
+
+TEST_CASE("typed contexts propagate payload exceptions", "[context][typed]") {
+    SECTION("default construction") {
+        using context = loom::typed_request_context<throwing_default>;
+        REQUIRE_FALSE(std::is_nothrow_default_constructible_v<context>);
+        REQUIRE_THROWS_AS(context{}, std::runtime_error);
+    }
+    SECTION("move assignment") {
+        loom::typed_request_context<throwing_assignment> source{throwing_assignment{}};
+        loom::typed_request_context<throwing_assignment> destination{throwing_assignment{}};
+        REQUIRE_THROWS_AS(destination = std::move(source), std::runtime_error);
+        REQUIRE(destination.user_data<throwing_assignment>() == &destination.data());
+        REQUIRE(source.user_data<throwing_assignment>() == &source.data());
+    }
 }
