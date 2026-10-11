@@ -1,0 +1,95 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4469,6 +4469,19 @@
+ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+ [[package]]
++name = "loom-fabric"
++version = "0.1.0"
++dependencies = [
++ "bitflags 2.13.2",
++ "cxx",
++ "cxx-build",
++ "futures 0.3.34",
++ "pkg-config",
++ "thiserror 1.0.69",
++ "tokio",
++]
++
++[[package]]
+ name = "lru"
+ version = "0.18.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -4883,6 +4896,7 @@
+  "hyperactor_mesh",
+  "inventory",
+  "libc",
++ "loom-fabric",
+  "ndslice",
+  "paste",
+  "rand 0.10.3",
+--- a/monarch_rdma/Cargo.toml
++++ b/monarch_rdma/Cargo.toml
+@@ -8,6 +8,7 @@
+ license = "BSD-3-Clause"
+
+ [dependencies]
++loom-fabric = { path = "../loom/bindings/rust" }
+ anyhow = "1.0.104"
+ async-trait = "0.1.92"
+ bytes = { version = "1.12.1", features = ["serde"] }
+--- a/monarch_rdma/src/backend.rs
++++ b/monarch_rdma/src/backend.rs
+@@ -12,6 +12,7 @@
+ pub mod cuda_test_utils;
+ pub mod ibverbs;
+ pub mod tcp;
++pub mod loom;
+
+ use std::fmt::Debug;
+ use std::time::Duration;
+@@ -31,6 +32,7 @@
+ use crate::backend::ibverbs::mlx_device::MlxDevice;
+ use crate::backend::ibverbs::primitives::IbvConfig;
+ use crate::backend::tcp::manager_actor::TcpBackend;
++use crate::backend::loom::LoomBackend;
+ use crate::local_memory::KeepaliveLocalMemory;
+ use crate::rdma_components::RdmaRemoteBuffer;
+
+@@ -342,5 +344,6 @@
+ register_rdma_backends! {
+     Mlx: IbvBackend<MlxDevice>,
+     Efa: IbvBackend<EfaDevice>,
++    Loom: LoomBackend,
+     Tcp: TcpBackend,
+ }
+--- a/monarch_rdma/src/config.rs
++++ b/monarch_rdma/src/config.rs
+@@ -16,6 +16,27 @@
+ use hyperactor_config::attrs::declare_attrs;
+
+ declare_attrs! {
++    /// Enable the host-memory Loom backend. GPU registrations are rejected.
++    @meta(CONFIG = ConfigAttr::new(
++        Some("MONARCH_RDMA_ALLOW_LOOM".to_string()),
++        Some("rdma_allow_loom".to_string()),
++    ))
++    pub attr RDMA_ALLOW_LOOM: bool = false;
++
++    /// Provider discovery filter; capability checks use reported attributes.
++    @meta(CONFIG = ConfigAttr::new(
++        Some("MONARCH_RDMA_LOOM_PROVIDER".to_string()),
++        Some("rdma_loom_provider".to_string()),
++    ))
++    pub attr RDMA_LOOM_PROVIDER: String = String::new();
++
++    /// Domain/device discovery filter.
++    @meta(CONFIG = ConfigAttr::new(
++        Some("MONARCH_RDMA_LOOM_DOMAIN".to_string()),
++        Some("rdma_loom_domain".to_string()),
++    ))
++    pub attr RDMA_LOOM_DOMAIN: String = String::new();
++
+     /// Maximum chunk size in MiB for TCP-based RDMA transfers.
+     @meta(CONFIG = ConfigAttr::new(
+         Some("MONARCH_RDMA_MAX_CHUNK_SIZE_MB".to_string()),

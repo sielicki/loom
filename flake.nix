@@ -360,6 +360,21 @@
                 }).cudaPackages;
               };
 
+              monarch-loom = self'.packages.monarch-consumer.override {
+                inherit libfabric;
+                loomSource = fs.toSource {
+                  root = ./.;
+                  fileset = fs.intersection (fs.gitTracked ./.) (fs.unions [
+                    ./include
+                    ./src
+                    ./bindings/rust/Cargo.toml
+                    ./bindings/rust/build.rs
+                    ./bindings/rust/README.md
+                    ./bindings/rust/src
+                  ]);
+                };
+              };
+
               loom-debug = pkgs.callPackage mkLoom {
                 inherit libfabric;
                 enableAsan = true;
@@ -637,6 +652,12 @@
                   CUDA_HOME MONARCH_RDMA_CORE_SRC MONARCH_GPU_PLATFORM;
                 MONARCH_SOURCE = self'.packages.monarch-consumer.src;
               };
+              monarch-loom = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
+                inputsFrom = [ self'.packages.monarch-loom ];
+                inherit (self'.packages.monarch-loom)
+                  CUDA_HOME MONARCH_RDMA_CORE_SRC MONARCH_GPU_PLATFORM RUSTFLAGS;
+                MONARCH_SOURCE = self'.packages.monarch-loom.src;
+              };
               # Sanitizer development shell (Linux only)
               sanitizers = pkgs.mkShell {
                 name = "loom-dev-sanitizers";
@@ -701,6 +722,7 @@
               nixl-consumer = self'.packages.nixl-consumer.tests.sdk;
               nixl-loom = self'.packages.nixl-loom;
               monarch-consumer = self'.packages.monarch-consumer;
+              monarch-loom = self'.packages.monarch-loom;
 
               # Build check with sanitizers (Linux only)
               loom-build-sanitizers = self'.packages.loom-debug;

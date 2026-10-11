@@ -15,8 +15,11 @@
 , jq
 , libnl
 , numactl
+, loomSource ? null
+, libfabric ? null
 }:
 let
+  withLoom = loomSource != null;
   rustPlatform = makeRustPlatform {
     inherit stdenv;
     cargo = rustToolchain;
@@ -28,17 +31,23 @@ let
   };
 in
 rustPlatform.buildRustPackage {
-  pname = "monarch-consumer";
+  pname = if withLoom then "monarch-loom" else "monarch-consumer";
   version = "0.0.0-unstable-2026-10-10";
   src = applyPatches {
-    name = "monarch-consumer-source";
+    name = if withLoom then "monarch-loom-source" else "monarch-consumer-source";
     inherit src;
-    patches = [ ./writable-rdma-source.patch ./type-name-interning.patch ];
+    patches = [ ./writable-rdma-source.patch ./type-name-interning.patch ]
+      ++ lib.optionals withLoom [ ./loom-backend.patch ];
+    postPatch = lib.optionalString withLoom ''
+      cp -R ${loomSource} loom
+      cp ${./loom.rs} monarch_rdma/src/backend/loom.rs
+      cp ${./loom_tests.rs} monarch_rdma/src/backend/loom_tests.rs
+    '';
   };
 
-  cargoHash = "sha256-ohkkPRh5HJ6KonAFzFPE4aj/HdJGzi3Ik0AEQ+SbwHQ=";
+  cargoHash = if withLoom then "sha256-5gDWeB/33Jnf7siq/CnGozmyv53illeoO6YC6hl6rl0=" else "sha256-ohkkPRh5HJ6KonAFzFPE4aj/HdJGzi3Ik0AEQ+SbwHQ=";
   nativeBuildInputs = [ cmake ninja pkg-config python3 protobuf jq rustPlatform.bindgenHook ];
-  buildInputs = [ libnl numactl ];
+  buildInputs = [ libnl numactl ] ++ lib.optionals withLoom [ libfabric ];
   dontUseCmakeConfigure = true;
   dontUseNinjaBuild = true;
   dontUseNinjaInstall = true;
@@ -50,7 +59,8 @@ rustPlatform.buildRustPackage {
   CARGO_PROFILE_TEST_DEBUG = "0";
   # Upstream enables tracing_unstable in .cargo/config.toml; Nix's rustc
   # flags otherwise take precedence over that file.
-  RUSTFLAGS = (lib.importTOML "${src}/.cargo/config.toml").build.rustflags;
+  RUSTFLAGS = (lib.importTOML "${src}/.cargo/config.toml").build.rustflags
+    ++ lib.optionals withLoom [ "-C" "link-arg=-Wl,-rpath,${lib.getLib libfabric}/lib" ];
 
   # The pinned CXX git workspace shares a build script through relative
   # includes outside its member crates. Vendoring separates those crates.
@@ -84,6 +94,16 @@ rustPlatform.buildRustPackage {
       grep -Fx "$testName: test" tests.list
       timeout 60 ./monarch-rdma-tests --exact "$testName"
     done
+  '' + lib.optionalString withLoom ''
+    for test in sockets_actor_round_trip rxm_actor_round_trip \
+      sockets_process_round_trip rxm_process_round_trip \
+      dropped_observer_retains_dma timeout_retains_dma partial_failure_retains_accepted_dma \
+      pending_operations_respect_completion_capacity; do
+      testName="backend::loom::tests::$test"
+      grep -Fx "$testName: test" tests.list
+      timeout 60 ./monarch-rdma-tests --exact "$testName"
+    done
+  '' + ''
     runHook postCheck
   '';
 
