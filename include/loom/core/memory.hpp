@@ -228,6 +228,8 @@ public:
 
     [[nodiscard]] auto key() const noexcept -> std::uint64_t;
 
+    /// Start of the registered local span, including any DMA-BUF offset.
+    /// Null when a DMA-BUF has no local mapping, or this region is empty.
     [[nodiscard]] auto address() const noexcept -> void*;
 
     /// Address to exchange with peers: zero for offset-based registration,

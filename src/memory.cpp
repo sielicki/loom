@@ -145,6 +145,11 @@ auto memory_region::register_memory(const domain& dom,
     if (flags && attributes.device.iface == hmem_iface::system) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
+    const auto local_address =
+        attributes.dmabuf ? detail::dmabuf_local_address(addr, attributes.dmabuf->offset, length)
+                          : result<void*>{addr};
+    if (!local_address)
+        return std::unexpected(local_address.error());
     auto remote_address = detail::mr_remote_address(
         dom.impl_->mr_mode, addr, attributes.dmabuf ? attributes.dmabuf->offset : 0);
     if (!remote_address) {
@@ -180,7 +185,7 @@ auto memory_region::register_memory(const domain& dom,
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
         resource ? resource : get_default_resource(),
         mr,
-        addr,
+        *local_address,
         length,
         std::move(*requested_key),
         *remote_address);

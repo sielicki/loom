@@ -127,8 +127,11 @@ TEST_CASE("device registrations retain their exact range", "[mr_cache]") {
     alignas(4096) std::array<std::byte, 4096> buffer{};
     auto* address = buffer.data() + 17;
     SECTION("DMA buffer") {
-        auto handle = cache.lookup_dmabuf(address, 31, mr_access_flags::send, 1, 17);
+        auto handle = cache.lookup_dmabuf(buffer.data(), 31, mr_access_flags::send, 1, 17);
         REQUIRE(handle);
+        REQUIRE(provider.address == buffer.data());
+        REQUIRE(provider.dmabuf_offset == 17);
+        REQUIRE(handle->base_address() == address);
         REQUIRE(handle->mr()->address() == address);
         REQUIRE(handle->mr()->length() == 31);
     }
@@ -139,6 +142,25 @@ TEST_CASE("device registrations retain their exact range", "[mr_cache]") {
         REQUIRE(handle->mr()->length() == 31);
     }
     REQUIRE(cache.stats().total_registered_bytes == 31);
+}
+
+TEST_CASE("DMA-BUF cache invalidation follows the registered subrange", "[mr_cache][dmabuf]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache(provider.dom);
+    alignas(4096) std::array<std::byte, 8192> storage{};
+    {
+        auto handle = cache.lookup_dmabuf(storage.data(), 32, mr_access_flags::send, 7, 4096);
+        REQUIRE(handle);
+        CHECK(handle->base_address() == storage.data() + 4096);
+        CHECK(handle->mr()->address() == handle->base_address());
+        cache.invalidate(storage.data() + 4096 + 8, 1);
+        CHECK(provider.live_regions == 1);
+    }
+    CHECK(provider.live_regions == 0);
+    CHECK(cache.size() == 0);
+    CHECK(cache.stats().current_entries == 0);
+    CHECK(cache.stats().total_registered_bytes == 0);
 }
 
 TEST_CASE("clearing a cache preserves live handles", "[mr_cache]") {

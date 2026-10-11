@@ -450,10 +450,11 @@ public:
             return std::unexpected(mr_result.error());
         }
 
+        entry->base_addr = reinterpret_cast<std::uintptr_t>(mr_result->address());
         entry->mr = std::move(*mr_result);
 
         auto* entry_ptr = entry.get();
-        entries_.emplace(uaddr, std::move(entry));
+        entries_.emplace(entry_ptr->base_addr, std::move(entry));
 
         ++stats_.registrations;
         ++stats_.current_entries;

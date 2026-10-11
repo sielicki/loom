@@ -602,3 +602,47 @@ TEST_CASE("DMA-BUF remote addresses reject overflowing virtual offsets",
     REQUIRE(region.error() == errc::invalid_argument);
     REQUIRE(provider.registrations == 0);
 }
+
+TEST_CASE("DMA-BUF local addresses identify the registered subrange", "[memory][dmabuf]") {
+    const auto mode = GENERATE(0, int{FI_MR_VIRT_ADDR}, int{FI_MR_BASIC});
+    const auto offset = GENERATE(0UZ, 4096UZ);
+    const auto mapped = GENERATE(false, true);
+    test::mock_domain provider{mode};
+    alignas(4096) std::array<std::byte, 8192> storage{};
+    auto* base = mapped ? storage.data() : nullptr;
+    auto region = memory_region::register_dmabuf(
+        provider.dom, base, 32, mr_access_flags::remote_write, 7, offset);
+    REQUIRE(region);
+    CHECK(provider.address == base);
+    CHECK(provider.dmabuf_offset == offset);
+    CHECK(provider.registration_offset == 0);
+    auto moved = std::move(*region);
+    CHECK(moved.address() == (mapped ? storage.data() + offset : nullptr));
+    CHECK(moved.length() == 32);
+    CHECK(region->address() == nullptr);
+    CHECK(moved.remote_address() ==
+          (mode == 0 ? 0 : reinterpret_cast<std::uintptr_t>(base) + offset));
+}
+
+TEST_CASE("DMA-BUF registration rejects wrapping local and file ranges", "[memory][dmabuf]") {
+    const auto mode = GENERATE(0, int{FI_MR_VIRT_ADDR});
+    constexpr auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    test::mock_domain provider{mode};
+    auto* address = reinterpret_cast<void*>(maximum - 7);
+    std::uint64_t offset{8};
+    std::size_t length{1};
+    SECTION("local start") {}
+    SECTION("local end") {
+        offset = 4;
+        length = 4;
+    }
+    SECTION("unmapped file range") {
+        address = nullptr;
+        offset = std::numeric_limits<std::uint64_t>::max();
+    }
+    const auto region = memory_region::register_dmabuf(
+        provider.dom, address, length, mr_access_flags::remote_write, 7, offset);
+    REQUIRE_FALSE(region);
+    CHECK(region.error() == errc::invalid_argument);
+    CHECK(provider.registrations == 0);
+}

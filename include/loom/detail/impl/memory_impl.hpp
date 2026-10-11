@@ -21,6 +21,19 @@
 
 namespace loom::detail {
 
+inline auto dmabuf_local_address(void* allocation, std::uint64_t offset, std::size_t length)
+    -> result<void*> {
+    if (length > std::numeric_limits<std::uint64_t>::max() - offset)
+        return make_error_result<void*>(errc::invalid_argument);
+    if (allocation == nullptr)
+        return nullptr;  // A DMA-BUF need not be mapped into the local address space.
+    const auto base = reinterpret_cast<std::uintptr_t>(allocation);
+    constexpr auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    if (offset > maximum - base || length > maximum - (base + offset))
+        return make_error_result<void*>(errc::invalid_argument);
+    return reinterpret_cast<void*>(base + static_cast<std::uintptr_t>(offset));
+}
+
 inline auto mr_remote_address(int mode, void* address, std::uint64_t offset = 0)
     -> result<std::uint64_t> {
     if (!(mode & FI_MR_VIRT_ADDR) && mode != FI_MR_BASIC) {
@@ -220,6 +233,11 @@ auto memory_region::register_memory(const domain& dom,
     if (flags && attributes.device.iface == hmem_iface::system) {
         return make_error_result<memory_region>(errc::invalid_argument);
     }
+    const auto local_address =
+        attributes.dmabuf ? detail::dmabuf_local_address(addr, attributes.dmabuf->offset, length)
+                          : result<void*>{addr};
+    if (!local_address)
+        return std::unexpected(local_address.error());
     auto remote_address = detail::mr_remote_address(
         dom.impl_->mr_mode, addr, attributes.dmabuf ? attributes.dmabuf->offset : 0);
     if (!remote_address) {
@@ -255,7 +273,7 @@ auto memory_region::register_memory(const domain& dom,
     auto impl = detail::make_pmr_unique<detail::memory_region_impl>(
         resource ? resource : get_default_resource(),
         mr,
-        addr,
+        *local_address,
         length,
         std::move(*requested_key),
         *remote_address);
