@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 
+#include <loom/async.hpp>
 #include <loom/execution.hpp>
 #include <loom/loom.hpp>
 
