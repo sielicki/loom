@@ -130,6 +130,8 @@ public:
 
     /// Requires event_queue_attr::wait_obj. Missing or negative timeouts wait
     /// indefinitely; finite timeouts must fit in int milliseconds.
+    /// Read failures return an error; asynchronous operation failures remain
+    /// fabric events carrying their context and error.
     [[nodiscard]] auto wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt)
         -> result<fabric_event>;
 

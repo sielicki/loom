@@ -328,6 +328,8 @@ impl CompletionQueue {
 
     /// Wait for a completion with timeout.
     ///
+    /// The queue must have been created with `wait_obj` enabled.
+    ///
     /// # Arguments
     ///
     /// * `timeout_ms` - Timeout in milliseconds, or `None` for infinite.

@@ -145,13 +145,21 @@ auto event_queue::wait(std::optional<std::chrono::milliseconds> timeout) -> resu
 
     ssize_t ret = ::fi_eq_sread(impl_->eq, &event_type, &entry, sizeof(entry), timeout_ms, flags);
 
-    if (ret == -FI_ETIMEDOUT) {
-        return make_error_result<fabric_event>(errc::timeout);
+    if (ret == 0) {
+        return make_error_result<fabric_event>(errc::again);
     }
 
-    if (ret < 0) {
+    if (ret < 0 && ret != -FI_EAVAIL) {
+        return make_error_result_from_fi_errno<fabric_event>(static_cast<int>(-ret));
+    }
+
+    if (ret == -FI_EAVAIL) {
         ::fi_eq_err_entry err_entry{};
-        ::fi_eq_readerr(impl_->eq, &err_entry, flags);
+        const auto count = ::fi_eq_readerr(impl_->eq, &err_entry, flags);
+        if (count <= 0) {
+            return make_error_result_from_fi_errno<fabric_event>(
+                count == 0 ? FI_EAGAIN : static_cast<int>(-count));
+        }
 
         fabric_event event{};
         event.type = fi_event_to_loom(event_type);

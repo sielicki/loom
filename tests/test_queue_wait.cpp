@@ -13,20 +13,41 @@ namespace {
 struct queue_provider {
     int calls{};
     int timeout{};
+    int status{1};
+    int error_status{1};
+    int error_reads{};
     fi_wait_obj requested_wait{};
     fi_ops lifetime_ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
     fi_ops_cq cq_ops{
         .size = sizeof(fi_ops_cq),
+        .readerr = [](fid_cq* cq, fi_cq_err_entry* error, std::uint64_t) -> ssize_t {
+            auto& self = *static_cast<queue_provider*>(cq->fid.context);
+            ++self.error_reads;
+            if (self.error_status != 1)
+                return self.error_status;
+            *error = {.len = 5, .err = FI_ECANCELED};
+            return 1;
+        },
         .sread = [](fid_cq* cq, void* buffer, std::size_t, const void*, int timeout) -> ssize_t {
             auto& self = *static_cast<queue_provider*>(cq->fid.context);
             ++self.calls;
             self.timeout = timeout;
+            if (self.status != 1)
+                return self.status;
             *static_cast<fi_cq_tagged_entry*>(buffer) = {.len = 17};
             return 1;
         },
     };
     fi_ops_eq eq_ops{
         .size = sizeof(fi_ops_eq),
+        .readerr = [](fid_eq* eq, fi_eq_err_entry* error, std::uint64_t) -> ssize_t {
+            auto& self = *static_cast<queue_provider*>(eq->fid.context);
+            ++self.error_reads;
+            if (self.error_status != 1)
+                return self.error_status;
+            *error = {.fid = &eq->fid, .err = FI_ECANCELED};
+            return sizeof(fi_eq_err_entry);
+        },
         .sread = [](fid_eq* eq,
                     std::uint32_t* type,
                     void* buffer,
@@ -36,6 +57,8 @@ struct queue_provider {
             auto& self = *static_cast<queue_provider*>(eq->fid.context);
             ++self.calls;
             self.timeout = timeout;
+            if (self.status != 1)
+                return self.status;
             *type = FI_CONNECTED;
             *static_cast<fi_eq_cm_entry*>(buffer) = {.fid = &eq->fid};
             return sizeof(fi_eq_cm_entry);
@@ -129,4 +152,46 @@ TEST_CASE("queue waits reject overflowing finite timeouts", "[queue][wait]") {
         REQUIRE(result.error() == loom::errc::invalid_argument);
     });
     REQUIRE(provider.calls == 0);
+}
+
+TEST_CASE("queue waits do not invent events from failed or empty reads", "[queue][wait]") {
+    const auto completion = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EINTR, -FI_EINVAL, -FI_ETIMEDOUT);
+    queue_provider provider;
+    provider.status = status;
+    provider.with_queue(completion, true, [&](auto& queue) {
+        const auto result = queue.wait(std::chrono::milliseconds{0});
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() ==
+                loom::make_error_code_from_fi_errno(status == 0 ? FI_EAGAIN : -status));
+    });
+    REQUIRE(provider.calls == 1);
+    REQUIRE(provider.error_reads == 0);
+}
+
+TEST_CASE("queue waits preserve actual asynchronous error events", "[queue][wait]") {
+    const auto completion = GENERATE(false, true);
+    queue_provider provider;
+    provider.status = -FI_EAVAIL;
+    provider.with_queue(completion, true, [&](auto& queue) {
+        const auto result = queue.wait(std::chrono::milliseconds{0});
+        REQUIRE(result);
+        REQUIRE(result->error == loom::errc::canceled);
+    });
+    REQUIRE(provider.error_reads == 1);
+}
+
+TEST_CASE("queue waits propagate error queue read failures", "[queue][wait]") {
+    const auto completion = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN, -FI_EIO);
+    queue_provider provider;
+    provider.status = -FI_EAVAIL;
+    provider.error_status = status;
+    provider.with_queue(completion, true, [&](auto& queue) {
+        const auto result = queue.wait(std::chrono::milliseconds{0});
+        REQUIRE_FALSE(result);
+        REQUIRE(result.error() ==
+                loom::make_error_code_from_fi_errno(status == 0 ? FI_EAGAIN : -status));
+    });
+    REQUIRE(provider.error_reads == 1);
 }

@@ -125,7 +125,11 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
     }
 
     if (ret < 0) {
-        return read_error(static_cast<int>(-ret));
+        const auto error = read_error(static_cast<int>(-ret));
+        auto event = error.value_or(completion_event{});
+        if (!error)
+            event.error = error.error();
+        return event;
     }
 
     if (ret == 0) {
@@ -162,12 +166,16 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
 
     ssize_t ret = ::fi_cq_sread(impl_->cq, &entry, 1, nullptr, timeout_ms);
 
-    if (ret == -FI_ETIMEDOUT) {
-        return make_error_result<completion_event>(errc::timeout);
+    if (ret == 0) {
+        return make_error_result<completion_event>(errc::again);
+    }
+
+    if (ret == -FI_EAVAIL) {
+        return read_error(FI_EAVAIL);
     }
 
     if (ret < 0) {
-        return read_error(static_cast<int>(-ret));
+        return make_error_result_from_fi_errno<completion_event>(static_cast<int>(-ret));
     }
 
     completion_event event{};
@@ -197,7 +205,10 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
         return 0;
     }
     if (ret < 0) {
-        events.front() = read_error(static_cast<int>(-ret));
+        const auto error = read_error(static_cast<int>(-ret));
+        events.front() = error.value_or(completion_event{});
+        if (!error)
+            events.front().error = error.error();
         return 1;
     }
 
@@ -216,20 +227,19 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
     return count;
 }
 
-auto completion_queue::read_error(int status) const -> completion_event {
-    completion_event event{};
+auto completion_queue::read_error(int status) const -> result<completion_event> {
     if (status != FI_EAVAIL) {
-        event.error = make_error_code_from_fi_errno(status);
-        return event;
+        return make_error_result_from_fi_errno<completion_event>(status);
     }
 
     ::fi_cq_err_entry entry{};
     const auto ret = ::fi_cq_readerr(impl_->cq, &entry, 0);
     if (ret <= 0) {
-        event.error = make_error_code_from_fi_errno(ret < 0 ? static_cast<int>(-ret) : status);
-        return event;
+        return make_error_result_from_fi_errno<completion_event>(ret == 0 ? FI_EAGAIN
+                                                                          : static_cast<int>(-ret));
     }
 
+    completion_event event{};
     event.context = context_ptr<void>{entry.op_context};
     event.error = make_error_code_from_fi_errno(entry.err);
     event.flags = entry.flags;

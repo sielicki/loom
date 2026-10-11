@@ -160,6 +160,8 @@ public:
 
     /// Requires completion_queue_attr::wait_obj. Missing or negative timeouts
     /// wait indefinitely; finite timeouts must fit in int milliseconds.
+    /// Read failures return an error; asynchronous operation failures remain
+    /// completion events carrying their operation context and error.
     [[nodiscard("wait result must be checked for errors or timeout")]]
     auto wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt) const
         -> result<completion_event>;
@@ -200,7 +202,7 @@ public:
     [[nodiscard]] auto impl_valid() const noexcept -> bool;
 
 private:
-    [[nodiscard]] auto read_error(int status) const -> completion_event;
+    [[nodiscard]] auto read_error(int status) const -> result<completion_event>;
     impl_ptr impl_;
     friend class endpoint;
 };
