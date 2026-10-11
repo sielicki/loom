@@ -15,6 +15,8 @@ struct counter_provider {
     int wait_calls{};
     int closes{};
     int set_result{};
+    int set_calls{};
+    int add_calls{};
     fi_wait_obj wait_object{};
     fi_ops resource_ops{
         .size = sizeof(fi_ops),
@@ -28,9 +30,19 @@ struct counter_provider {
         .size = sizeof(fi_ops_cntr),
         .read =
             [](fid_cntr* cntr) { return static_cast<counter_provider*>(cntr->fid.context)->value; },
+        .add =
+            [](fid_cntr* cntr, std::uint64_t value) {
+                auto& self = *static_cast<counter_provider*>(cntr->fid.context);
+                ++self.add_calls;
+                if (value > std::numeric_limits<std::uint64_t>::max() - self.value)
+                    return -FI_EOVERFLOW;
+                self.value += value;
+                return 0;
+            },
         .set =
             [](fid_cntr* cntr, std::uint64_t value) {
                 auto& self = *static_cast<counter_provider*>(cntr->fid.context);
+                ++self.set_calls;
                 if (self.set_result != 0)
                     return self.set_result;
                 self.value = value;
@@ -142,4 +154,44 @@ TEST_CASE("counter creation closes each acquired native handle exactly once", "[
         REQUIRE(provider.closes == 0);
     }
     REQUIRE(provider.closes == 1);
+}
+
+TEST_CASE("counter waits can advance cumulative targets without rewriting completions",
+          "[counter]") {
+    const auto count = GENERATE(
+        std::uint64_t{1}, std::uint64_t{1} << 63, std::numeric_limits<std::uint64_t>::max() - 1);
+    counter_provider provider;
+    auto created = loom::counter::create(provider.domain, {.initial = count, .wait_obj = true});
+    REQUIRE(created);
+    REQUIRE(created->wait_until(count, std::chrono::milliseconds{0}));
+    const auto pending = created->wait_until(count + 1, std::chrono::milliseconds{0});
+    REQUIRE_FALSE(pending);
+    REQUIRE(pending.error() == loom::errc::timeout);
+    REQUIRE(provider.waited_threshold == count + 1);
+    ++provider.value;  // Model another completion arriving at the provider.
+    auto moved = std::move(*created);
+    REQUIRE(moved.wait_until(count + 1, std::chrono::milliseconds{0}));
+    REQUIRE(moved.read() == count + 1);
+    REQUIRE(moved.wait(std::chrono::milliseconds{0}));
+    REQUIRE(provider.waited_threshold == 1);  // Explicit targets leave the default unchanged.
+    REQUIRE(provider.add_calls == 0);
+    REQUIRE(provider.set_calls == 1);  // Only counter initialization wrote to the provider.
+    REQUIRE_FALSE(created->wait_until(count));
+}
+
+TEST_CASE("explicit counter targets retain wait object and timeout checks", "[counter]") {
+    using namespace std::chrono;
+    counter_provider provider;
+    auto polling = loom::counter::create(provider.domain);
+    REQUIRE(polling);
+    REQUIRE(polling->wait_until(0).error() == loom::errc::invalid_argument);
+    auto waitable = loom::counter::create(provider.domain, {.wait_obj = true});
+    REQUIRE(waitable);
+    REQUIRE(waitable->wait_until(0, milliseconds::min()));
+    REQUIRE(provider.waited_timeout == -1);
+    const auto invalid =
+        waitable->wait_until(0, milliseconds{std::numeric_limits<int>::max()} + 1ms);
+    REQUIRE_FALSE(invalid);
+    REQUIRE(invalid.error() == loom::errc::invalid_argument);
+    REQUIRE(provider.wait_calls == 1);
 }

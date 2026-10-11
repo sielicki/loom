@@ -135,6 +135,11 @@ auto counter::add(std::uint64_t value) -> void_result {
 }
 
 auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> void_result {
+    return wait_until(impl_ ? impl_->threshold : 0, timeout);
+}
+
+auto counter::wait_until(std::uint64_t threshold, std::optional<std::chrono::milliseconds> timeout)
+    -> void_result {
     if (!impl_ || !impl_->cntr || !impl_->wait_enabled) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -147,7 +152,7 @@ auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> void_res
         timeout_ms = static_cast<int>(timeout->count());
     }
 
-    int ret = ::fi_cntr_wait(impl_->cntr, impl_->threshold, timeout_ms);
+    int ret = ::fi_cntr_wait(impl_->cntr, threshold, timeout_ms);
 
     if (ret == -FI_ETIMEDOUT) {
         return make_error_result<void>(errc::timeout);
@@ -181,20 +186,6 @@ auto counter::get_error() const -> std::error_code {
     }
 
     return make_error_code(errc::io_error);
-}
-
-auto counter::ack(std::uint64_t count) -> void_result {
-    if (!impl_ || !impl_->cntr) {
-        return make_error_result<void>(errc::invalid_argument);
-    }
-
-    int ret =
-        ::fi_cntr_add(impl_->cntr, static_cast<std::uint64_t>(-static_cast<std::int64_t>(count)));
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<void>(-ret);
-    }
-
-    return make_success();
 }
 
 auto counter::impl_internal_ptr() const noexcept -> void* {

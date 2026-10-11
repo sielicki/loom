@@ -97,6 +97,8 @@ public:
 
     [[nodiscard]] auto read() const -> result<std::uint64_t>;
 
+    /// Replace a stable counter value after all previous updates are visible
+    /// and no further updates can occur until this call completes.
     auto set(std::uint64_t value) -> void_result;
 
     auto add(std::uint64_t value) -> void_result;
@@ -107,11 +109,17 @@ public:
     [[nodiscard]] auto wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt)
         -> void_result;
 
+    /// Wait for a cumulative completion count without modifying the counter.
+    /// Successive targets may be used while operations continue completing.
+    /// The target must fit the provider's counter limit. Uses the same wait
+    /// object and timeout requirements as wait().
+    [[nodiscard]] auto wait_until(std::uint64_t threshold,
+                                  std::optional<std::chrono::milliseconds> timeout = std::nullopt)
+        -> void_result;
+
     [[nodiscard]] auto check_threshold() const -> bool;
 
     [[nodiscard]] auto get_error() const -> std::error_code;
-
-    auto ack(std::uint64_t count = 1) -> void_result;
 
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;
     [[nodiscard]] auto impl_valid() const noexcept -> bool;
