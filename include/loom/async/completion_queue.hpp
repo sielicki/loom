@@ -96,6 +96,15 @@ struct completion_event : event_base<completion_event> {
     }
 };
 
+/// Completion layouts. Fields absent from the selected layout are zeroed.
+enum class cq_format {
+    unspecified,  ///< Use Loom's tagged default so the entry layout is known
+    context,      ///< Context pointer only
+    msg,          ///< Context, completion flags, and received message length
+    data,         ///< Message fields, receive buffer, and immediate data
+    tagged,       ///< Data fields and the received message tag
+};
+
 /**
  * @struct completion_queue_attr
  * @brief Attributes for creating a completion queue.
@@ -104,6 +113,7 @@ struct completion_queue_attr {
     queue_size size{1024UL};  ///< Number of entries in the queue
     std::uint64_t flags{0};   ///< Creation flags
     bool wait_obj{false};     ///< Enable blocking wait support
+    cq_format format{cq_format::tagged};  ///< Native completion entry layout
 };
 
 /**
@@ -206,18 +216,6 @@ private:
     [[nodiscard]] auto read_error(int status) const -> result<completion_event>;
     impl_ptr impl_;
     friend class endpoint;
-};
-
-/**
- * @enum cq_format
- * @brief Completion queue entry format types.
- */
-enum class cq_format {
-    unspecified,  ///< Provider determines format
-    context,      ///< Context pointer only
-    msg,          ///< Message format with size
-    data,         ///< Data format with immediate data
-    tagged,       ///< Tagged message format
 };
 
 /**

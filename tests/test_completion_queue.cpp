@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/detail/impl/completion_queue_impl.hpp>
+#include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
 #include <array>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <catch2/generators/catch_generators_range.hpp>
 
 namespace {
 struct mock_cq {
@@ -69,6 +72,205 @@ struct mock_cq {
         loom::get_default_resource(), &handle, loom::runtime_progress_policy{}, true)};
 };
 }  // namespace
+
+namespace {
+constexpr std::array cq_formats{
+    std::pair{loom::cq_format::context, FI_CQ_FORMAT_CONTEXT},
+    std::pair{loom::cq_format::msg, FI_CQ_FORMAT_MSG},
+    std::pair{loom::cq_format::data, FI_CQ_FORMAT_DATA},
+    std::pair{loom::cq_format::tagged, FI_CQ_FORMAT_TAGGED},
+    std::pair{loom::cq_format::unspecified, FI_CQ_FORMAT_TAGGED},
+};
+
+struct format_provider {
+    fi_cq_format format{};
+    bool tagged_supported{true};
+    int open_calls{};
+    int read_calls{};
+    int status{};
+    std::size_t cursor{};
+    std::array<int, 70> contexts{};
+    std::array<std::byte, 70> buffers{};
+
+    auto read(void* output, std::size_t count) -> ssize_t {
+        ++read_calls;
+        if (status)
+            return status;
+        if (cursor == contexts.size())
+            return -FI_EAGAIN;
+        count = std::min(count, contexts.size() - cursor);
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto index = cursor + i;
+            constexpr auto flags = FI_RECV | FI_MULTI_RECV | FI_REMOTE_CQ_DATA;
+            switch (format) {
+                case FI_CQ_FORMAT_CONTEXT:
+                    static_cast<fi_cq_entry*>(output)[i] = {&contexts[index]};
+                    break;
+                case FI_CQ_FORMAT_MSG:
+                    static_cast<fi_cq_msg_entry*>(output)[i] = {
+                        &contexts[index], flags, 10 + index};
+                    break;
+                case FI_CQ_FORMAT_DATA:
+                    static_cast<fi_cq_data_entry*>(output)[i] = {
+                        &contexts[index], flags, 10 + index, &buffers[index], 100 + index};
+                    break;
+                case FI_CQ_FORMAT_TAGGED:
+                    static_cast<fi_cq_tagged_entry*>(output)[i] = {&contexts[index],
+                                                                   flags,
+                                                                   10 + index,
+                                                                   &buffers[index],
+                                                                   100 + index,
+                                                                   200 + index};
+                    break;
+                default:
+                    return -FI_EINVAL;
+            }
+        }
+        cursor += count;
+        return static_cast<ssize_t>(count);
+    }
+    fi_ops resource_ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_cq cq_ops{
+        .size = sizeof(fi_ops_cq),
+        .read =
+            [](fid_cq* cq, void* output, std::size_t count) {
+                return static_cast<format_provider*>(cq->fid.context)->read(output, count);
+            },
+        .readerr = [](fid_cq* cq, fi_cq_err_entry* output, std::uint64_t) -> ssize_t {
+            auto& self = *static_cast<format_provider*>(cq->fid.context);
+            *output = {.op_context = &self.contexts[0],
+                       .flags = FI_RECV,
+                       .len = 3,
+                       .buf = self.buffers.data(),
+                       .data = 27,
+                       .tag = 31,
+                       .err = FI_ECANCELED};
+            return 1;
+        },
+        .sread =
+            [](fid_cq* cq, void* output, std::size_t count, const void*, int) {
+                return static_cast<format_provider*>(cq->fid.context)->read(output, count);
+            },
+    };
+    fid_cq native_cq{.fid = {.context = this, .ops = &resource_ops}, .ops = &cq_ops};
+    fi_ops_domain domain_ops{
+        .size = sizeof(fi_ops_domain),
+        .cq_open =
+            [](fid_domain* dom, fi_cq_attr* attr, fid_cq** output, void*) {
+                auto& self = *static_cast<format_provider*>(dom->fid.context);
+                ++self.open_calls;
+                if (!self.tagged_supported && attr->format == FI_CQ_FORMAT_TAGGED)
+                    return -FI_ENOSYS;
+                self.format = attr->format;
+                *output = &self.native_cq;
+                return 0;
+            },
+    };
+    fid_domain native_domain{.fid = {.context = this, .ops = &resource_ops}, .ops = &domain_ops};
+    loom::domain domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
+        loom::get_default_resource(), &native_domain)};
+
+    void check(const loom::completion_event& event, std::size_t index) {
+        const bool message = format != FI_CQ_FORMAT_CONTEXT;
+        const bool data = format == FI_CQ_FORMAT_DATA || format == FI_CQ_FORMAT_TAGGED;
+        REQUIRE(event.context.get() == &contexts[index]);
+        REQUIRE_FALSE(event.has_error());
+        REQUIRE(event.flags == (message ? FI_RECV | FI_MULTI_RECV | FI_REMOTE_CQ_DATA : 0));
+        REQUIRE(event.len == (message ? 10 + index : 0));
+        REQUIRE(event.bytes_transferred == event.len);
+        REQUIRE(event.buffer == (data ? &buffers[index] : nullptr));
+        REQUIRE(event.data == (data ? 100 + index : 0));
+        REQUIRE(event.tag == (format == FI_CQ_FORMAT_TAGGED ? 200 + index : 0));
+        REQUIRE_FALSE(event.error_info.has_provider_error());
+    }
+};
+}  // namespace
+
+TEST_CASE("completion formats select and decode native single entries",
+          "[completion_queue][format]") {
+    const auto [format, native_format] = GENERATE(Catch::Generators::from_range(cq_formats));
+    format_provider provider;
+    provider.tagged_supported = native_format == FI_CQ_FORMAT_TAGGED;
+    auto created =
+        loom::completion_queue::create(provider.domain, {.wait_obj = true, .format = format});
+    REQUIRE(created);
+    REQUIRE(provider.format == native_format);
+    auto queue = std::move(*created);
+    const auto polled = queue.poll();
+    REQUIRE(polled);
+    provider.check(*polled, 0);
+    const auto waited = queue.wait(std::chrono::milliseconds{0});
+    REQUIRE(waited);
+    provider.check(*waited, 1);
+    const auto read = queue.read();
+    REQUIRE(read);
+    provider.check(*read, 2);
+}
+
+TEST_CASE("completion batches use the selected native stride", "[completion_queue][format]") {
+    const auto [format, native_format] = GENERATE(Catch::Generators::from_range(cq_formats));
+    format_provider provider;
+    auto queue = loom::completion_queue::create(provider.domain, {.format = format});
+    REQUIRE(queue);
+    REQUIRE(provider.format == native_format);
+    std::array<loom::completion_event, 72> events{};
+    for (auto& event : events) {
+        event.error = loom::make_error_code(loom::errc::io_error);
+        event.flags = event.data = event.tag = UINT64_MAX;
+    }
+    REQUIRE(queue->poll_batch(events) == 64);
+    for (std::size_t i = 0; i < 64; ++i)
+        provider.check(events[i], i);
+    REQUIRE(events[64].has_error());
+    REQUIRE(queue->poll_batch(events) == 6);
+    for (std::size_t i = 0; i < 6; ++i)
+        provider.check(events[i], i + 64);
+    REQUIRE(queue->poll_batch(events) == 0);
+    REQUIRE(provider.read_calls == 3);
+    REQUIRE(queue->poll_batch({}) == 0);
+    REQUIRE(provider.read_calls == 3);
+}
+
+TEST_CASE("completion error layout is independent of the success format",
+          "[completion_queue][format]") {
+    const auto [format, native_format] = GENERATE(Catch::Generators::from_range(cq_formats));
+    const auto operation = GENERATE(0, 1, 2);
+    format_provider provider;
+    provider.status = -FI_EAVAIL;
+    auto queue =
+        loom::completion_queue::create(provider.domain, {.wait_obj = true, .format = format});
+    REQUIRE(queue);
+    REQUIRE(provider.format == native_format);
+    loom::completion_event event;
+    if (operation == 0) {
+        const auto read = queue->poll();
+        REQUIRE(read);
+        event = *read;
+    } else if (operation == 1) {
+        const auto read = queue->wait(std::chrono::milliseconds{0});
+        REQUIRE(read);
+        event = *read;
+    } else {
+        REQUIRE(queue->poll_batch(std::span{&event, 1}) == 1);
+    }
+    REQUIRE(event.error == loom::errc::canceled);
+    REQUIRE(event.context.get() == &provider.contexts[0]);
+    REQUIRE(event.buffer == provider.buffers.data());
+    REQUIRE(event.flags == FI_RECV);
+    REQUIRE(event.len == 3);
+    REQUIRE(event.data == 27);
+    REQUIRE(event.tag == 31);
+}
+
+TEST_CASE("invalid completion formats fail before opening the provider",
+          "[completion_queue][format]") {
+    format_provider provider;
+    const auto queue = loom::completion_queue::create(provider.domain,
+                                                      {.format = static_cast<loom::cq_format>(-1)});
+    REQUIRE_FALSE(queue);
+    REQUIRE(queue.error() == loom::errc::invalid_argument);
+    REQUIRE(provider.open_calls == 0);
+}
 
 TEST_CASE("immediate data uses the remote CQ data flag", "[completion_queue]") {
     loom::completion_event event;

@@ -22,11 +22,69 @@
 
 namespace loom::detail {
 
+constexpr auto to_fi_cq_format(cq_format format) noexcept -> fi_cq_format {
+    switch (format) {
+        case cq_format::context:
+            return FI_CQ_FORMAT_CONTEXT;
+        case cq_format::msg:
+            return FI_CQ_FORMAT_MSG;
+        case cq_format::data:
+            return FI_CQ_FORMAT_DATA;
+        case cq_format::tagged:
+        case cq_format::unspecified:
+            return FI_CQ_FORMAT_TAGGED;
+    }
+    return FI_CQ_FORMAT_UNSPEC;
+}
+
+template <std::size_t Capacity, typename Read>
+auto read_cq_entries(fi_cq_format format, std::span<completion_event> events, Read&& read)
+    -> ssize_t {
+    const auto read_as = [&]<typename Entry>() -> ssize_t {
+        std::array<Entry, Capacity> entries{};
+        const auto result = read(entries.data(), std::min(events.size(), Capacity));
+        if (result <= 0)
+            return result;
+        for (std::size_t i = 0; i < static_cast<std::size_t>(result); ++i) {
+            const auto& entry = entries[i];
+            completion_event event{};
+            event.context = context_ptr<void>{entry.op_context};
+            if constexpr (requires { entry.flags; }) {
+                event.flags = entry.flags;
+                event.len = entry.len;
+                event.bytes_transferred = entry.len;
+            }
+            if constexpr (requires { entry.buf; }) {
+                event.buffer = entry.buf;
+                event.data = entry.data;
+            }
+            if constexpr (requires { entry.tag; }) {
+                event.tag = entry.tag;
+            }
+            events[i] = event;
+        }
+        return result;
+    };
+    switch (format) {
+        case FI_CQ_FORMAT_CONTEXT:
+            return read_as.template operator()<fi_cq_entry>();
+        case FI_CQ_FORMAT_MSG:
+            return read_as.template operator()<fi_cq_msg_entry>();
+        case FI_CQ_FORMAT_DATA:
+            return read_as.template operator()<fi_cq_data_entry>();
+        case FI_CQ_FORMAT_TAGGED:
+            return read_as.template operator()<fi_cq_tagged_entry>();
+        default:
+            return -FI_EINVAL;
+    }
+}
+
 /// @brief Internal implementation of the completion queue.
 struct completion_queue_impl {
     ::fid_cq* cq{nullptr};               ///< Underlying libfabric completion queue handle.
     runtime_progress_policy progress{};  ///< Progress policy for the completion queue.
     bool wait_enabled{false};            ///< Whether a native wait object was requested.
+    fi_cq_format format{FI_CQ_FORMAT_TAGGED};  ///< Layout used by native reads.
 
     /// @brief Default constructor.
     completion_queue_impl() = default;
@@ -36,8 +94,9 @@ struct completion_queue_impl {
     /// @param prog The progress policy.
     explicit completion_queue_impl(::fid_cq* cq_ptr,
                                    runtime_progress_policy prog = runtime_progress_policy{},
-                                   bool can_wait = false)
-        : cq(cq_ptr), progress(prog), wait_enabled(can_wait) {}
+                                   bool can_wait = false,
+                                   fi_cq_format entry_format = FI_CQ_FORMAT_TAGGED)
+        : cq(cq_ptr), progress(prog), wait_enabled(can_wait), format(entry_format) {}
 
     /// @brief Destructor that closes the libfabric completion queue.
     ~completion_queue_impl() {
@@ -78,12 +137,16 @@ auto completion_queue::create(const domain& dom,
     if (!dom) {
         return make_error_result<completion_queue>(errc::invalid_argument);
     }
+    const auto format = detail::to_fi_cq_format(attr.format);
+    if (format == FI_CQ_FORMAT_UNSPEC) {
+        return make_error_result<completion_queue>(errc::invalid_argument);
+    }
 
     ::fi_cq_attr cq_attr{};
 
     cq_attr.size = attr.size.get();
     cq_attr.flags = attr.flags;
-    cq_attr.format = FI_CQ_FORMAT_TAGGED;
+    cq_attr.format = format;
     cq_attr.wait_obj = attr.wait_obj ? FI_WAIT_UNSPEC : FI_WAIT_NONE;
 
     ::fid_cq* cq = nullptr;
@@ -100,14 +163,14 @@ auto completion_queue::create(const domain& dom,
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-            resource, cq, progress, attr.wait_obj);
+            resource, cq, progress, attr.wait_obj, format);
         (void)pending.release();
         return completion_queue{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::completion_queue_impl>(
-        default_resource, cq, progress, attr.wait_obj);
+        default_resource, cq, progress, attr.wait_obj, format);
     (void)pending.release();
     return completion_queue{std::move(impl)};
 }
@@ -117,8 +180,11 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
         return std::nullopt;
     }
 
-    ::fi_cq_tagged_entry entry{};
-    ssize_t ret = ::fi_cq_read(impl_->cq, &entry, 1);
+    completion_event event{};
+    const auto ret = detail::read_cq_entries<1>(
+        impl_->format, std::span{&event, 1}, [this](void* entries, std::size_t count) {
+            return ::fi_cq_read(impl_->cq, entries, count);
+        });
 
     if (ret == -FI_EAGAIN) {
         return std::nullopt;
@@ -126,7 +192,7 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
 
     if (ret < 0) {
         const auto error = read_error(static_cast<int>(-ret));
-        auto event = error.value_or(completion_event{});
+        event = error.value_or(completion_event{});
         if (!error)
             event.error = error.error();
         return event;
@@ -135,16 +201,6 @@ auto completion_queue::poll() const -> std::optional<completion_event> {
     if (ret == 0) {
         return std::nullopt;
     }
-
-    completion_event event{};
-    event.context = context_ptr<void>{entry.op_context};
-    event.buffer = entry.buf;
-    event.error = std::error_code{};
-    event.bytes_transferred = entry.len;
-    event.flags = entry.flags;
-    event.len = entry.len;
-    event.data = entry.data;
-    event.tag = entry.tag;
 
     return event;
 }
@@ -155,8 +211,6 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
         return make_error_result<completion_event>(errc::invalid_argument);
     }
 
-    ::fi_cq_tagged_entry entry{};
-
     int timeout_ms = -1;
     if (timeout && timeout->count() >= 0) {
         if (timeout->count() > std::numeric_limits<int>::max()) {
@@ -165,7 +219,11 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
         timeout_ms = static_cast<int>(timeout->count());
     }
 
-    ssize_t ret = ::fi_cq_sread(impl_->cq, &entry, 1, nullptr, timeout_ms);
+    completion_event event{};
+    const auto ret = detail::read_cq_entries<1>(
+        impl_->format, std::span{&event, 1}, [this, timeout_ms](void* entries, std::size_t count) {
+            return ::fi_cq_sread(impl_->cq, entries, count, nullptr, timeout_ms);
+        });
 
     if (ret == 0) {
         return make_error_result<completion_event>(errc::again);
@@ -179,16 +237,6 @@ auto completion_queue::wait(std::optional<std::chrono::milliseconds> timeout) co
         return make_error_result_from_fi_errno<completion_event>(static_cast<int>(-ret));
     }
 
-    completion_event event{};
-    event.context = context_ptr<void>{entry.op_context};
-    event.buffer = entry.buf;
-    event.error = std::error_code{};
-    event.bytes_transferred = entry.len;
-    event.flags = entry.flags;
-    event.len = entry.len;
-    event.data = entry.data;
-    event.tag = entry.tag;
-
     return event;
 }
 
@@ -197,11 +245,10 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
         return 0;
     }
 
-    constexpr std::size_t max_batch_size = 64;
-    std::array<::fi_cq_tagged_entry, max_batch_size> fi_entries{};
-
-    auto batch_size = std::min(events.size(), max_batch_size);
-    ssize_t ret = ::fi_cq_read(impl_->cq, fi_entries.data(), batch_size);
+    const auto ret = detail::read_cq_entries<64>(
+        impl_->format, events, [this](void* entries, std::size_t count) {
+            return ::fi_cq_read(impl_->cq, entries, count);
+        });
 
     if (ret == -FI_EAGAIN || ret == 0) {
         return 0;
@@ -214,20 +261,7 @@ auto completion_queue::poll_batch(std::span<completion_event> events) const -> s
         return 1;
     }
 
-    auto count = static_cast<std::size_t>(ret);
-    for (auto i : std::views::iota(0uz, count)) {
-        events[i] = {};
-        events[i].context = context_ptr<void>{fi_entries[i].op_context};
-        events[i].buffer = fi_entries[i].buf;
-        events[i].error = std::error_code{};
-        events[i].bytes_transferred = fi_entries[i].len;
-        events[i].flags = fi_entries[i].flags;
-        events[i].len = fi_entries[i].len;
-        events[i].data = fi_entries[i].data;
-        events[i].tag = fi_entries[i].tag;
-    }
-
-    return count;
+    return static_cast<std::size_t>(ret);
 }
 
 auto completion_queue::read_error(int status) const -> result<completion_event> {
