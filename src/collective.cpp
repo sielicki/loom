@@ -26,6 +26,10 @@ auto group::address() const noexcept -> fabric_addr {
                                     : fabric_addrs::unspecified;
 }
 
+auto group::member_count() const noexcept -> std::optional<std::size_t> {
+    return impl_ ? impl_->member_count : std::nullopt;
+}
+
 auto group::impl_internal_ptr() const noexcept -> void* {
     return impl_ ? impl_->mc_group : nullptr;
 }
@@ -43,6 +47,11 @@ auto create_group_impl(endpoint& ep,
             return make_error_result<group>(errc::invalid_argument);
         }
     }
+    const bool explicit_members = attr.communication_key.empty() && !(attr.set_flags & FI_UNIVERSE);
+    if (attr.member_count &&
+        (*attr.member_count == 0 || (explicit_members && *attr.member_count != members.size()))) {
+        return make_error_result<group>(errc::invalid_argument);
+    }
     auto* native_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     auto* native_av = static_cast<::fid_av*>(av.internal_ptr());
     if (!native_ep->cm || !FI_CHECK_OP(native_ep->cm, fi_ops_cm, join) || !native_av->ops ||
@@ -51,12 +60,13 @@ auto create_group_impl(endpoint& ep,
     }
 
     auto impl = std::make_unique<group::impl>();
+    impl->member_count = explicit_members ? std::optional{members.size()} : attr.member_count;
     if (!attr.communication_key.empty()) {
         impl->communication_key.assign(attr.communication_key.begin(),
                                        attr.communication_key.end());
     }
     ::fi_av_set_attr set_attr{};
-    set_attr.count = members.size();
+    set_attr.count = attr.member_count.value_or(members.size());
     set_attr.start_addr = FI_ADDR_NOTAVAIL;
     set_attr.end_addr = FI_ADDR_NOTAVAIL;
     set_attr.comm_key_size = impl->communication_key.size();

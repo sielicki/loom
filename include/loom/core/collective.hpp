@@ -83,48 +83,7 @@ constexpr auto to_fi_op(atomic::operation op) noexcept -> ::fi_op {
     }
 }
 
-/**
- * @brief Converts loom atomic datatype to libfabric datatype.
- * @param dt The loom atomic datatype.
- * @return The corresponding libfabric datatype.
- */
-constexpr auto to_fi_datatype(atomic::datatype dt) noexcept -> ::fi_datatype {
-    switch (dt) {
-        case atomic::datatype::int8:
-            return FI_INT8;
-        case atomic::datatype::uint8:
-            return FI_UINT8;
-        case atomic::datatype::int16:
-            return FI_INT16;
-        case atomic::datatype::uint16:
-            return FI_UINT16;
-        case atomic::datatype::int32:
-            return FI_INT32;
-        case atomic::datatype::uint32:
-            return FI_UINT32;
-        case atomic::datatype::int64:
-            return FI_INT64;
-        case atomic::datatype::uint64:
-            return FI_UINT64;
-        case atomic::datatype::float32:
-            return FI_FLOAT;
-        case atomic::datatype::double64:
-            return FI_DOUBLE;
-        case atomic::datatype::float_complex:
-            return FI_FLOAT_COMPLEX;
-        case atomic::datatype::double_complex:
-            return FI_DOUBLE_COMPLEX;
-        case atomic::datatype::long_double:
-            return FI_LONG_DOUBLE;
-        case atomic::datatype::long_double_complex:
-            return FI_LONG_DOUBLE_COMPLEX;
-        case atomic::datatype::int128:
-            return FI_INT128;
-        case atomic::datatype::uint128:
-            return FI_UINT128;
-    }
-    return FI_INT8;
-}
+using atomic::detail::to_fi_datatype;
 
 }  // namespace detail
 
@@ -136,6 +95,9 @@ struct group_attr {
     /// Defaults to the new set's address. Use fabric_addrs::unspecified for
     /// application-managed membership, or an existing group's address for a subgroup.
     std::optional<fabric_addr> parent_address{};
+    /// Required for group-sized buffers when a communication key or FI_UNIVERSE
+    /// supplies membership. Otherwise the explicit member list determines the size.
+    std::optional<std::size_t> member_count{};
 };
 
 /**
@@ -186,6 +148,9 @@ public:
     /// Gets the joined group's address after FI_JOIN_COMPLETE. Before completion,
     /// the provider may not have supplied a group handle or a usable address.
     [[nodiscard]] auto address() const noexcept -> fabric_addr;
+
+    /// Known membership size, or nullopt for opaque membership without a supplied count.
+    [[nodiscard]] auto member_count() const noexcept -> std::optional<std::size_t>;
 
     /// Gets the internal pointer for fabric object interface
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;
@@ -282,16 +247,21 @@ auto broadcast(endpoint& ep,
                fabric_addr root_addr,
                atomic::datatype dt,
                Ctx context = {}) -> result<void> {
+    const auto transfer =
+        detail::checked_transfer<FI_BROADCAST>(buffer.size(), 0, dt, grp.member_count());
+    if (!transfer) {
+        return std::unexpected(transfer.error());
+    }
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     void* desc = mr ? mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_broadcast(fid_ep,
                               buffer.data(),
-                              buffer.size(),
+                              transfer->count.value,
                               desc,
                               grp.address().get(),
                               root_addr.get(),
-                              detail::to_fi_datatype(dt),
+                              transfer->datatype,
                               0,
                               to_raw_context(context));
 
@@ -354,18 +324,23 @@ auto all_reduce(endpoint& ep,
                 atomic::operation op,
                 atomic::datatype dt,
                 Ctx context = {}) -> result<void> {
+    const auto transfer = detail::checked_transfer<FI_ALLREDUCE>(
+        send_buf.size(), recv_buf.size(), dt, grp.member_count());
+    if (!transfer) {
+        return std::unexpected(transfer.error());
+    }
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_allreduce(fid_ep,
                               send_buf.data(),
-                              send_buf.size(),
+                              transfer->count.value,
                               send_desc,
                               recv_buf.data(),
                               recv_desc,
                               grp.address().get(),
-                              detail::to_fi_datatype(dt),
+                              transfer->datatype,
                               detail::to_fi_op(op),
                               0,
                               to_raw_context(context));
@@ -463,18 +438,23 @@ auto all_gather(endpoint& ep,
                 memory_region* recv_mr,
                 atomic::datatype dt,
                 Ctx context = {}) -> result<void> {
+    const auto transfer = detail::checked_transfer<FI_ALLGATHER>(
+        send_buf.size(), recv_buf.size(), dt, grp.member_count());
+    if (!transfer) {
+        return std::unexpected(transfer.error());
+    }
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_allgather(fid_ep,
                               send_buf.data(),
-                              send_buf.size(),
+                              transfer->count.value,
                               send_desc,
                               recv_buf.data(),
                               recv_desc,
                               grp.address().get(),
-                              detail::to_fi_datatype(dt),
+                              transfer->datatype,
                               0,
                               to_raw_context(context));
 
@@ -521,7 +501,7 @@ auto all_gather(endpoint& ep,
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
- * @param send_buf Data to send to each member.
+ * @param send_buf Complete input, partitioned equally among all members.
  * @param recv_buf Buffer to receive data from each member.
  * @param send_mr Optional memory region for send buffer.
  * @param recv_mr Optional memory region for receive buffer.
@@ -538,18 +518,23 @@ auto all_to_all(endpoint& ep,
                 memory_region* recv_mr,
                 atomic::datatype dt,
                 Ctx context = {}) -> result<void> {
+    const auto transfer = detail::checked_transfer<FI_ALLTOALL>(
+        send_buf.size(), recv_buf.size(), dt, grp.member_count());
+    if (!transfer) {
+        return std::unexpected(transfer.error());
+    }
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_alltoall(fid_ep,
                              send_buf.data(),
-                             send_buf.size(),
+                             transfer->count.value,
                              send_desc,
                              recv_buf.data(),
                              recv_desc,
                              grp.address().get(),
-                             detail::to_fi_datatype(dt),
+                             transfer->datatype,
                              0,
                              to_raw_context(context));
 
@@ -566,7 +551,7 @@ auto all_to_all(endpoint& ep,
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
- * @param send_data Data to send to each member.
+ * @param send_data Complete input, partitioned equally among all members.
  * @param recv_data Buffer to receive data from each member.
  * @param send_mr Optional memory region for send data.
  * @param recv_mr Optional memory region for receive data.
@@ -597,7 +582,7 @@ auto all_to_all(endpoint& ep,
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
  * @param send_buf Data to reduce.
- * @param recv_buf Buffer for reduced result (only valid at root).
+ * @param recv_buf Result buffer at root; may be empty only at non-root participants.
  * @param send_mr Optional memory region for send buffer.
  * @param recv_mr Optional memory region for receive buffer.
  * @param root_addr Address of the root node.
@@ -617,19 +602,24 @@ auto reduce(endpoint& ep,
             atomic::operation op,
             atomic::datatype dt,
             Ctx context = {}) -> result<void> {
+    const auto transfer = detail::checked_transfer<FI_REDUCE>(
+        send_buf.size(), recv_buf.size(), dt, grp.member_count());
+    if (!transfer) {
+        return std::unexpected(transfer.error());
+    }
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_reduce(fid_ep,
                            send_buf.data(),
-                           send_buf.size(),
+                           transfer->count.value,
                            send_desc,
                            recv_buf.data(),
                            recv_desc,
                            grp.address().get(),
                            root_addr.get(),
-                           detail::to_fi_datatype(dt),
+                           transfer->datatype,
                            detail::to_fi_op(op),
                            0,
                            to_raw_context(context));
@@ -683,8 +673,8 @@ auto reduce(endpoint& ep,
  * @tparam Ctx The context type (must satisfy context_like).
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
- * @param send_buf Data to scatter (only at root).
- * @param recv_buf Buffer to receive portion of scattered data.
+ * @param send_buf Complete input at root; may be empty only at non-root participants.
+ * @param recv_buf Local portion; its extent determines the count received by each member.
  * @param send_mr Optional memory region for send buffer.
  * @param recv_mr Optional memory region for receive buffer.
  * @param root_addr Address of the root node.
@@ -702,19 +692,24 @@ auto scatter(endpoint& ep,
              fabric_addr root_addr,
              atomic::datatype dt,
              Ctx context = {}) -> result<void> {
+    const auto transfer = detail::checked_transfer<FI_SCATTER>(
+        send_buf.size(), recv_buf.size(), dt, grp.member_count());
+    if (!transfer) {
+        return std::unexpected(transfer.error());
+    }
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_scatter(fid_ep,
                             send_buf.data(),
-                            send_buf.size(),
+                            transfer->count.value,
                             send_desc,
                             recv_buf.data(),
                             recv_desc,
                             grp.address().get(),
                             root_addr.get(),
-                            detail::to_fi_datatype(dt),
+                            transfer->datatype,
                             0,
                             to_raw_context(context));
 
@@ -731,7 +726,7 @@ auto scatter(endpoint& ep,
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
  * @param send_buf Data to contribute.
- * @param recv_buf Buffer to receive all gathered data (only at root).
+ * @param recv_buf Full result at root; may be empty only at non-root participants.
  * @param send_mr Optional memory region for send buffer.
  * @param recv_mr Optional memory region for receive buffer.
  * @param root_addr Address of the root node.
@@ -749,19 +744,24 @@ auto gather(endpoint& ep,
             fabric_addr root_addr,
             atomic::datatype dt,
             Ctx context = {}) -> result<void> {
+    const auto transfer = detail::checked_transfer<FI_GATHER>(
+        send_buf.size(), recv_buf.size(), dt, grp.member_count());
+    if (!transfer) {
+        return std::unexpected(transfer.error());
+    }
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_gather(fid_ep,
                            send_buf.data(),
-                           send_buf.size(),
+                           transfer->count.value,
                            send_desc,
                            recv_buf.data(),
                            recv_desc,
                            grp.address().get(),
                            root_addr.get(),
-                           detail::to_fi_datatype(dt),
+                           transfer->datatype,
                            0,
                            to_raw_context(context));
 
@@ -778,7 +778,7 @@ auto gather(endpoint& ep,
  * @param ep The endpoint for the operation.
  * @param grp The collective group.
  * @param send_buf Data to reduce.
- * @param recv_buf Buffer for portion of reduced result.
+ * @param recv_buf Local portion; its extent determines the count received by each member.
  * @param send_mr Optional memory region for send buffer.
  * @param recv_mr Optional memory region for receive buffer.
  * @param op The reduction operation.
@@ -796,18 +796,23 @@ auto reduce_scatter(endpoint& ep,
                     atomic::operation op,
                     atomic::datatype dt,
                     Ctx context = {}) -> result<void> {
+    const auto transfer = detail::checked_transfer<FI_REDUCE_SCATTER>(
+        send_buf.size(), recv_buf.size(), dt, grp.member_count());
+    if (!transfer) {
+        return std::unexpected(transfer.error());
+    }
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
     void* send_desc = send_mr ? send_mr->descriptor().raw() : nullptr;
     void* recv_desc = recv_mr ? recv_mr->descriptor().raw() : nullptr;
 
     auto ret = ::fi_reduce_scatter(fid_ep,
                                    send_buf.data(),
-                                   send_buf.size(),
+                                   transfer->count.value,
                                    send_desc,
                                    recv_buf.data(),
                                    recv_desc,
                                    grp.address().get(),
-                                   detail::to_fi_datatype(dt),
+                                   transfer->datatype,
                                    detail::to_fi_op(op),
                                    0,
                                    to_raw_context(context));
