@@ -495,15 +495,16 @@ struct atomic_request {
 };
 
 template <atomic::atomic_type T>
-[[nodiscard]] auto valid_atomic_buffer(const void* address, const memory_region* region) noexcept
-    -> bool {
+[[nodiscard]] auto valid_atomic_buffer(const endpoint& ep,
+                                       const void* address,
+                                       const memory_region* region) noexcept -> bool {
     const auto value = reinterpret_cast<std::uintptr_t>(address);
     if (!address || value % alignof(T) != 0)
         return false;
     if (!region)
         return true;
     const auto base = reinterpret_cast<std::uintptr_t>(region->address());
-    return *region && base != 0 && region->length() >= sizeof(T) && value >= base &&
+    return region->usable_with(ep) && base != 0 && region->length() >= sizeof(T) && value >= base &&
            value - base <= region->length() - sizeof(T);
 }
 
@@ -528,10 +529,10 @@ public:
             return;
         }
         if (request_.remote.length < sizeof(T) ||
-            !valid_atomic_buffer<T>(request_.input, request_.input_mr) ||
-            !valid_atomic_buffer<T>(request_.result, request_.result_mr) ||
+            !valid_atomic_buffer<T>(*ep_, request_.input, request_.input_mr) ||
+            !valid_atomic_buffer<T>(*ep_, request_.result, request_.result_mr) ||
             (Operation == atomic::operation::compare_swap &&
-             !valid_atomic_buffer<T>(request_.comparison, request_.comparison_mr))) {
+             !valid_atomic_buffer<T>(*ep_, request_.comparison, request_.comparison_mr))) {
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }

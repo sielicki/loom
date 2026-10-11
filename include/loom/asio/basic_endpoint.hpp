@@ -463,7 +463,8 @@ public:
                 ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
-                if (!remote.contains(0, ctx->buffers().bytes) || !ctx->buffers().within(local_mr)) {
+                if (!local_mr.usable_with(state->endpoint) ||
+                    !remote.contains(0, ctx->buffers().bytes) || !ctx->buffers().within(local_mr)) {
                     finish_asio_submission(std::move(ctx),
                                            make_error_result<void>(errc::invalid_argument));
                     return;
@@ -534,7 +535,8 @@ public:
                 ctx->retain_endpoint(state);
                 ctx->set_transfer_size(ctx->buffers().bytes);
 
-                if (!remote.contains(0, ctx->buffers().bytes) || !ctx->buffers().within(local_mr)) {
+                if (!local_mr.usable_with(state->endpoint) ||
+                    !remote.contains(0, ctx->buffers().bytes) || !ctx->buffers().within(local_mr)) {
                     finish_asio_submission(std::move(ctx),
                                            make_error_result<void>(errc::invalid_argument));
                     return;

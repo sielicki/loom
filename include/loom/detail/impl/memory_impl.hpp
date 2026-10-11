@@ -17,6 +17,7 @@
 #include "loom/core/memory.hpp"
 #include "loom/detail/conversions.hpp"
 #include "loom/detail/impl/domain_impl.hpp"
+#include "loom/detail/impl/endpoint_impl.hpp"
 #include "loom/detail/mr_key.hpp"
 #include "loom/detail/unique_fid.hpp"
 
@@ -67,6 +68,9 @@ struct memory_region_impl {
     mr_key_lease requested_key;
     std::uint64_t remote_addr{};
     int registration_mode{};
+    fid_domain* origin_domain{};
+    fid_ep* bound_endpoint{};
+    bool enabled{};
 
     /**
      * @brief Default constructor.
@@ -84,9 +88,12 @@ struct memory_region_impl {
                        std::size_t len_,
                        mr_key_lease key = {},
                        std::uint64_t remote_address = 0,
-                       int mode = 0) noexcept
+                       int mode = 0,
+                       fid_domain* origin = nullptr,
+                       bool rma_events = false) noexcept
         : mr(mr_), addr(addr_), length(len_), requested_key(std::move(key)),
-          remote_addr(remote_address), registration_mode(mode) {}
+          remote_addr(remote_address), registration_mode(mode), origin_domain(origin),
+          enabled(!(mode & FI_MR_ENDPOINT) && !(rma_events && (mode & FI_MR_RMA_EVENT))) {}
 
     /**
      * @brief Destructor that closes the libfabric MR handle.
@@ -209,7 +216,8 @@ auto memory_region::register_memory(const domain& dom,
         length,
         std::move(*requested_key),
         *remote_address,
-        dom.impl_->mr_mode);
+        dom.impl_->mr_mode,
+        dom.impl_->domain);
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -318,7 +326,9 @@ auto memory_region::register_memory(const domain& dom,
         length,
         std::move(*requested_key),
         *remote_address,
-        dom.impl_->mr_mode);
+        dom.impl_->mr_mode,
+        dom.impl_->domain,
+        attributes.rma_events);
     (void)pending.release();
     return memory_region{std::move(impl)};
 }
@@ -415,13 +425,26 @@ auto memory_region::contains(const void* buffer, std::size_t size) const noexcep
            size <= std::numeric_limits<std::uintptr_t>::max() - address;
 }
 
+auto memory_region::usable_with(const endpoint& ep) const noexcept -> bool {
+    if (!impl_ || !impl_->mr || !impl_->enabled || !impl_->origin_domain || !ep.impl_ ||
+        !ep.impl_->ep || impl_->origin_domain != ep.impl_->origin_domain)
+        return false;
+    if (impl_->registration_mode & FI_MR_ENDPOINT)
+        return impl_->bound_endpoint == ep.impl_->ep;
+    return !impl_->bound_endpoint || impl_->bound_endpoint == ep.impl_->ep;
+}
+
 auto memory_region::bind(endpoint& ep) -> result<void> {
-    if (!impl_ || !impl_->mr || !ep) {
+    if (!impl_ || !impl_->mr || !impl_->origin_domain || !ep.impl_ || !ep.impl_->ep ||
+        impl_->origin_domain != ep.impl_->origin_domain) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    return detail::bind_memory_region(*impl_->mr, fid_ep->fid, 0);
+    auto result = detail::bind_memory_region(*impl_->mr, fid_ep->fid, 0);
+    if (result)
+        impl_->bound_endpoint = fid_ep;
+    return result;
 }
 
 auto memory_region::bind(counter& cntr) -> result<void> {
@@ -444,6 +467,7 @@ auto memory_region::enable() -> result<void> {
         return make_error_result_from_fi_errno<void>(-ret);
     }
 
+    impl_->enabled = true;
     return make_success();
 }
 

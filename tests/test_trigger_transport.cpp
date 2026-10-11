@@ -86,11 +86,19 @@ struct trigger_provider {
     fid_cntr counter_handle{.fid = {.context = this, .ops = &ops}};
     loom::domain domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
         loom::get_default_resource(), &domain_handle)};
-    loom::endpoint endpoint{
-        loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
-                                                                   &endpoint_handle,
-                                                                   loom::endpoint_types::rdm,
-                                                                   loom::address_format::inet)};
+    loom::endpoint endpoint;
+    explicit trigger_provider(fid_domain* origin = nullptr)
+        : endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+              loom::get_default_resource(),
+              &endpoint_handle,
+              loom::endpoint_types::rdm,
+              loom::address_format::inet,
+              0UZ,
+              0UZ,
+              loom::caps{},
+              0,
+              0,
+              origin ? origin : &domain_handle)} {}
     loom::counter counter{loom::detail::make_pmr_unique<loom::detail::counter_impl>(
         loom::get_default_resource(), &counter_handle)};
 
@@ -132,8 +140,10 @@ TEST_CASE("triggered RMA enforces remote bounds before changing its context", "[
     const auto range =
         GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
     const auto short_local = GENERATE(false, true);
-    trigger_provider native;
-    loom::test::mock_domain domain;
+    const auto foreign = GENERATE(false, true);
+    const auto disabled = GENERATE(false, true);
+    loom::test::mock_domain domain{disabled ? FI_MR_ENDPOINT : 0};
+    trigger_provider native{foreign ? nullptr : &domain.handle};
     std::array<std::byte, 8> buffer{};
     auto memory = loom::memory_region::register_memory(domain.dom,
                                                        std::span{buffer}.first(short_local ? 7 : 8),
@@ -150,7 +160,7 @@ TEST_CASE("triggered RMA enforces remote bounds before changing its context", "[
     const auto result =
         write ? loom::trigger::write(native.endpoint, buffer, memory, remote, &context, condition)
               : loom::trigger::read(native.endpoint, buffer, memory, remote, &context, condition);
-    const bool valid = range == remote_range::valid && !short_local;
+    const bool valid = range == remote_range::valid && !short_local && !foreign && !disabled;
     REQUIRE(result.has_value() == valid);
     if (!valid)
         CHECK(result.error() == loom::errc::invalid_argument);
@@ -298,7 +308,8 @@ TEST_CASE("triggered submissions reject unavailable resources", "[trigger]") {
                                   unavailable::entry,
                                   unavailable::layout);
     CAPTURE(operation, missing);
-    trigger_provider native;
+    loom::test::mock_domain domain;
+    trigger_provider native{&domain.handle};
     loom::counter empty;
     switch (missing) {
         case unavailable::counter:
@@ -328,7 +339,6 @@ TEST_CASE("triggered submissions reject unavailable resources", "[trigger]") {
         missing == unavailable::counter ? &empty : &native.counter, 7};
     const auto result = [&]() -> loom::void_result {
         using namespace loom;
-        test::mock_domain domain;
         std::array<std::byte, 1> buffer{};
         auto memory = memory_region::register_memory(
                           domain.dom, buffer, mr_access_flags::read | mr_access_flags::write)

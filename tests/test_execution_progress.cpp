@@ -44,6 +44,7 @@ struct receiver {
 };
 
 struct provider {
+    fid_domain domain_handle{};
     struct pending_atomic {
         const std::uint64_t* input;
         const std::uint64_t* comparison;
@@ -255,7 +256,8 @@ struct provider {
               0UZ,
               loom::caps{},
               transmit_defaults,
-              receive_defaults)} {
+              receive_defaults,
+              &domain_handle)} {
         if (bind_completions)
             REQUIRE(ep.bind_cq(cq, loom::cq_bind::transmit | loom::cq_bind::recv));
     }
@@ -539,7 +541,14 @@ TEST_CASE("message senders preserve peers and registrations", "[execution][progr
     std::array<std::byte, 16> storage{};
     fid_mr native_mr{.fid = {.ops = &native.ops}, .mem_desc = &native_mr};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &native_mr, storage.data(), storage.size())};
+        loom::get_default_resource(),
+        &native_mr,
+        storage.data(),
+        storage.size(),
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &native.domain_handle)};
     const auto descriptor = registered ? mr.descriptor() : loom::mr_descriptor{};
     native.expected_message_descriptor = descriptor.raw();
     const loom::fabric_addr peer{native.expected_message_peer};
@@ -823,19 +832,33 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
     enum class remote_range { valid, short_extent, overflow };
     const auto range =
         GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
-    enum class local_range { valid, empty, short_extent, before_start, unrelated, unmapped };
+    enum class local_range {
+        valid,
+        empty,
+        short_extent,
+        before_start,
+        unrelated,
+        unmapped,
+        foreign_domain,
+        unknown_domain,
+        disabled
+    };
     const auto local = GENERATE(local_range::valid,
                                 local_range::empty,
                                 local_range::short_extent,
                                 local_range::before_start,
                                 local_range::unrelated,
-                                local_range::unmapped);
+                                local_range::unmapped,
+                                local_range::foreign_domain,
+                                local_range::unknown_domain,
+                                local_range::disabled);
     const bool invalid_range = range != remote_range::valid || local != local_range::valid;
     provider fabric{FI_MORE, FI_FENCE | FI_MORE | FI_DELIVERY_COMPLETE};
     fabric.selective_completion = GENERATE(false, true);
     CAPTURE(fabric.selective_completion);
     fabric.submission_status = status;
     std::array<std::byte, 16> storage{}, unrelated{};
+    fid_domain foreign_domain{};
     fid_mr native_mr{.fid = {.ops = &fabric.ops}, .mem_desc = &native_mr};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
         loom::get_default_resource(),
@@ -844,7 +867,13 @@ TEST_CASE("RMA senders preserve registered peer submissions", "[execution][progr
         : local == local_range::unrelated
             ? unrelated.data()
             : storage.data() + (local == local_range::before_start ? 1 : 0),
-        storage.size() - (local == local_range::short_extent ? 1 : 0))};
+        storage.size() - (local == local_range::short_extent ? 1 : 0),
+        loom::detail::mr_key_lease{},
+        0,
+        local == local_range::disabled ? FI_MR_ENDPOINT : 0,
+        local == local_range::foreign_domain   ? &foreign_domain
+        : local == local_range::unknown_domain ? nullptr
+                                               : &fabric.domain_handle)};
     const loom::fabric_addr peer{19};
     const loom::remote_memory remote{
         range == remote_range::overflow ? std::numeric_limits<std::uint64_t>::max() - 15 : 24,
@@ -896,7 +925,14 @@ TEST_CASE("registered RMA senders validate the registration used at start",
     fid_mr second{.fid = {.ops = &native.ops}, .mem_desc = &second};
     const auto region = [&](fid_mr& handle, auto& storage) {
         return loom::memory_region{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-            loom::get_default_resource(), &handle, storage.data(), storage.size())};
+            loom::get_default_resource(),
+            &handle,
+            storage.data(),
+            storage.size(),
+            loom::detail::mr_key_lease{},
+            0,
+            0,
+            &native.domain_handle)};
     };
     auto mr = region(first, buffer);
     const loom::remote_memory remote{24, 7, buffer.size()};
@@ -1102,7 +1138,14 @@ TEST_CASE("atomic senders store results in the supplied registration", "[executi
     int descriptor{};
     fid_mr native_mr{.fid = {.ops = &fabric.ops}, .mem_desc = &descriptor};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &native_mr, &result, sizeof(result))};
+        loom::get_default_resource(),
+        &native_mr,
+        &result,
+        sizeof(result),
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &fabric.domain_handle)};
     fabric.expected_result = &result;
     fabric.expected_result_descriptor = &descriptor;
     auto run = [&](auto sender) {
@@ -1153,7 +1196,14 @@ TEST_CASE("atomic senders borrow registered operands for explicit peers",
     fid_mr result_handle{.fid = {.ops = &native.ops}, .mem_desc = &result_handle};
     const auto region = [&](auto& values, fid_mr& handle) {
         return loom::memory_region{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-            loom::get_default_resource(), &handle, values.data(), sizeof(values))};
+            loom::get_default_resource(),
+            &handle,
+            values.data(),
+            sizeof(values),
+            loom::detail::mr_key_lease{},
+            0,
+            0,
+            &native.domain_handle)};
     };
     const auto input_mr = region(inputs, input_handle);
     const auto compare_mr = region(comparisons, compare_handle);
@@ -1258,7 +1308,14 @@ TEST_CASE("borrowed atomic senders reject invalid registered ranges",
         }
         regions[i] =
             loom::memory_region{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-                loom::get_default_resource(), handle, address, length)};
+                loom::get_default_resource(),
+                handle,
+                address,
+                length,
+                loom::detail::mr_key_lease{},
+                0,
+                0,
+                &native.domain_handle)};
     }
     completion_state state;
     const auto run = [&](auto sender) {
@@ -1425,7 +1482,11 @@ TEST_CASE("atomic senders reject invalid result registrations", "[execution][pro
         loom::get_default_resource(),
         invalid == 0 ? nullptr : &native_mr,
         address,
-        invalid == 3 ? 1 : storage.size())};
+        invalid == 3 ? 1 : storage.size(),
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &fabric.domain_handle)};
     auto run = [&](auto sender) {
         auto operation = loom::execution::connect(std::move(sender), receiver{&state});
         loom::execution::start(operation);

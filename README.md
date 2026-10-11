@@ -933,6 +933,15 @@ An empty or unmapped MR, a buffer outside its registered span, or a wrapping
 range returns `errc::invalid_argument`. The native descriptor may be null for a
 valid registration. `memory_region::contains` exposes the same range check.
 
+MR-taking RMA and atomic operations, their senders, and registered Asio buffers
+also check `memory_region::usable_with(endpoint)`: the MR must belong to the
+endpoint's native domain, match any endpoint binding, and have completed any
+required enablement. Unknown origin metadata in adopted implementations is
+rejected. Failed binding or enablement does not change the previously accepted
+state. These checks preserve wrapper moves but do not extend native resource
+lifetimes. Descriptor-only interfaces still require the caller to establish
+registration compatibility.
+
 #### Building with Asio
 
 Enable Asio integration via CMake:
@@ -1173,6 +1182,10 @@ including when several objects occupy different offsets within one region.
 Invalid registrations and remote ranges shorter than one value are rejected
 before submission. A null registration is permitted only when the negotiated
 MR mode allows it.
+
+Core atomic operations check the full byte extent of every supplied operand
+and result registration. Atomic reads ignore the source operand as specified
+by libfabric; their result registration is still checked.
 
 Keep the objects, registrations, endpoint, and CQ alive through completion.
 Do not modify inputs or access the result while the operation is outstanding.

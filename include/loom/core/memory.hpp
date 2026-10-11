@@ -266,6 +266,12 @@ public:
     /// valid, locally mapped MR; empty ranges at its end are permitted.
     [[nodiscard]] auto contains(const void* buffer, std::size_t size) const noexcept -> bool;
 
+    /// Whether this registration is enabled for use through the live endpoint.
+    /// Requires the same native domain and any endpoint binding to match.
+    /// Empty resources and adopted implementations with unknown origin fail.
+    /// Resources remain borrowed and must retain their native lifetimes.
+    [[nodiscard]] auto usable_with(const class endpoint& ep) const noexcept -> bool;
+
     /**
      * @brief Binds this memory region to an endpoint.
      * @param ep The endpoint to bind to.

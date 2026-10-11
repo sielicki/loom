@@ -465,7 +465,8 @@ public:
         }
 
         if (!remote_.contains(0, buffer_.size()) ||
-            (registration_ && !registration_->contains(buffer_.data(), buffer_.size()))) {
+            (registration_ && (!registration_->usable_with(*ep_) ||
+                               !registration_->contains(buffer_.data(), buffer_.size())))) {
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }
@@ -535,7 +536,8 @@ public:
         }
 
         if (!remote_.contains(0, buffer_.size()) ||
-            (registration_ && !registration_->contains(buffer_.data(), buffer_.size()))) {
+            (registration_ && (!registration_->usable_with(*ep_) ||
+                               !registration_->contains(buffer_.data(), buffer_.size())))) {
             this->complete_error(make_error_code(errc::invalid_argument));
             return;
         }

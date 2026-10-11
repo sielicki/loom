@@ -80,7 +80,13 @@ struct event_provider : loom::test::mock_domain {
             loom::get_default_resource(),
             &native_endpoint,
             loom::endpoint_types::rdm,
-            loom::address_format::unspecified)};
+            loom::address_format::unspecified,
+            0UZ,
+            0UZ,
+            loom::caps{},
+            0,
+            0,
+            &handle)};
     }
     auto region(std::span<std::byte> buffer) -> loom::memory_region {
         return loom::memory_region::register_memory(

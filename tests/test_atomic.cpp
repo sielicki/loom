@@ -23,6 +23,7 @@ concept typed_atomic = requires(endpoint& ep, const T& input, T* output, remote_
 };
 
 struct atomic_provider {
+    fid_domain domain_handle{};
     std::uint64_t remote_value{42};
     const void* operand{};
     const void* comparison{};
@@ -89,8 +90,16 @@ struct atomic_provider {
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .atomic = &atomics};
 
     auto endpoint() -> loom::endpoint {
-        return loom::endpoint{detail::make_pmr_unique<detail::endpoint_impl>(
-            get_default_resource(), &handle, endpoint_types::msg, address_format::inet)};
+        return loom::endpoint{detail::make_pmr_unique<detail::endpoint_impl>(get_default_resource(),
+                                                                             &handle,
+                                                                             endpoint_types::msg,
+                                                                             address_format::inet,
+                                                                             0UZ,
+                                                                             0UZ,
+                                                                             caps{},
+                                                                             0,
+                                                                             0,
+                                                                             &domain_handle)};
     }
 };
 }  // namespace
@@ -125,10 +134,24 @@ TEST_CASE("atomic compare and swap preserves operand roles", "[atomic]") {
     std::uint64_t previous{};
     fid_mr compare_handle{.fid = {.ops = &native.ops}, .mem_desc = &compare_handle};
     fid_mr result_handle{.fid = {.ops = &native.ops}, .mem_desc = &result_handle};
-    memory_region compare_mr{detail::make_pmr_unique<detail::memory_region_impl>(
-        get_default_resource(), &compare_handle, &expected, sizeof(expected))};
-    memory_region result_mr{detail::make_pmr_unique<detail::memory_region_impl>(
-        get_default_resource(), &result_handle, &previous, sizeof(previous))};
+    memory_region compare_mr{
+        detail::make_pmr_unique<detail::memory_region_impl>(get_default_resource(),
+                                                            &compare_handle,
+                                                            &expected,
+                                                            sizeof(expected),
+                                                            loom::detail::mr_key_lease{},
+                                                            0,
+                                                            0,
+                                                            &native.domain_handle)};
+    memory_region result_mr{
+        detail::make_pmr_unique<detail::memory_region_impl>(get_default_resource(),
+                                                            &result_handle,
+                                                            &previous,
+                                                            sizeof(previous),
+                                                            loom::detail::mr_key_lease{},
+                                                            0,
+                                                            0,
+                                                            &native.domain_handle)};
     const remote_memory remote{0x1000, 0x1234, sizeof(previous)};
     fi_context2 context{};
     const auto result =
@@ -226,10 +249,18 @@ TEST_CASE("atomic operations reject unavailable provider entry points", "[atomic
     fi_ops_atomic unsupported{.size = sizeof(fi_ops_atomic)};
     native.handle.atomic = missing_table ? nullptr : &unsupported;
     auto ep = native.endpoint();
-    memory_region mr;
     const std::uint64_t value{1};
     const std::uint64_t replacement{2};
     std::uint64_t previous{};
+    fid_mr handle{.fid = {.ops = &native.ops}};
+    memory_region mr{detail::make_pmr_unique<detail::memory_region_impl>(get_default_resource(),
+                                                                         &handle,
+                                                                         &previous,
+                                                                         sizeof(previous),
+                                                                         detail::mr_key_lease{},
+                                                                         0,
+                                                                         0,
+                                                                         &native.domain_handle)};
     const remote_memory remote{0x1000, 0x1234, sizeof(value)};
     const auto op = atomic::operation::sum;
     const auto type = atomic::datatype::uint64;

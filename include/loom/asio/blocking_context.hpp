@@ -65,8 +65,10 @@ auto blocking_message(std::shared_ptr<endpoint_state> endpoint, const BufferSequ
             return {make_error_code(errc::not_supported), 0};
     }
     blocking_context operation{std::move(endpoint)};
-    operation.storage.template prepare_buffers<Receive>(buffers, std::nullopt);
+    operation.storage.template prepare_buffers<Receive>(buffers, std::nullopt, &ep);
     const auto prepared = operation.storage.buffers();
+    if (!prepared.registrations_valid)
+        return {make_error_code(errc::invalid_argument), 0};
     auto submitted = operation.bind(direction);
     if (submitted) {
         if constexpr (Receive) {

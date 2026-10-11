@@ -53,6 +53,7 @@ struct asio_buffers {
     std::span<const iovec> iov;
     std::span<const mr_descriptor> descriptors;
     std::size_t bytes{};
+    bool registrations_valid{true};
 
     [[nodiscard]] auto within(const memory_region& region) const noexcept -> bool {
         if (!region)
@@ -76,11 +77,13 @@ public:
           buffer_descriptors_(descriptor_allocator{allocator}) {}
 
     [[nodiscard]] auto buffers() const noexcept -> asio_buffers {
-        return {buffer_iov_, buffer_descriptors_, buffer_bytes_};
+        return {buffer_iov_, buffer_descriptors_, buffer_bytes_, registrations_valid_};
     }
 
     template <bool Mutable, typename BufferSequence>
-    void prepare_buffers(const BufferSequence& buffers, std::optional<mr_descriptor> descriptor) {
+    void prepare_buffers(const BufferSequence& buffers,
+                         std::optional<mr_descriptor> descriptor,
+                         const endpoint* ep = nullptr) {
         using buffer_type =
             std::conditional_t<Mutable, ::asio::mutable_buffer, ::asio::const_buffer>;
         const auto end = ::asio::buffer_sequence_end(buffers);
@@ -95,8 +98,13 @@ public:
             using element_type = std::remove_cvref_t<decltype(*it)>;
             if constexpr (std::same_as<element_type, mutable_registered_buffer> ||
                           std::same_as<element_type, const_registered_buffer>) {
-                if (!descriptor)
+                if (!descriptor) {
+                    const auto* region = (*it).memory_region();
+                    if (region)
+                        registrations_valid_ &= ep && region->usable_with(*ep) &&
+                                                region->contains(buffer.data(), buffer.size());
                     local_descriptor = (*it).descriptor();
+                }
             }
             if (local_descriptor || !buffer_descriptors_.empty()) {
                 // Keep one descriptor per IOV, including unregistered elements
@@ -112,6 +120,7 @@ private:
     std::vector<iovec, iov_allocator> buffer_iov_;
     std::vector<mr_descriptor, descriptor_allocator> buffer_descriptors_;
     std::size_t buffer_bytes_{};
+    bool registrations_valid_{true};
 };
 
 // Pending operations share ownership so their native endpoint and cancellation
@@ -293,6 +302,8 @@ public:
     /// Rejection or context destruction removes the registration automatically.
     [[nodiscard]] auto bind_completion(endpoint& ep, completion_direction direction) noexcept
         -> void_result {
+        if (!buffers().registrations_valid)
+            return make_error_result<void>(errc::invalid_argument);
         // Asio's handler retires on one event. A multi-receive buffer and
         // context must survive until the separate provider-release event.
         if (direction == completion_direction::receive) {
@@ -418,7 +429,7 @@ public:
 
     template <bool Mutable, typename BufferSequence>
     void prepare_buffers(const BufferSequence& buffers, std::optional<mr_descriptor> descriptor) {
-        buffers_.template prepare_buffers<Mutable>(buffers, descriptor);
+        buffers_.template prepare_buffers<Mutable>(buffers, descriptor, endpoint_);
     }
 
     /**

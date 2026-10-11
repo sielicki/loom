@@ -190,6 +190,19 @@ contains_elements(remote_memory remote, datatype type, std::size_t count) noexce
     return size != 0 && count <= remote.length / size && remote.contains(0, count * size);
 }
 
+/// Validate supplied registrations without imposing registration on other operands.
+[[nodiscard]] inline auto registered_elements(const endpoint& ep,
+                                              const memory_region* region,
+                                              const void* address,
+                                              datatype type,
+                                              std::size_t count) noexcept -> bool {
+    if (!region)
+        return true;
+    const auto size = datatype_size(type);
+    return size != 0 && region->usable_with(ep) && count <= region->length() / size &&
+           region->contains(address, count * size);
+}
+
 /**
  * @brief Converts a loom operation to a libfabric fi_op.
  * @param op The loom atomic operation.
@@ -312,7 +325,8 @@ auto execute_to(endpoint& ep,
                 op_flags flags,
                 Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count))
+    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+        !detail::registered_elements(ep, mr, buf, dt, count))
         return make_error_result<void>(errc::invalid_argument);
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, writemsg))
         return make_error_result<void>(errc::not_supported);
@@ -349,7 +363,8 @@ auto execute_to(endpoint& ep,
                 remote_memory remote,
                 Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count)) {
+    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+        !detail::registered_elements(ep, mr, buf, dt, count)) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, write)) {
@@ -446,7 +461,10 @@ auto fetch_to(endpoint& ep,
               op_flags flags,
               Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count))
+    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+        (op != operation::atomic_read &&
+         !detail::registered_elements(ep, mr_buf, buf, dt, count)) ||
+        !detail::registered_elements(ep, mr_result, result, dt, count))
         return make_error_result<void>(errc::invalid_argument);
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, readwritemsg))
         return make_error_result<void>(errc::not_supported);
@@ -488,7 +506,10 @@ auto fetch_to(endpoint& ep,
               remote_memory remote,
               Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count)) {
+    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+        (op != operation::atomic_read &&
+         !detail::registered_elements(ep, mr_buf, buf, dt, count)) ||
+        !detail::registered_elements(ep, mr_result, result, dt, count)) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, readwrite)) {
@@ -576,7 +597,10 @@ auto compare_swap_to(endpoint& ep,
                      op_flags flags,
                      Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count))
+    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+        !detail::registered_elements(ep, mr_compare, compare, dt, count) ||
+        !detail::registered_elements(ep, mr_swap, swap, dt, count) ||
+        !detail::registered_elements(ep, mr_result, result, dt, count))
         return make_error_result<void>(errc::invalid_argument);
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, compwritemsg))
         return make_error_result<void>(errc::not_supported);
@@ -628,7 +652,10 @@ auto compare_swap_to(endpoint& ep,
                      remote_memory remote,
                      Ctx context = {}) -> loom::result<void> {
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count)) {
+    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+        !detail::registered_elements(ep, mr_compare, compare, dt, count) ||
+        !detail::registered_elements(ep, mr_swap, swap, dt, count) ||
+        !detail::registered_elements(ep, mr_result, result, dt, count)) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, compwrite)) {

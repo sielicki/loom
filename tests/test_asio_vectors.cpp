@@ -21,6 +21,7 @@
 
 namespace {
 struct vector_provider {
+    fid_domain domain_handle{};
     std::span<const iovec> buffers;
     void* context{};
     void* attempted_context{};
@@ -193,7 +194,8 @@ struct vector_provider {
                                                                        0UZ,
                                                                        loom::caps{},
                                                                        transmit_defaults,
-                                                                       receive_defaults)};
+                                                                       receive_defaults,
+                                                                       &domain_handle)};
         if (bindings.has(loom::cq_bind::transmit))
             REQUIRE(ep.bind_cq(tx, loom::cq_bind::transmit));
         if (bindings.has(loom::cq_bind::recv))
@@ -203,6 +205,87 @@ struct vector_provider {
 };
 }  // namespace
 
+TEST_CASE("Asio messages reject invalid per-buffer registrations", "[asio][registration]") {
+    enum class defect { foreign, unknown, disabled, wrong_endpoint, short_range, unrelated, empty };
+    const auto bad = GENERATE(defect::foreign,
+                              defect::unknown,
+                              defect::disabled,
+                              defect::wrong_endpoint,
+                              defect::short_range,
+                              defect::unrelated,
+                              defect::empty);
+    const auto operand = GENERATE(0, 1);
+    const auto receive = GENERATE(false, true);
+    const auto tagged = GENERATE(false, true);
+    const auto helper = GENERATE(false, true);
+    vector_provider native;
+    native.submission_status = -FI_EAGAIN;
+    ::asio::io_context ioc;
+    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    fid_domain foreign{};
+    fid_ep other_endpoint{};
+    std::array<std::array<std::byte, 8>, 2> storage{};
+    std::array<std::byte, 8> unrelated{};
+    std::array<fid_mr, 2> handles{};
+    std::array<loom::memory_region, 2> regions{};
+    for (std::size_t i = 0; i < regions.size(); ++i) {
+        handles[i] = {.fid = {.ops = &native.ops}};  // Null descriptors still require validation.
+        auto impl = loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+            loom::get_default_resource(),
+            i == operand && bad == defect::empty ? nullptr : &handles[i],
+            i == operand && bad == defect::unrelated ? unrelated.data() : storage[i].data(),
+            i == operand && bad == defect::short_range ? 7UZ : 8UZ,
+            loom::detail::mr_key_lease{},
+            0,
+            i == operand && bad == defect::disabled ? FI_MR_ENDPOINT : 0,
+            i == operand && bad == defect::foreign   ? &foreign
+            : i == operand && bad == defect::unknown ? nullptr
+                                                     : &native.domain_handle);
+        if (i == operand && bad == defect::wrong_endpoint)
+            impl->bound_endpoint = &other_endpoint;
+        regions[i] = loom::memory_region{std::move(impl)};
+    }
+    const std::array buffers{
+        loom::asio::mutable_registered_buffer{
+            ::asio::buffer(storage[0]), &regions[0], loom::asio::registered_buffer_id{0}},
+        loom::asio::mutable_registered_buffer{
+            ::asio::buffer(storage[1]), &regions[1], loom::asio::registered_buffer_id{1}},
+    };
+    int calls{};
+    const auto handler =
+        ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
+            CHECK(error == loom::errc::invalid_argument);
+            CHECK(bytes == 0);
+            ++calls;
+        });
+    if (receive) {
+        if (helper) {
+            if (tagged)
+                loom::asio::initiate_fabric_tagged_recv{ep.native_handle()}(
+                    handler, buffers, 42, 0x80);
+            else
+                loom::asio::initiate_fabric_recv{ep.native_handle()}(handler, buffers);
+        } else if (tagged)
+            ep.async_tagged_receive(buffers, 42, 0x80, handler);
+        else
+            ep.async_receive(buffers, handler);
+    } else if (helper) {
+        if (tagged)
+            loom::asio::initiate_fabric_tagged_send{ep.native_handle()}(handler, buffers, 42);
+        else
+            loom::asio::initiate_fabric_send{ep.native_handle()}(handler, buffers);
+    } else if (tagged)
+        ep.async_tagged_send(buffers, 42, handler);
+    else
+        ep.async_send(buffers, handler);
+    CHECK(calls == 0);
+    ioc.run();
+    CHECK(calls == 1);
+    CHECK(native.submission_flags == 0);
+    CHECK(native.buffers.empty());
+    CHECK_FALSE(native.completion_pending);
+}
+
 TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpoint]") {
     const auto read = GENERATE(false, true);
     const auto helper = GENERATE(false, true);
@@ -210,13 +293,26 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     enum class remote_range { valid, short_extent, overflow };
     const auto range =
         GENERATE(remote_range::valid, remote_range::short_extent, remote_range::overflow);
-    enum class local_range { valid, empty, short_extent, before_start, unrelated, unmapped };
+    enum class local_range {
+        valid,
+        empty,
+        short_extent,
+        before_start,
+        unrelated,
+        unmapped,
+        foreign_domain,
+        unknown_domain,
+        disabled
+    };
     const auto local = GENERATE(local_range::valid,
                                 local_range::empty,
                                 local_range::short_extent,
                                 local_range::before_start,
                                 local_range::unrelated,
-                                local_range::unmapped);
+                                local_range::unmapped,
+                                local_range::foreign_domain,
+                                local_range::unknown_domain,
+                                local_range::disabled);
     const bool invalid_range = range != remote_range::valid || local != local_range::valid;
     const auto null_descriptor = GENERATE(false, true);
     vector_provider native;
@@ -227,6 +323,7 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
                                             FI_MORE,
                                             FI_FENCE | FI_MORE | FI_DELIVERY_COMPLETE)};
     std::array<std::byte, 8> storage{}, unrelated{};
+    fid_domain foreign_domain{};
     fid_mr handle{.fid = {.ops = &native.ops}, .mem_desc = null_descriptor ? nullptr : &handle};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
         loom::get_default_resource(),
@@ -235,7 +332,13 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
         : local == local_range::unrelated
             ? unrelated.data()
             : storage.data() + (local == local_range::before_start ? 1 : 0),
-        storage.size() - (local == local_range::short_extent ? 1 : 0))};
+        storage.size() - (local == local_range::short_extent ? 1 : 0),
+        loom::detail::mr_key_lease{},
+        0,
+        local == local_range::disabled ? FI_MR_ENDPOINT : 0,
+        local == local_range::foreign_domain   ? &foreign_domain
+        : local == local_range::unknown_domain ? nullptr
+                                               : &native.domain_handle)};
     const loom::fabric_addr peer{23};
     const loom::remote_memory remote{
         range == remote_range::overflow ? std::numeric_limits<std::uint64_t>::max() - 7 : 32,
@@ -245,7 +348,14 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
     // by the buffer views, including when its native descriptor is null.
     fid_mr view_handle{.fid = {.ops = &native.ops}, .mem_desc = &view_handle};
     loom::memory_region view_mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &view_handle, storage.data(), storage.size())};
+        loom::get_default_resource(),
+        &view_handle,
+        storage.data(),
+        storage.size(),
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &native.domain_handle)};
     std::array buffers{
         loom::asio::mutable_registered_buffer{
             ::asio::buffer(storage.data(), 3), &view_mr, loom::asio::registered_buffer_id{0}},
@@ -328,7 +438,14 @@ TEST_CASE("Asio operations register and complete without later submissions",
     const auto second = std::span{storage}.subspan(2);
     fid_mr handle{.fid = {.ops = &native.ops}, .mem_desc = &handle};
     loom::memory_region mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &handle, storage.data(), storage.size())};
+        loom::get_default_resource(),
+        &handle,
+        storage.data(),
+        storage.size(),
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &native.domain_handle)};
     std::array<::asio::mutable_buffer, 2> buffers{::asio::buffer(first.data(), first.size()),
                                                   ::asio::buffer(second.data(), second.size())};
     std::array<::asio::const_buffer, 2> const_buffers{buffers[0], buffers[1]};
@@ -463,9 +580,23 @@ TEST_CASE("Asio messages preserve registered peers and descriptors", "[asio][end
     fid_mr first_handle{.fid = {.ops = &native.ops}, .mem_desc = &first_handle};
     fid_mr second_handle{.fid = {.ops = &native.ops}, .mem_desc = &second_handle};
     loom::memory_region first_mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &first_handle, first.data(), first.size())};
+        loom::get_default_resource(),
+        &first_handle,
+        first.data(),
+        first.size(),
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &native.domain_handle)};
     loom::memory_region second_mr{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &second_handle, second.data(), second.size())};
+        loom::get_default_resource(),
+        &second_handle,
+        second.data(),
+        second.size(),
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &native.domain_handle)};
     const auto first_buffer = loom::asio::buffer(
         loom::asio::mutable_registered_buffer{::asio::buffer(first),
                                               first_registered ? &first_mr : nullptr,

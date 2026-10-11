@@ -238,6 +238,7 @@ private:
     friend class completion_queue;
     friend class completion_registration;
     friend class event_queue;
+    friend class memory_region;
     friend auto rma::get_max_rma_size(const endpoint&) -> std::size_t;
     friend auto rma::get_inject_size(const endpoint&) -> std::size_t;
     friend auto trigger::supports_trigger(const endpoint&) -> bool;

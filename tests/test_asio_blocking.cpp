@@ -38,6 +38,7 @@ struct failing_resource : loom::memory_resource {
 };
 
 struct blocking_provider {
+    fid_domain domain_handle{};
     failing_resource resource;
     std::mutex mutex;
     std::condition_variable changed;
@@ -196,7 +197,8 @@ struct blocking_provider {
             0UZ,
             loom::caps{},
             FI_MORE | FI_FENCE | FI_DELIVERY_COMPLETE,
-            rx_defaults)};
+            rx_defaults,
+            &domain_handle)};
         REQUIRE(ep.bind_cq(cq, loom::cq_bind::transmit | loom::cq_bind::recv));
         return ep;
     }
@@ -212,6 +214,48 @@ struct blocking_provider {
 };
 }  // namespace
 
+TEST_CASE("blocking Asio rejects incompatible registered buffers",
+          "[asio][blocking][registration]") {
+    const auto receive = GENERATE(false, true);
+    enum class defect { foreign, unknown, disabled, wrong_endpoint, short_range, unrelated };
+    const auto bad = GENERATE(defect::foreign,
+                              defect::unknown,
+                              defect::disabled,
+                              defect::wrong_endpoint,
+                              defect::short_range,
+                              defect::unrelated);
+    blocking_provider native;
+    native.release();
+    ::asio::io_context ioc;
+    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    fid_domain foreign{};
+    fid_ep other_endpoint{};
+    std::array<std::byte, 8> storage{}, unrelated{};
+    fid_mr handle{.fid = {.ops = &native.resources}};
+    auto impl = loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+        loom::get_default_resource(),
+        &handle,
+        bad == defect::unrelated ? unrelated.data() : storage.data(),
+        bad == defect::short_range ? 7UZ : 8UZ,
+        loom::detail::mr_key_lease{},
+        0,
+        bad == defect::disabled ? FI_MR_ENDPOINT : 0,
+        bad == defect::foreign   ? &foreign
+        : bad == defect::unknown ? nullptr
+                                 : &native.domain_handle);
+    if (bad == defect::wrong_endpoint)
+        impl->bound_endpoint = &other_endpoint;
+    loom::memory_region mr{std::move(impl)};
+    const loom::asio::mutable_registered_buffer buffer{
+        ::asio::buffer(storage), &mr, loom::asio::registered_buffer_id{0}};
+    const auto [error, bytes] = receive ? ep.receive(buffer) : ep.send(buffer);
+    CHECK(error == loom::errc::invalid_argument);
+    CHECK(bytes == 0);
+    CHECK_FALSE(native.posted);
+    CHECK_FALSE(native.pending);
+    CHECK_FALSE(native.cq.poll());
+}
+
 TEST_CASE("blocking Asio messages await their own completion", "[asio][blocking]") {
     const auto receive = GENERATE(false, true);
     const auto registered = GENERATE(false, true);
@@ -224,9 +268,23 @@ TEST_CASE("blocking Asio messages await their own completion", "[asio][blocking]
     fid_mr first_handle{.fid = {.ops = &native.resources}, .mem_desc = &first_handle};
     fid_mr second_handle{.fid = {.ops = &native.resources}, .mem_desc = &second_handle};
     loom::memory_region first{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &first_handle, storage.data(), 3UZ)};
+        loom::get_default_resource(),
+        &first_handle,
+        storage.data(),
+        3UZ,
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &native.domain_handle)};
     loom::memory_region second{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
-        loom::get_default_resource(), &second_handle, storage.data() + 3, 5UZ)};
+        loom::get_default_resource(),
+        &second_handle,
+        storage.data() + 3,
+        5UZ,
+        loom::detail::mr_key_lease{},
+        0,
+        0,
+        &native.domain_handle)};
     int unrelated{}, calls{};
     loom::completion_registration other;
     REQUIRE(other.bind(

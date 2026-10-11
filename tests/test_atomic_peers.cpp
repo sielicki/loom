@@ -15,6 +15,7 @@
 
 namespace {
 struct atomic_peer_provider {
+    fid_domain domain_handle{};
     int calls{};
     ssize_t status{};
     std::uint64_t flags{};
@@ -208,17 +209,162 @@ struct atomic_peer_provider {
             },
     };
     fid_ep handle{.fid = {.context = this, .ops = &lifetime}, .atomic = &operations};
-    loom::endpoint ep{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
-        loom::get_default_resource(),
-        &handle,
-        loom::endpoint_types::rdm,
-        loom::address_format::inet,
-        0UZ,
-        0UZ,
-        loom::caps{},
-        FI_FENCE | FI_DELIVERY_COMPLETE)};
+    loom::endpoint ep{
+        loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
+                                                                   &handle,
+                                                                   loom::endpoint_types::rdm,
+                                                                   loom::address_format::inet,
+                                                                   0UZ,
+                                                                   0UZ,
+                                                                   loom::caps{},
+                                                                   FI_FENCE | FI_DELIVERY_COMPLETE,
+                                                                   0,
+                                                                   &domain_handle)};
 };
 }  // namespace
+
+TEST_CASE("atomics reject incompatible or out-of-range registrations", "[atomic][registration]") {
+    enum class defect { none, foreign, unknown, disabled, wrong_endpoint, short_range, unrelated };
+    const auto bad = GENERATE(defect::none,
+                              defect::foreign,
+                              defect::unknown,
+                              defect::disabled,
+                              defect::wrong_endpoint,
+                              defect::short_range,
+                              defect::unrelated);
+    const auto operand = GENERATE(0, 1, 2);
+    const auto flagged = GENERATE(false, true);
+    const auto count = GENERATE(1UZ, 2UZ);
+    atomic_peer_provider native;
+    native.status = -FI_EAGAIN;
+    fid_domain foreign{};
+    fid_ep other_endpoint{};
+    std::array<std::array<std::uint64_t, 2>, 3> values{};
+    std::array<fid_mr, 3> handles{};
+    std::array<loom::memory_region, 3> regions{};
+    std::array<std::uint64_t, 2> unrelated{};
+    for (std::size_t i = 0; i < regions.size(); ++i) {
+        handles[i] = {.fid = {.ops = &native.lifetime}, .mem_desc = &handles[i]};
+        auto impl = loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+            loom::get_default_resource(),
+            &handles[i],
+            i == operand && bad == defect::unrelated ? unrelated.data() : values[i].data(),
+            i == operand && bad == defect::short_range ? count * sizeof(std::uint64_t) - 1
+                                                       : sizeof(values[i]),
+            loom::detail::mr_key_lease{},
+            0,
+            i == operand && bad == defect::disabled ? FI_MR_ENDPOINT : 0,
+            i == operand && bad == defect::foreign   ? &foreign
+            : i == operand && bad == defect::unknown ? nullptr
+                                                     : &native.domain_handle);
+        if (i == operand && bad == defect::wrong_endpoint)
+            impl->bound_endpoint = &other_endpoint;
+        regions[i] = loom::memory_region{std::move(impl)};
+    }
+    using namespace loom;
+    const remote_memory remote{24, 0x123456789abcdef0ULL, count * sizeof(std::uint64_t)};
+    const fabric_addr peer{19};
+    const auto type = atomic::datatype::uint64;
+    const auto flags = op_flag::completion;
+    for (int operation = 0; operation != 3; ++operation) {
+        native.calls = 0;
+        const auto result = [&] {
+            if (operation == 0)
+                return flagged ? atomic::execute_to(native.ep,
+                                                    atomic::operation::sum,
+                                                    type,
+                                                    values[0].data(),
+                                                    count,
+                                                    &regions[0],
+                                                    peer,
+                                                    remote,
+                                                    flags)
+                               : atomic::execute_to(native.ep,
+                                                    atomic::operation::sum,
+                                                    type,
+                                                    values[0].data(),
+                                                    count,
+                                                    &regions[0],
+                                                    peer,
+                                                    remote);
+            if (operation == 1)
+                return flagged ? atomic::fetch_to(native.ep,
+                                                  atomic::operation::sum,
+                                                  type,
+                                                  values[0].data(),
+                                                  values[2].data(),
+                                                  count,
+                                                  &regions[0],
+                                                  &regions[2],
+                                                  peer,
+                                                  remote,
+                                                  flags)
+                               : atomic::fetch_to(native.ep,
+                                                  atomic::operation::sum,
+                                                  type,
+                                                  values[0].data(),
+                                                  values[2].data(),
+                                                  count,
+                                                  &regions[0],
+                                                  &regions[2],
+                                                  peer,
+                                                  remote);
+            return flagged ? atomic::compare_swap_to(native.ep,
+                                                     type,
+                                                     values[1].data(),
+                                                     values[0].data(),
+                                                     values[2].data(),
+                                                     count,
+                                                     &regions[1],
+                                                     &regions[0],
+                                                     &regions[2],
+                                                     peer,
+                                                     remote,
+                                                     flags)
+                           : atomic::compare_swap_to(native.ep,
+                                                     type,
+                                                     values[1].data(),
+                                                     values[0].data(),
+                                                     values[2].data(),
+                                                     count,
+                                                     &regions[1],
+                                                     &regions[0],
+                                                     &regions[2],
+                                                     peer,
+                                                     remote);
+        }();
+        const bool used = operation == 2 || operand == 0 || (operation == 1 && operand == 2);
+        const bool valid = !used || bad == defect::none;
+        CHECK(result.error() == (valid ? errc::again : errc::invalid_argument));
+        CHECK(native.calls == (valid ? 1 : 0));
+    }
+    // FI_ATOMIC_READ ignores its input operand, including its descriptor.
+    native.calls = 0;
+    const auto result = flagged ? atomic::fetch_to(native.ep,
+                                                   atomic::operation::atomic_read,
+                                                   type,
+                                                   nullptr,
+                                                   values[2].data(),
+                                                   count,
+                                                   &regions[0],
+                                                   &regions[2],
+                                                   peer,
+                                                   remote,
+                                                   flags)
+                                : atomic::fetch_to(native.ep,
+                                                   atomic::operation::atomic_read,
+                                                   type,
+                                                   nullptr,
+                                                   values[2].data(),
+                                                   count,
+                                                   &regions[0],
+                                                   &regions[2],
+                                                   peer,
+                                                   remote);
+    const bool valid = operand != 2 || bad == defect::none;
+    CHECK(result.error() == (valid ? errc::again : errc::invalid_argument));
+    CHECK(native.calls == (valid ? 1 : 0));
+}
 
 TEST_CASE("atomic submissions enforce remote element bounds", "[atomic][bounds]") {
     using namespace loom;
@@ -373,9 +519,16 @@ TEMPLATE_TEST_CASE("atomic peer submissions preserve registrations and deferred 
     fid_mr operand_handle{.fid = {.ops = &provider.lifetime}, .mem_desc = &operand_handle};
     fid_mr compare_handle{.fid = {.ops = &provider.lifetime}, .mem_desc = &compare_handle};
     fid_mr result_handle{.fid = {.ops = &provider.lifetime}, .mem_desc = &result_handle};
-    const auto make_mr = [](fid_mr& mr, auto& data) {
-        return memory_region{detail::make_pmr_unique<detail::memory_region_impl>(
-            get_default_resource(), &mr, data.data(), sizeof(data))};
+    const auto make_mr = [&](fid_mr& mr, auto& data) {
+        return memory_region{
+            detail::make_pmr_unique<detail::memory_region_impl>(get_default_resource(),
+                                                                &mr,
+                                                                data.data(),
+                                                                sizeof(data),
+                                                                loom::detail::mr_key_lease{},
+                                                                0,
+                                                                0,
+                                                                &provider.domain_handle)};
     };
     auto operand_mr = make_mr(operand_handle, operand);
     auto compare_mr = make_mr(compare_handle, comparison);
@@ -701,9 +854,16 @@ TEST_CASE("atomic flags preserve peers counts and independent registrations", "[
     fid_mr input_handle{.fid = {.ops = &native.lifetime}, .mem_desc = &input_handle};
     fid_mr compare_handle{.fid = {.ops = &native.lifetime}, .mem_desc = &compare_handle};
     fid_mr output_handle{.fid = {.ops = &native.lifetime}, .mem_desc = &output_handle};
-    const auto make_mr = [](fid_mr& handle, auto& storage) {
-        return memory_region{detail::make_pmr_unique<detail::memory_region_impl>(
-            get_default_resource(), &handle, storage.data(), sizeof(storage))};
+    const auto make_mr = [&](fid_mr& handle, auto& storage) {
+        return memory_region{
+            detail::make_pmr_unique<detail::memory_region_impl>(get_default_resource(),
+                                                                &handle,
+                                                                storage.data(),
+                                                                sizeof(storage),
+                                                                loom::detail::mr_key_lease{},
+                                                                0,
+                                                                0,
+                                                                &native.domain_handle)};
     };
     auto input_mr = make_mr(input_handle, input);
     auto compare_mr = make_mr(compare_handle, compare);
