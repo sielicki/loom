@@ -180,14 +180,15 @@ find_package(PkgConfig)
 # -----------------------------------------------------------------------------
 
 # Try to find libfabric
+set(LOOM_LIBFABRIC_MIN_VERSION 2.7.0)
 set(LOOM_LIBFABRIC_FOUND OFF)
 
 if(PKG_CONFIG_FOUND)
     if(LOOM_LIBFABRIC_STATIC)
-        pkg_check_modules(LIBFABRIC IMPORTED_TARGET libfabric)
+        pkg_check_modules(LIBFABRIC IMPORTED_TARGET "libfabric>=${LOOM_LIBFABRIC_MIN_VERSION}")
         if(LIBFABRIC_FOUND)
             # For static linking, we need the static library
-            pkg_check_modules(LIBFABRIC_STATIC IMPORTED_TARGET STATIC libfabric)
+            pkg_check_modules(LIBFABRIC_STATIC IMPORTED_TARGET STATIC "libfabric>=${LOOM_LIBFABRIC_MIN_VERSION}")
             if(LIBFABRIC_STATIC_FOUND)
                 set(LOOM_LIBFABRIC_TARGET PkgConfig::LIBFABRIC_STATIC)
                 set(LOOM_LIBFABRIC_FOUND ON)
@@ -195,7 +196,7 @@ if(PKG_CONFIG_FOUND)
             endif()
         endif()
     else()
-        pkg_check_modules(LIBFABRIC IMPORTED_TARGET libfabric)
+        pkg_check_modules(LIBFABRIC IMPORTED_TARGET "libfabric>=${LOOM_LIBFABRIC_MIN_VERSION}")
         if(LIBFABRIC_FOUND)
             set(LOOM_LIBFABRIC_TARGET PkgConfig::LIBFABRIC)
             set(LOOM_LIBFABRIC_FOUND ON)
@@ -214,8 +215,8 @@ if(NOT LOOM_LIBFABRIC_FOUND)
         set(LOOM_LIBFABRIC_FOUND ON)
     else()
         message(FATAL_ERROR
-            "libfabric not found. Please either:\n"
-            "  1. Install libfabric (apt install libfabric-dev / dnf install libfabric-devel)\n"
+            "libfabric ${LOOM_LIBFABRIC_MIN_VERSION} or newer is required. Please either:\n"
+            "  1. Install a compatible libfabric development package\n"
             "  2. Provide libfabric in third_party/libfabric\n"
             "  3. Set PKG_CONFIG_PATH to include libfabric's pkgconfig directory")
     endif()

@@ -8,10 +8,13 @@ include(CMakeFindDependencyMacro)
 # Required dependencies
 find_dependency(Threads)
 
-# Optional: Check for libfabric
-find_package(PkgConfig QUIET)
-if(PKG_CONFIG_FOUND)
-    pkg_check_modules(LIBFABRIC QUIET IMPORTED_TARGET libfabric)
+# Public headers and link interfaces require a compatible libfabric.
+find_dependency(PkgConfig)
+pkg_check_modules(LIBFABRIC QUIET IMPORTED_TARGET "libfabric>=@LOOM_LIBFABRIC_MIN_VERSION@")
+if(NOT LIBFABRIC_FOUND)
+    set(loom_FOUND FALSE)
+    set(loom_NOT_FOUND_MESSAGE "libfabric @LOOM_LIBFABRIC_MIN_VERSION@ or newer is required")
+    return()
 endif()
 
 if(@LOOM_HAS_STDEXEC@)

@@ -17,7 +17,7 @@ Rust bindings for [loom](https://github.com/sielicki/loom), a modern C++26 libfa
 
 - Rust 1.70+
 - C++26 compiler (Clang 18+ or GCC 14+ with a C++26-capable standard library)
-- libfabric 1.18+
+- libfabric 2.7.0 or newer
 
 ## Installation
 

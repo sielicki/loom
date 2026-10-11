@@ -13,7 +13,7 @@ loom provides an opinionated, idiomatic, and strongly-typed C++26 interface over
 ## Requirements
 
 - C++26 compiler
-- libfabric
+- libfabric 2.7.0 or newer
 
 The Nix flake pins upstream libfabric 2.7.0 and retains the external
 libfabric flake's provider packaging. Use `nix develop` for the development

@@ -12,9 +12,9 @@ fn main() {
 
     // Find libfabric via pkg-config
     let libfabric = pkg_config::Config::new()
-        .atleast_version("1.18")
+        .atleast_version("2.7.0")
         .probe("libfabric")
-        .expect("libfabric not found via pkg-config. Please install libfabric development files.");
+        .expect("libfabric 2.7.0 or newer is required via pkg-config. Please install compatible development files.");
 
     // Build the cxx bridge along with loom source files
     let mut build = cxx_build::bridge("src/ffi.rs");
