@@ -111,6 +111,12 @@ public:
      */
     ~endpoint();
 
+    /// Close the native endpoint, discarding outstanding operations on success.
+    /// Success leaves this object empty; an empty endpoint is already closed.
+    /// Failure preserves ownership so the caller can drain work or retry.
+    /// Native close may discard CQ entries without delivering completions.
+    [[nodiscard]] auto close() noexcept -> void_result;
+
     /**
      * @brief Deleted copy constructor.
      */

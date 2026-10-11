@@ -138,6 +138,12 @@ public:
         return revalidate_after([this] { return ep_.enable(); });
     }
 
+    /// Retain the native endpoint on close failure, disabling new submissions.
+    [[nodiscard]] auto close() noexcept -> void_result {
+        contract_valid_ = false;
+        return ep_.close();
+    }
+
     /**
      * @brief Sends data on the endpoint.
      * @param data Data to send.

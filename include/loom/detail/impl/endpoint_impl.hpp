@@ -114,6 +114,18 @@ endpoint::endpoint(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
 
 endpoint::~endpoint() = default;
 
+auto endpoint::close() noexcept -> void_result {
+    if (impl_ && impl_->ep) {
+        const auto status = ::fi_close(&impl_->ep->fid);
+        if (status != 0) {
+            return make_error_result_from_fi_errno<void>(-status);
+        }
+        impl_->ep = nullptr;
+    }
+    impl_.reset();
+    return make_success();
+}
+
 endpoint::endpoint(endpoint&&) noexcept = default;
 
 auto endpoint::operator=(endpoint&&) noexcept -> endpoint& = default;

@@ -83,6 +83,7 @@ loom_add_test(test_address)
 loom_add_test(test_address_transport)
 loom_add_test(test_endpoint_types)
 loom_add_test(test_endpoint_limits)
+loom_add_test(test_endpoint_close)
 loom_add_test(test_scalable_endpoint)
 loom_add_test(test_endpoint_options)
 loom_add_test(test_fabric_query)
@@ -116,6 +117,7 @@ add_executable(test_implementation
     test_counter.cpp
     test_scalable_endpoint.cpp
     test_endpoint_limits.cpp
+    test_endpoint_close.cpp
     test_provider_contract.cpp
     test_trigger_transport.cpp
     test_fabric_iteration.cpp
