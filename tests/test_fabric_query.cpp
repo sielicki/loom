@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/fabric_query.hpp>
 
+#include <rdma/fabric.h>
+
 #include <string>
 
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 namespace {
@@ -151,6 +154,28 @@ TEST_CASE("rdma_read_ops properties", "[fabric_query]") {
     static_assert((cap::required_caps & loom::capability::rma) != loom::caps{0ULL});
     static_assert((cap::required_caps & loom::capability::remote_read) != loom::caps{0ULL});
     static_assert(cap::ep_type == loom::endpoint_types::rdm);
+}
+
+TEMPLATE_TEST_CASE("RMA queries require initiator and target capabilities",
+                   "[fabric_query][integration][rma]",
+                   loom::rdma_read_ops,
+                   loom::rdma_write_ops,
+                   (loom::combined_capabilities<loom::rdma_read_ops, loom::rdma_write_ops>)) {
+    constexpr auto read = !std::same_as<TestType, loom::rdma_write_ops>;
+    constexpr auto write = !std::same_as<TestType, loom::rdma_read_ops>;
+    constexpr std::uint64_t initiator = (read ? FI_READ : 0) | (write ? FI_WRITE : 0);
+    constexpr std::uint64_t target = (read ? FI_REMOTE_READ : 0) | (write ? FI_REMOTE_WRITE : 0);
+    auto providers = loom::fabric_query<TestType>::query();
+    REQUIRE(providers);
+    REQUIRE_FALSE(providers->empty());
+    for (const auto& info : *providers) {
+        const auto& native = *static_cast<const fi_info*>(info.internal_ptr());
+        REQUIRE(native.tx_attr);
+        REQUIRE(native.rx_attr);
+        CHECK((native.caps & (FI_RMA | initiator | target)) == (FI_RMA | initiator | target));
+        CHECK((native.tx_attr->caps & initiator) == initiator);
+        CHECK((native.rx_attr->caps & target) == target);
+    }
 }
 
 TEST_CASE("gpu_direct_rdma properties", "[fabric_query]") {

@@ -607,6 +607,10 @@ void use_any_protocol(auto& proto) requires basic_protocol<decltype(proto)> {
 
 Use `fabric_query` for type-safe, compile-time capability requirements:
 
+The `rdma_read_ops` and `rdma_write_ops` profiles require both initiating and
+being the target of the corresponding RMA operation. Custom capability
+descriptors can request only the directions an application needs.
+
 ```cpp
 #include <loom/loom.hpp>
 

@@ -45,11 +45,11 @@ struct rdm_tagged_messaging {
 
 /**
  * @struct rdma_write_ops
- * @brief Capability descriptor for RDMA write operations.
+ * @brief Requires initiating and receiving RDMA write operations.
  */
 struct rdma_write_ops {
     static constexpr caps required_caps =
-        capability::rma | capability::remote_write;                           ///< Required caps
+        capability::rma | capability::write | capability::remote_write;       ///< Required caps
     static constexpr caps optional_caps = capability::remote_read;            ///< Optional caps
     static constexpr endpoint_type ep_type = endpoint_types::rdm;             ///< Endpoint type
     static constexpr std::string_view description = "RDMA write operations";  ///< Description
@@ -57,11 +57,11 @@ struct rdma_write_ops {
 
 /**
  * @struct rdma_read_ops
- * @brief Capability descriptor for RDMA read operations.
+ * @brief Requires initiating and receiving RDMA read operations.
  */
 struct rdma_read_ops {
     static constexpr caps required_caps =
-        capability::rma | capability::remote_read;                           ///< Required caps
+        capability::rma | capability::read | capability::remote_read;        ///< Required caps
     static constexpr caps optional_caps = capability::remote_write;          ///< Optional caps
     static constexpr endpoint_type ep_type = endpoint_types::rdm;            ///< Endpoint type
     static constexpr std::string_view description = "RDMA read operations";  ///< Description
