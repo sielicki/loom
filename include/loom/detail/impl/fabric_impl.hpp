@@ -280,6 +280,13 @@ auto fabric::impl_internal_ptr() const noexcept -> void* {
 }
 
 auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> result<fabric_info> {
+    if (hints.memory_region_mode) {
+        const auto mode = *hints.memory_region_mode;
+        if ((mode.has(mr_mode_flags::basic) && mode != mr_mode_flags::basic) ||
+            (mode.has(mr_mode_flags::scalable) && mode != mr_mode_flags::scalable)) {
+            return make_error_result<fabric_info>(errc::invalid_argument);
+        }
+    }
     const auto native_format = detail::to_fi_addr_format(hints.addr_format);
     if (hints.addr_format != address_format::unspecified && native_format == FI_FORMAT_UNSPEC) {
         return make_error_result<fabric_info>(errc::not_supported);

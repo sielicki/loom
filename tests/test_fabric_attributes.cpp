@@ -257,3 +257,34 @@ TEST_CASE("unsupported address hints cannot become unconstrained discovery",
     REQUIRE_FALSE(result);
     CHECK(result.error() == loom::errc::not_supported);
 }
+
+TEST_CASE("legacy basic registration stays distinct from default registration",
+          "[fabric][attributes][mr_mode]") {
+    const auto mode = GENERATE(0, FI_MR_BASIC, FI_MR_SCALABLE, FI_MR_LOCAL | FI_MR_PROV_KEY);
+    fi_domain_attr domain{};
+    domain.mr_mode = mode;
+    fi_info native{};
+    native.domain_attr = &domain;
+    const auto info = wrap(native);
+    const auto attributes = info.get_domain_attr();
+    REQUIRE(attributes);
+    const auto mapped = attributes->memory_region_mode;
+    CHECK(mapped.has(loom::mr_mode_flags::basic) == (mode == FI_MR_BASIC));
+    CHECK(loom::detail::to_fi_mr_mode(mapped) == mode);
+    CHECK(loom::detail::to_fi_mr_mode(loom::mr_mode_flags::basic) == FI_MR_BASIC);
+    CHECK(loom::detail::to_fi_mr_mode(loom::mr_mode{}) == 0);
+}
+
+TEST_CASE("legacy registration hints cannot combine with other modes",
+          "[fabric][attributes][mr_mode]") {
+    const auto legacy = GENERATE(loom::mr_mode_flags::basic, loom::mr_mode_flags::scalable);
+    const auto extra = GENERATE(loom::mr_mode_flags::local,
+                                loom::mr_mode_flags::virt_addr,
+                                loom::mr_mode_flags::basic | loom::mr_mode_flags::scalable);
+    loom::fabric_hints hints;
+    hints.provider_name = "loom-invalid-registration-mode-test";
+    hints.memory_region_mode = legacy | extra;
+    const auto result = loom::query_fabric(hints);
+    REQUIRE_FALSE(result);
+    CHECK(result.error() == loom::errc::invalid_argument);
+}

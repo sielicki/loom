@@ -535,6 +535,8 @@ namespace loom::detail {
 [[nodiscard]] constexpr auto to_fi_mr_mode(mr_mode mode) noexcept -> int {
     int fi_mode = 0;
 
+    if (mode.has(mr_mode_flags::basic))
+        fi_mode |= FI_MR_BASIC;
     if (mode.has(mr_mode_flags::scalable))
         fi_mode |= FI_MR_SCALABLE;
     if (mode.has(mr_mode_flags::local))
@@ -565,6 +567,8 @@ namespace loom::detail {
 [[nodiscard]] constexpr auto from_fi_mr_mode(int fi_mode) noexcept -> mr_mode {
     mr_mode result{0ULL};
 
+    if (fi_mode & FI_MR_BASIC)
+        result |= mr_mode_flags::basic;
     if (fi_mode & FI_MR_SCALABLE)
         result |= mr_mode_flags::scalable;
     if (fi_mode & FI_MR_LOCAL)

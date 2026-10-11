@@ -546,7 +546,7 @@ using mr_mode = strong_type<std::uint64_t, mr_mode_tag>;
  * @brief Memory region mode flag constants for registration behavior.
  */
 namespace mr_mode_flags {
-inline constexpr mr_mode basic{0ULL};
+inline constexpr mr_mode none{0ULL};  ///< Modern default registration semantics.
 inline constexpr mr_mode scalable{1ULL << 0};
 inline constexpr mr_mode local{1ULL << 1};
 inline constexpr mr_mode virt_addr{1ULL << 2};
@@ -556,6 +556,8 @@ inline constexpr mr_mode raw{1ULL << 5};
 inline constexpr mr_mode hmem{1ULL << 6};
 inline constexpr mr_mode endpoint{1ULL << 7};
 inline constexpr mr_mode collective{1ULL << 8};
+/// Legacy basic registration; must be used alone, as must scalable.
+inline constexpr mr_mode basic{1ULL << 9};
 }  // namespace mr_mode_flags
 
 /**
