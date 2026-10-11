@@ -6,7 +6,7 @@
 
 #include "cuda.hpp"
 
-namespace cuda = loom_nccl::cuda;
+namespace cuda = loom_examples::cuda;
 namespace {
 #define CHECK(condition)                                                                           \
     do {                                                                                           \

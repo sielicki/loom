@@ -10,9 +10,10 @@ stdenv.mkDerivation {
   pname = "nccl-loom";
   version = "0.1.0";
   src = lib.fileset.toSource {
-    root = ./.;
-    fileset = lib.fileset.unions [ ./CMakeLists.txt ./plugin.cpp ./workload.cpp ./cuda.hpp ./test-cuda.cpp ./gpu-workload.cpp ./visibility.ptx ];
+    root = ../.;
+    fileset = lib.fileset.unions [ ./CMakeLists.txt ./plugin.cpp ./workload.cpp ../hmem/cuda.hpp ../hmem/test-cuda.cpp ./gpu-workload.cpp ./visibility.ptx ];
   };
+  sourceRoot = "source/nccl";
   nativeBuildInputs = [ cmake ninja pkg-config nccl-plugin-sdk.cudaCompiler ];
   buildInputs = [ loom nccl-plugin-sdk ];
   doCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;

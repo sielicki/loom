@@ -11,7 +11,7 @@
 #include <cuda.h>
 #include <dlfcn.h>
 
-namespace loom_nccl::cuda {
+namespace loom_examples::cuda {
 class error final : public std::runtime_error {
 public:
     CUresult code;
@@ -110,7 +110,7 @@ inline void flush(const api& driver, const allocation& memory) {
     CUcontext popped{};
     const auto restored = driver.pop_context(&popped);
     // Restore even when flushing fails. Never synchronize the whole device:
-    // NCCL may have a running kernel waiting for the receive to become visible.
+    // A running kernel may be waiting for the receive to become visible.
     check(restored, "restore CUDA caller context");
     if (popped != memory.context)
         throw error(CUDA_ERROR_INVALID_CONTEXT, "restore CUDA context stack");
@@ -160,10 +160,10 @@ public:
         check(count_devices(&count), "enumerate CUDA devices");
         if (count <= 0)
             throw error(CUDA_ERROR_NO_DEVICE, "enumerate CUDA devices");
-        // NCCL properties describe the network adapter, not a particular GPU.
+        // Consumer capabilities describe the adapter, not a particular GPU.
         // The advertised CUDA contract must therefore hold for every visible GPU.
         for (int device = 0; device < count; ++device)
             (void)device_visibility(functions, device);
     }
 };
-}  // namespace loom_nccl::cuda
+}  // namespace loom_examples::cuda

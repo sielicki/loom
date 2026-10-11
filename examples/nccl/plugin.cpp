@@ -27,7 +27,7 @@
 #include "cuda.hpp"
 
 namespace {
-namespace cuda = loom_nccl::cuda;
+namespace cuda = loom_examples::cuda;
 template <typename T>
 auto checked(loom::result<T> value) -> T {
     if (!value)
