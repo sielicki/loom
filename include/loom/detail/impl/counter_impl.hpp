@@ -6,6 +6,7 @@
 #include <rdma/fi_errno.h>
 
 #include <cstring>
+#include <limits>
 
 #include "loom/core/allocator.hpp"
 #include "loom/core/counter.hpp"
@@ -17,14 +18,15 @@ namespace loom::detail {
 struct counter_impl {
     ::fid_cntr* cntr{nullptr};  ///< Underlying libfabric counter handle.
     std::uint64_t threshold{1};  ///< Configured threshold for waits and checks.
+    bool wait_enabled{false};    ///< Whether creation requested a native wait object.
 
     /// @brief Default constructor.
     counter_impl() = default;
 
     /// @brief Constructs counter_impl with a libfabric counter handle.
     /// @param cntr_ptr The libfabric counter pointer.
-    explicit counter_impl(::fid_cntr* cntr_ptr, std::uint64_t target = 1)
-        : cntr(cntr_ptr), threshold(target) {}
+    explicit counter_impl(::fid_cntr* cntr_ptr, std::uint64_t target = 1, bool can_wait = false)
+        : cntr(cntr_ptr), threshold(target), wait_enabled(can_wait) {}
 
     /// @brief Destructor that closes the libfabric counter.
     ~counter_impl() {
@@ -88,13 +90,14 @@ auto counter::create(const domain& dom, const counter_attr& attr, memory_resourc
     }
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::counter_impl>(resource, cntr, attr.threshold);
+        auto impl = detail::make_pmr_unique<detail::counter_impl>(
+            resource, cntr, attr.threshold, attr.wait_obj);
         return counter{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::counter_impl>(default_resource, cntr, attr.threshold);
+    auto impl = detail::make_pmr_unique<detail::counter_impl>(
+        default_resource, cntr, attr.threshold, attr.wait_obj);
     return counter{std::move(impl)};
 }
 
@@ -134,12 +137,15 @@ auto counter::add(std::uint64_t value) -> void_result {
 }
 
 auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> void_result {
-    if (!impl_ || !impl_->cntr) {
+    if (!impl_ || !impl_->cntr || !impl_->wait_enabled) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
     int timeout_ms = -1;
-    if (timeout.has_value()) {
+    if (timeout && timeout->count() >= 0) {
+        if (timeout->count() > std::numeric_limits<int>::max()) {
+            return make_error_result<void>(errc::invalid_argument);
+        }
         timeout_ms = static_cast<int>(timeout->count());
     }
 

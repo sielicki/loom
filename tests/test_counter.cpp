@@ -78,3 +78,37 @@ TEST_CASE("counter waits and checks respect the configured threshold", "[counter
     REQUIRE(provider.waited_threshold == threshold);
     REQUIRE(provider.waited_timeout == -1);
 }
+
+TEST_CASE("counter waits reject counters without wait support", "[counter]") {
+    counter_provider provider;
+    auto created = loom::counter::create(provider.domain);
+    REQUIRE(created);
+    REQUIRE(provider.wait_object == FI_WAIT_NONE);
+    auto wait = created->wait(std::chrono::milliseconds{0});
+    REQUIRE_FALSE(wait);
+    REQUIRE(wait.error() == loom::errc::invalid_argument);
+    REQUIRE(provider.wait_calls == 0);
+}
+
+TEST_CASE("counter waits preserve finite and infinite timeout values", "[counter]") {
+    using namespace std::chrono;
+    counter_provider provider;
+    auto created = loom::counter::create(provider.domain, {.initial = 1, .wait_obj = true});
+    REQUIRE(created);
+    SECTION("largest representable finite timeout") {
+        REQUIRE(created->wait(milliseconds{std::numeric_limits<int>::max()}));
+        REQUIRE(provider.waited_timeout == std::numeric_limits<int>::max());
+    }
+    SECTION("negative timeouts keep native infinite semantics") {
+        REQUIRE(created->wait(milliseconds::min()));
+        REQUIRE(provider.waited_timeout == -1);
+    }
+    SECTION("unrepresentable positive timeouts cannot become infinite") {
+        const auto timeout =
+            GENERATE(milliseconds{std::numeric_limits<int>::max()} + 1ms, milliseconds::max());
+        const auto wait = created->wait(timeout);
+        REQUIRE_FALSE(wait);
+        REQUIRE(wait.error() == loom::errc::invalid_argument);
+        REQUIRE(provider.wait_calls == 0);
+    }
+}

@@ -56,13 +56,14 @@ auto counter::create(const domain& dom, const counter_attr& attr, memory_resourc
     }
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::counter_impl>(resource, cntr, attr.threshold);
+        auto impl = detail::make_pmr_unique<detail::counter_impl>(
+            resource, cntr, attr.threshold, attr.wait_obj);
         return counter{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::counter_impl>(default_resource, cntr, attr.threshold);
+    auto impl = detail::make_pmr_unique<detail::counter_impl>(
+        default_resource, cntr, attr.threshold, attr.wait_obj);
     return counter{std::move(impl)};
 }
 
@@ -102,12 +103,15 @@ auto counter::add(std::uint64_t value) -> void_result {
 }
 
 auto counter::wait(std::optional<std::chrono::milliseconds> timeout) -> void_result {
-    if (!impl_ || !impl_->cntr) {
+    if (!impl_ || !impl_->cntr || !impl_->wait_enabled) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
     int timeout_ms = -1;
-    if (timeout.has_value()) {
+    if (timeout && timeout->count() >= 0) {
+        if (timeout->count() > std::numeric_limits<int>::max()) {
+            return make_error_result<void>(errc::invalid_argument);
+        }
         timeout_ms = static_cast<int>(timeout->count());
     }
 

@@ -101,6 +101,9 @@ public:
 
     auto add(std::uint64_t value) -> void_result;
 
+    /// Wait for the configured threshold. Requires counter_attr::wait_obj.
+    /// A missing or negative timeout waits indefinitely. Finite timeouts must
+    /// fit in an int number of milliseconds; invalid requests return an error.
     [[nodiscard]] auto wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt)
         -> void_result;
 

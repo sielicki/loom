@@ -202,7 +202,7 @@ auto main() -> int {
 
     // Create counters for tracking completions and triggering work
     auto recv_counter = counter::create(domain, {.threshold = 1}).value();
-    auto send_counter = counter::create(domain, {.threshold = 1}).value();
+    auto send_counter = counter::create(domain, {.threshold = 1, .wait_obj = true}).value();
 
     // Bind counters to endpoint for automatic incrementing
     ep.bind_counter(recv_counter).value();
@@ -329,7 +329,7 @@ auto main() -> int {
     ).value();
 
     // Deferred work also supports custom allocators.
-    auto completed = counter::create(dom, {}, &arena).value();
+    auto completed = counter::create(dom, {.wait_obj = true}, &arena).value();
     auto deferred = trigger::deferred_work::create_counter_add(
         dom,
         trigger::threshold_condition{&cntr, 1},
