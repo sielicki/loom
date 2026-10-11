@@ -81,23 +81,21 @@ auto counter::create(const domain& dom, const counter_attr& attr, memory_resourc
         return make_error_result_from_fi_errno<counter>(-ret);
     }
 
+    auto close = [](::fid_cntr* handle) noexcept {
+        ::fi_close(&handle->fid);
+    };
+    std::unique_ptr<::fid_cntr, decltype(close)> pending{cntr, close};
+
     if (attr.initial != 0) {
         ret = ::fi_cntr_set(cntr, attr.initial);
         if (ret != 0) {
-            ::fi_close(&cntr->fid);
             return make_error_result_from_fi_errno<counter>(-ret);
         }
     }
 
-    if (resource) {
-        auto impl = detail::make_pmr_unique<detail::counter_impl>(
-            resource, cntr, attr.threshold, attr.wait_obj);
-        return counter{std::move(impl)};
-    }
-
-    auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::counter_impl>(
-        default_resource, cntr, attr.threshold, attr.wait_obj);
+        resource ? resource : get_default_resource(), cntr, attr.threshold, attr.wait_obj);
+    (void)pending.release();
     return counter{std::move(impl)};
 }
 

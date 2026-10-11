@@ -13,10 +13,16 @@ struct counter_provider {
     std::uint64_t waited_threshold{};
     int waited_timeout{};
     int wait_calls{};
+    int closes{};
+    int set_result{};
     fi_wait_obj wait_object{};
     fi_ops resource_ops{
         .size = sizeof(fi_ops),
-        .close = [](fid*) { return 0; },
+        .close =
+            [](fid* handle) {
+                ++static_cast<counter_provider*>(handle->context)->closes;
+                return 0;
+            },
     };
     fi_ops_cntr counter_ops{
         .size = sizeof(fi_ops_cntr),
@@ -24,7 +30,10 @@ struct counter_provider {
             [](fid_cntr* cntr) { return static_cast<counter_provider*>(cntr->fid.context)->value; },
         .set =
             [](fid_cntr* cntr, std::uint64_t value) {
-                static_cast<counter_provider*>(cntr->fid.context)->value = value;
+                auto& self = *static_cast<counter_provider*>(cntr->fid.context);
+                if (self.set_result != 0)
+                    return self.set_result;
+                self.value = value;
                 return 0;
             },
         .wait =
@@ -111,4 +120,26 @@ TEST_CASE("counter waits preserve finite and infinite timeout values", "[counter
         REQUIRE(wait.error() == loom::errc::invalid_argument);
         REQUIRE(provider.wait_calls == 0);
     }
+}
+
+TEST_CASE("counter creation closes each acquired native handle exactly once", "[counter]") {
+    counter_provider provider;
+    SECTION("allocation failure") {
+        REQUIRE_THROWS_AS(
+            loom::counter::create(provider.domain, {}, std::pmr::null_memory_resource()),
+            std::bad_alloc);
+    }
+    SECTION("initialization failure") {
+        provider.set_result = -FI_EIO;
+        auto created = loom::counter::create(
+            provider.domain, {.initial = 1}, std::pmr::null_memory_resource());
+        REQUIRE_FALSE(created);
+        REQUIRE(created.error() == loom::errc::io_error);
+    }
+    SECTION("successful ownership transfer") {
+        auto created = loom::counter::create(provider.domain);
+        REQUIRE(created);
+        REQUIRE(provider.closes == 0);
+    }
+    REQUIRE(provider.closes == 1);
 }
