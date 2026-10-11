@@ -55,6 +55,56 @@ struct asio_buffers {
     std::size_t bytes{};
 };
 
+template <typename Allocator = std::allocator<std::byte>>
+class asio_buffer_storage {
+    using iov_allocator = typename std::allocator_traits<Allocator>::template rebind_alloc<iovec>;
+    using descriptor_allocator =
+        typename std::allocator_traits<Allocator>::template rebind_alloc<mr_descriptor>;
+
+public:
+    explicit asio_buffer_storage(const Allocator& allocator = {})
+        : buffer_iov_(iov_allocator{allocator}),
+          buffer_descriptors_(descriptor_allocator{allocator}) {}
+
+    [[nodiscard]] auto buffers() const noexcept -> asio_buffers {
+        return {buffer_iov_, buffer_descriptors_, buffer_bytes_};
+    }
+
+    template <bool Mutable, typename BufferSequence>
+    void prepare_buffers(const BufferSequence& buffers, std::optional<mr_descriptor> descriptor) {
+        using buffer_type =
+            std::conditional_t<Mutable, ::asio::mutable_buffer, ::asio::const_buffer>;
+        const auto end = ::asio::buffer_sequence_end(buffers);
+        for (auto it = ::asio::buffer_sequence_begin(buffers); it != end; ++it) {
+            const buffer_type buffer{*it};
+            if (buffer.size() > std::numeric_limits<std::size_t>::max() - buffer_bytes_) {
+                throw std::length_error("Asio buffer sequence size overflows size_t");
+            }
+            buffer_iov_.push_back(
+                {const_cast<void*>(static_cast<const void*>(buffer.data())), buffer.size()});
+            auto local_descriptor = descriptor.value_or(mr_descriptor{});
+            using element_type = std::remove_cvref_t<decltype(*it)>;
+            if constexpr (std::same_as<element_type, mutable_registered_buffer> ||
+                          std::same_as<element_type, const_registered_buffer>) {
+                if (!descriptor)
+                    local_descriptor = (*it).descriptor();
+            }
+            if (local_descriptor || !buffer_descriptors_.empty()) {
+                // Keep one descriptor per IOV, including unregistered elements
+                // before the first registration and between registered ranges.
+                buffer_descriptors_.resize(buffer_iov_.size() - 1);
+                buffer_descriptors_.push_back(local_descriptor);
+            }
+            buffer_bytes_ += buffer.size();
+        }
+    }
+
+private:
+    std::vector<iovec, iov_allocator> buffer_iov_;
+    std::vector<mr_descriptor, descriptor_allocator> buffer_descriptors_;
+    std::size_t buffer_bytes_{};
+};
+
 // Pending operations share ownership so their native endpoint and cancellation
 // address survive moves and destruction of the public I/O object.
 class endpoint_state {
@@ -329,8 +379,7 @@ public:
         : handler_(std::move(handler)), executor_(std::move(executor)), work_(executor_),
           allocator_(::asio::get_associated_allocator(handler_)),
           cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)),
-          buffer_iov_(iov_allocator{allocator_}),
-          buffer_descriptors_(descriptor_allocator{allocator_}) {}
+          buffers_(allocator_) {}
 
     /**
      * @brief Constructs a context with a handler, executor, and endpoint for cancellation.
@@ -342,8 +391,7 @@ public:
         : handler_(std::move(handler)), executor_(std::move(executor)), work_(executor_),
           allocator_(::asio::get_associated_allocator(handler_)),
           cancellation_slot_(::asio::get_associated_cancellation_slot(handler_)), endpoint_(ep),
-          buffer_iov_(iov_allocator{allocator_}),
-          buffer_descriptors_(descriptor_allocator{allocator_}) {
+          buffers_(allocator_) {
         setup_cancellation();
     }
 
@@ -356,36 +404,12 @@ public:
     void discard() override { destroy_self(); }
 
     [[nodiscard]] auto buffers() const noexcept -> detail::asio_buffers override {
-        return {buffer_iov_, buffer_descriptors_, buffer_bytes_};
+        return buffers_.buffers();
     }
 
     template <bool Mutable, typename BufferSequence>
     void prepare_buffers(const BufferSequence& buffers, std::optional<mr_descriptor> descriptor) {
-        using buffer_type =
-            std::conditional_t<Mutable, ::asio::mutable_buffer, ::asio::const_buffer>;
-        const auto end = ::asio::buffer_sequence_end(buffers);
-        for (auto it = ::asio::buffer_sequence_begin(buffers); it != end; ++it) {
-            const buffer_type buffer{*it};
-            if (buffer.size() > std::numeric_limits<std::size_t>::max() - buffer_bytes_) {
-                throw std::length_error("Asio buffer sequence size overflows size_t");
-            }
-            buffer_iov_.push_back(
-                {const_cast<void*>(static_cast<const void*>(buffer.data())), buffer.size()});
-            auto local_descriptor = descriptor.value_or(mr_descriptor{});
-            using element_type = std::remove_cvref_t<decltype(*it)>;
-            if constexpr (std::same_as<element_type, mutable_registered_buffer> ||
-                          std::same_as<element_type, const_registered_buffer>) {
-                if (!descriptor)
-                    local_descriptor = (*it).descriptor();
-            }
-            if (local_descriptor || !buffer_descriptors_.empty()) {
-                // Keep one descriptor per IOV, including unregistered elements
-                // before the first registration and between registered ranges.
-                buffer_descriptors_.resize(buffer_iov_.size() - 1);
-                buffer_descriptors_.push_back(local_descriptor);
-            }
-            buffer_bytes_ += buffer.size();
-        }
+        buffers_.template prepare_buffers<Mutable>(buffers, descriptor);
     }
 
     /**
@@ -512,9 +536,7 @@ private:
     allocator_type allocator_;
     cancellation_slot_type cancellation_slot_;
     endpoint* endpoint_{nullptr};
-    std::vector<iovec, iov_allocator> buffer_iov_;
-    std::vector<mr_descriptor, descriptor_allocator> buffer_descriptors_;
-    std::size_t buffer_bytes_{};
+    detail::asio_buffer_storage<allocator_type> buffers_;
 };
 
 /**

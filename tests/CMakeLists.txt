@@ -22,7 +22,7 @@ target_compile_options(loom_test_options INTERFACE
 function(loom_add_test TEST_NAME)
     cmake_parse_arguments(ARG
         ""
-        "LIBRARY"
+        "LIBRARY;TIMEOUT"
         "SOURCES;EXTRA_LIBS"
         ${ARGN}
     )
@@ -48,7 +48,11 @@ function(loom_add_test TEST_NAME)
     )
 
     # Discover tests for CTest
-    catch_discover_tests(${TEST_NAME})
+    set(discovery_properties)
+    if(ARG_TIMEOUT)
+        list(APPEND discovery_properties TIMEOUT ${ARG_TIMEOUT})
+    endif()
+    catch_discover_tests(${TEST_NAME} PROPERTIES ${discovery_properties})
 endfunction()
 
 # =============================================================================
@@ -184,6 +188,10 @@ if(LOOM_HAS_ASIO)
 
     loom_add_test(test_asio_endpoint
         LIBRARY loom::asio
+    )
+    loom_add_test(test_asio_blocking
+        LIBRARY loom::asio
+        TIMEOUT 30
     )
     loom_add_test(test_asio_vectors
         LIBRARY loom::asio

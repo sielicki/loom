@@ -720,6 +720,19 @@ Bind those queues before initiating operations and keep them alive through nativ
 completion. A manual progress loop can route events with `cq.dispatch(event)`;
 the old raw-pointer `dispatch_asio_completion` helper has been removed.
 
+Blocking `ep.send(buffers)` and `ep.receive(buffers)` drive the bound CQ until
+their own native completion, without running the executor. Both submit the whole
+buffer sequence and preserve registered-buffer descriptors. Receives return the
+completed message length, including partial bytes reported with an error.
+Unrelated completions remain available through normal CQ reads; these calls do
+not dispatch unrelated handlers.
+
+Blocking submissions preserve fence and delivery requirements while removing the
+inherited `FI_MORE` batching hint. After submission, CQ read failures and metadata
+allocation exceptions request cancellation and retain native storage until a
+terminal completion. Calls have no timeout and can wait indefinitely if a
+provider never retires accepted work.
+
 The fabric service dispatches registered operations from any frontend. It retains
 the first event without a registered owner, including context-free remote events
 and errors, and pauses reads from that queue until
@@ -939,9 +952,12 @@ until the provider emits the terminal `FI_MULTI_RECV` completion flag.
 
 Core `msg::sendmsg`, `msg::recvmsg`, `msg::tagged_sendmsg`, and
 `msg::tagged_recvmsg` also accept `<operation_defaults::inherit>` to extend
-the corresponding transmit or receive defaults. Their ordinary overloads
-use explicit replacement flags. Their message objects carry peers, IOVs,
-registrations, contexts, and applicable tag and immediate-data fields.
+the corresponding transmit or receive defaults.
+`<operation_defaults::inherit_without_more>` extends defaults without their
+`FI_MORE` hint, which is useful when waiting before submitting another operation.
+Their ordinary overloads use explicit replacement flags. Their message objects
+carry peers, IOVs, registrations, contexts, and applicable tag and immediate-data
+fields.
 
 Core `read_to`, `write_to`, `readv_to`, and `writev_to` accept an `op_flags`
 argument before the context. These overloads replace the defaults unless

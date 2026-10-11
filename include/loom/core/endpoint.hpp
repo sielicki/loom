@@ -245,7 +245,10 @@ template <operation_defaults Defaults>
                                           completion_direction direction,
                                           std::uint64_t flags) noexcept -> std::uint64_t {
     static_assert(Defaults == operation_defaults::replace ||
-                  Defaults == operation_defaults::inherit);
+                  Defaults == operation_defaults::inherit ||
+                  Defaults == operation_defaults::inherit_without_more);
+    if constexpr (Defaults == operation_defaults::inherit_without_more)
+        return flags | (ep.impl_operation_flags(direction) & ~FI_MORE);
     if constexpr (Defaults == operation_defaults::inherit)
         flags |= ep.impl_operation_flags(direction);
     return flags;

@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "loom/asio/asio_context.hpp"
+#include "loom/asio/blocking_context.hpp"
 #include "loom/asio/fabric_service.hpp"
 #include "loom/core/endpoint.hpp"
 #include "loom/core/memory.hpp"
@@ -513,33 +514,29 @@ public:
     }
 
     /**
-     * @brief Sends data synchronously (blocking).
+     * @brief Sends the entire buffer sequence and waits for native completion.
+     * Drives the bound CQ without running the executor or unrelated handlers.
+     * Other completions remain queued. A CQ read failure requests cancellation
+     * and still waits for native retirement before returning borrowed storage.
      * @param buffers The data to send.
      * @return Error code and bytes transferred.
      */
     template <typename ConstBufferSequence>
     auto send(const ConstBufferSequence& buffers) -> std::pair<std::error_code, std::size_t> {
-        auto span = buffers_to_const_span(buffers);
-        auto result = get().send(span);
-        if (!result) {
-            return {result.error(), 0};
-        }
-        return {{}, span.size()};
+        return detail::blocking_message<false>(operation_state(), buffers);
     }
 
     /**
-     * @brief Receives data synchronously (blocking).
+     * @brief Receives into the buffer sequence and returns the completed length.
+     * Drives the bound CQ without running the executor or unrelated handlers.
+     * Other completions remain queued. Buffer and context storage remain live
+     * until the provider reports terminal success or failure.
      * @param buffers The buffer to receive into.
      * @return Error code and bytes transferred.
      */
     template <typename MutableBufferSequence>
     auto receive(const MutableBufferSequence& buffers) -> std::pair<std::error_code, std::size_t> {
-        auto span = buffers_to_span(buffers);
-        auto result = get().recv(span);
-        if (!result) {
-            return {result.error(), 0};
-        }
-        return {{}, span.size()};
+        return detail::blocking_message<true>(operation_state(), buffers);
     }
 
 private:

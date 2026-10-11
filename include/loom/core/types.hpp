@@ -726,7 +726,11 @@ inline constexpr op_flags delivery_complete{1ULL << 4};
 
 /// Whether per-call flags replace or extend the endpoint's creation defaults.
 /// Inherited defaults require native operation flags to remain unchanged after creation.
-enum class operation_defaults { replace, inherit };
+enum class operation_defaults {
+    replace,
+    inherit,
+    inherit_without_more,  ///< Extend defaults without their deferred-batch hint.
+};
 
 /// Endpoint direction used for completion registration and operation defaults.
 enum class completion_direction { transmit, receive };

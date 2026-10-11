@@ -470,6 +470,7 @@ target_sources(loom PUBLIC
         # Asio headers
         include/loom/asio/asio_context.hpp
         include/loom/asio/basic_endpoint.hpp
+        include/loom/asio/blocking_context.hpp
         include/loom/asio/completion_token.hpp
         include/loom/asio/fabric_service.hpp
         include/loom/asio/registered_buffer.hpp
