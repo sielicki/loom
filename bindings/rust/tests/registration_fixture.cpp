@@ -5,6 +5,9 @@
 
 #include <rdma/fi_rma.h>
 
+#include <chrono>
+#include <optional>
+
 #include "loom-fabric/src/ffi.rs.h"
 
 namespace loom::cxx_bridge {
@@ -12,6 +15,8 @@ struct RegistrationFixture::state {
     bool endpoint_bound;
     TestRegistrationState counts{};
     TestRegistrationFailure failure{TestRegistrationFailure::None};
+    std::optional<std::uintptr_t> completion;
+    std::chrono::steady_clock::time_point completion_ready;
 
     struct region {
         fid_mr native{};
@@ -182,7 +187,17 @@ struct RegistrationFixture::state {
     };
     fi_ops_cq queue_ops{
         .size = sizeof(fi_ops_cq),
-        .read = [](fid_cq*, void*, std::size_t) -> ssize_t { return -FI_EAGAIN; },
+        .read = [](fid_cq* queue, void* output, std::size_t count) -> ssize_t {
+            auto& self = owner(&queue->fid);
+            ++self.counts.queue_reads;
+            if (!count || !self.completion ||
+                std::chrono::steady_clock::now() < self.completion_ready)
+                return -FI_EAGAIN;
+            *static_cast<fi_cq_tagged_entry*>(output) = {
+                .op_context = reinterpret_cast<void*>(*self.completion), .len = 7};
+            self.completion.reset();
+            return 1;
+        },
     };
     fi_ops_domain domain_ops{
         .size = sizeof(fi_ops_domain),
@@ -264,5 +279,12 @@ auto test_registration_state(const RegistrationFixture& fixture) -> TestRegistra
 }
 void test_registration_fail(RegistrationFixture& fixture, TestRegistrationFailure failure) {
     fixture.impl->failure = failure;
+}
+void test_queue_schedule(RegistrationFixture& fixture,
+                         std::uintptr_t context,
+                         std::uint32_t delay_us) {
+    fixture.impl->completion = context;
+    fixture.impl->completion_ready =
+        std::chrono::steady_clock::now() + std::chrono::microseconds{delay_us};
 }
 }  // namespace loom::cxx_bridge

@@ -334,6 +334,7 @@ pub mod ffi {
         pub endpoint_close_calls: u32,
         pub read_calls: u32,
         pub write_calls: u32,
+        pub queue_reads: u64,
         pub last_context: usize,
         pub bad_close_order: u32,
         pub cuda: bool,
@@ -355,6 +356,11 @@ pub mod ffi {
             fixture: &RegistrationFixture,
         ) -> Result<UniquePtr<FabricInfoHandle>>;
         fn test_registration_state(fixture: &RegistrationFixture) -> TestRegistrationState;
+        fn test_queue_schedule(
+            fixture: Pin<&mut RegistrationFixture>,
+            context: usize,
+            delay_us: u32,
+        );
         fn test_registration_fail(
             fixture: Pin<&mut RegistrationFixture>,
             failure: TestRegistrationFailure,

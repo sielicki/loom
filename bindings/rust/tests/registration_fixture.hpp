@@ -21,4 +21,7 @@ auto test_registration_info(const RegistrationFixture& fixture)
     -> std::unique_ptr<FabricInfoHandle>;
 auto test_registration_state(const RegistrationFixture& fixture) -> TestRegistrationState;
 void test_registration_fail(RegistrationFixture& fixture, TestRegistrationFailure failure);
+void test_queue_schedule(RegistrationFixture& fixture,
+                         std::uintptr_t context,
+                         std::uint32_t delay_us);
 }  // namespace loom::cxx_bridge

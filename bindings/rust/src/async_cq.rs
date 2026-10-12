@@ -13,6 +13,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::rc::Rc;
+use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::Notify;
 
@@ -20,19 +21,56 @@ use tokio::sync::Notify;
 // AsyncCompletionQueue
 // ============================================================================
 
+/// Progress policy when a completion queue has no native wait descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PollingStrategy {
+    /// Sleep between empty polls. Requires the Tokio time driver; its timer
+    /// resolution is milliseconds, even for a shorter requested duration.
+    Sleep(Duration),
+    /// Yield to Tokio between empty polls, then poll again. This requires no
+    /// time driver, but may occupy a CPU while the queue remains empty.
+    Yield,
+}
+
+impl Default for PollingStrategy {
+    fn default() -> Self {
+        Self::Sleep(Duration::from_millis(1))
+    }
+}
+
+impl PollingStrategy {
+    async fn pause(self) {
+        match self {
+            Self::Sleep(interval) => tokio::time::sleep(interval).await,
+            Self::Yield => tokio::task::yield_now().await,
+        }
+    }
+}
+
+/// Native queue attributes and the fallback used without a wait descriptor.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AsyncCompletionQueueOptions {
+    /// Attributes passed to the native queue constructor.
+    pub queue: CompletionQueueOptions,
+    /// Used only when the queue has no native wait descriptor.
+    pub polling: PollingStrategy,
+}
+
 /// An async completion queue that integrates with tokio.
 ///
 /// This wraps a [`CompletionQueue`] and provides async methods for waiting
 /// on completions without blocking the tokio runtime. Managed operations have
 /// individual result slots; raw polling and async waiting share the same router.
-/// Queues without a retrievable wait descriptor use a one-millisecond Tokio
-/// timer between empty polls. The runtime must enable time for this fallback.
+/// Queues without a retrievable wait descriptor use [`PollingStrategy`], which
+/// defaults to a one-millisecond Tokio timer between empty polls. The runtime
+/// must enable time for timer-based polling.
 /// A context-free error fails waiting operations with [`Error::Queue`] and
 /// prevents new managed submissions. It does not retire native storage: callers
 /// must continue progress or successfully close the endpoint before buffer reuse.
 pub struct AsyncCompletionQueue {
     async_fd: Option<AsyncFd<RawFd>>,
     inner: CompletionQueue,
+    polling: PollingStrategy,
 }
 
 impl AsyncCompletionQueue {
@@ -68,9 +106,22 @@ impl AsyncCompletionQueue {
 
     /// Create a queue with explicit source-address and wait options.
     pub fn with_attributes(domain: &Domain, options: CompletionQueueOptions) -> Result<Self> {
-        let inner = CompletionQueue::with_attributes(domain, options)?;
+        Self::with_options(
+            domain,
+            AsyncCompletionQueueOptions {
+                queue: options,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Create a queue with explicit attributes and a manual polling policy.
+    /// The policy applies only when no native wait descriptor is available.
+    /// Set `options.queue.wait_obj` to false to always use manual polling.
+    pub fn with_options(domain: &Domain, options: AsyncCompletionQueueOptions) -> Result<Self> {
+        let inner = CompletionQueue::with_attributes(domain, options.queue)?;
         // An unspecified provider wait object need not expose a descriptor.
-        let async_fd = if options.wait_obj {
+        let async_fd = if options.queue.wait_obj {
             inner
                 .wait_fd()
                 .ok()
@@ -79,7 +130,11 @@ impl AsyncCompletionQueue {
         } else {
             None
         };
-        Ok(Self { inner, async_fd })
+        Ok(Self {
+            inner,
+            async_fd,
+            polling: options.polling,
+        })
     }
 
     /// Borrow the native wait descriptor, if this queue has one.
@@ -151,7 +206,7 @@ impl AsyncCompletionQueue {
                     }
                 }
             } else {
-                let delay = tokio::time::sleep(std::time::Duration::from_millis(1));
+                let delay = self.polling.pause();
                 let notification = std::pin::pin!(notification);
                 let delay = std::pin::pin!(delay);
                 futures::future::select(notification, delay).await;
@@ -481,6 +536,18 @@ impl AsyncEndpoint {
         Self::from_queues(domain, info, tx_cq, rx_cq)
     }
 
+    /// Create an endpoint with the same queue attributes and polling policy
+    /// for its transmit and receive completion queues.
+    pub fn with_options(
+        domain: &Domain,
+        info: &FabricInfo,
+        options: AsyncCompletionQueueOptions,
+    ) -> Result<Self> {
+        let tx_cq = Rc::new(AsyncCompletionQueue::with_options(domain, options)?);
+        let rx_cq = Rc::new(AsyncCompletionQueue::with_options(domain, options)?);
+        Self::from_queues(domain, info, tx_cq, rx_cq)
+    }
+
     fn from_queues(
         domain: &Domain,
         info: &FabricInfo,
@@ -751,6 +818,132 @@ impl Drop for AsyncEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "test_fixtures")]
+    fn fixture_parents(
+        fixture: &mut cxx::UniquePtr<crate::ffi::ffi::RegistrationFixture>,
+    ) -> (crate::Fabric, FabricInfo, Domain) {
+        let fabric = crate::Fabric {
+            inner: Rc::new(crate::ffi::ffi::test_registration_fabric(fixture.pin_mut())),
+        };
+        let info = FabricInfo::new(crate::ffi::ffi::test_registration_info(fixture).unwrap());
+        let domain = Domain::new(&fabric, &info).unwrap();
+        (fabric, info, domain)
+    }
+
+    #[cfg(feature = "test_fixtures")]
+    #[test]
+    fn manual_yield_progress_needs_no_timer() {
+        use crate::ffi::ffi;
+
+        // Deliberately omit both runtime drivers. Yield-based polling needs
+        // neither a native wait object nor a Tokio timer.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut fixture = ffi::test_registration_fixture(false);
+            let (_fabric, info, domain) = fixture_parents(&mut fixture);
+            let endpoint = AsyncEndpoint::with_options(
+                &domain,
+                &info,
+                AsyncCompletionQueueOptions {
+                    queue: CompletionQueueOptions {
+                        wait_obj: false,
+                        ..Default::default()
+                    },
+                    polling: PollingStrategy::Yield,
+                },
+            )
+            .unwrap();
+            for queue in [endpoint.tx_cq(), endpoint.rx_cq()] {
+                assert!(queue.wait_fd().is_none());
+                let reads = ffi::test_registration_state(&fixture).queue_reads;
+                let delivery = async {
+                    // The empty wait must yield so this peer can run. Native
+                    // delivery sends no router notification and has no FD.
+                    assert!(ffi::test_registration_state(&fixture).queue_reads > reads);
+                    tokio::task::yield_now().await;
+                    ffi::test_queue_schedule(fixture.pin_mut(), 91, 0);
+                };
+                let (received, ()) = futures::future::join(queue.wait_async(), delivery).await;
+                let received = received.unwrap();
+                assert_eq!(received.context, 91);
+                assert_eq!(received.bytes_transferred, 7);
+            }
+        });
+    }
+
+    #[cfg(feature = "test_fixtures")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn configured_sleep_preserves_router_wakeups() {
+        use crate::ffi::ffi;
+        use std::future::Future;
+        use std::task::Context;
+
+        let mut fixture = ffi::test_registration_fixture(false);
+        let (_fabric, _info, domain) = fixture_parents(&mut fixture);
+        let queue = AsyncCompletionQueue::with_options(
+            &domain,
+            AsyncCompletionQueueOptions {
+                queue: CompletionQueueOptions {
+                    wait_obj: false,
+                    ..Default::default()
+                },
+                polling: PollingStrategy::Sleep(Duration::from_secs(3600)),
+            },
+        )
+        .unwrap();
+        let observer = queue.inner().clone();
+        let mut wait = Box::pin(queue.wait_async());
+        let mut task = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(wait.as_mut().poll(&mut task).is_pending());
+        let reads = ffi::test_registration_state(&fixture).queue_reads;
+        ffi::test_queue_schedule(fixture.pin_mut(), 123, 0);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(wait.as_mut().poll(&mut task).is_pending());
+        assert_eq!(ffi::test_registration_state(&fixture).queue_reads, reads);
+        // A clone can make progress while this waiter sleeps. Reading a
+        // native event must wake the waiter without waiting out its interval.
+        assert_eq!(observer.progress(1), 1);
+        let result = tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.context, 123);
+        assert_eq!(result.bytes_transferred, 7);
+    }
+
+    #[cfg(feature = "test_fixtures")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn polling_detects_native_events_without_notifications() {
+        use crate::ffi::ffi;
+        for polling in [
+            PollingStrategy::Sleep(Duration::from_millis(3)),
+            PollingStrategy::Yield,
+        ] {
+            let mut fixture = ffi::test_registration_fixture(false);
+            let (_fabric, _info, domain) = fixture_parents(&mut fixture);
+            let queue = AsyncCompletionQueue::with_options(
+                &domain,
+                AsyncCompletionQueueOptions {
+                    queue: CompletionQueueOptions {
+                        wait_obj: false,
+                        ..Default::default()
+                    },
+                    polling,
+                },
+            )
+            .unwrap();
+            ffi::test_queue_schedule(fixture.pin_mut(), 59, 10_000);
+            let result = tokio::time::timeout(Duration::from_secs(1), queue.wait_async())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.context, 59);
+            assert!(ffi::test_registration_state(&fixture).queue_reads > 1);
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "requires the libfabric sockets provider"]

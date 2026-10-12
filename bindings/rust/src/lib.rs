@@ -1134,7 +1134,7 @@ impl Drop for EndpointState {
 // ============================================================================
 
 #[cfg(feature = "tokio")]
-pub use async_cq::{AsyncCompletionQueue, AsyncEndpoint};
+pub use async_cq::{AsyncCompletionQueue, AsyncCompletionQueueOptions, AsyncEndpoint, PollingStrategy};
 
 // ============================================================================
 // Tests

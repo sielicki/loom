@@ -125,11 +125,20 @@ width, or the complete TX/RX attributes.
 
 ### Async progress
 
-Async CQs use native wait descriptors when available. If a provider cannot
-expose its wait object, waits poll with a one-millisecond Tokio timer between
-empty reads. Enable time in the Tokio runtime. `AsyncCompletionQueue::with_polling`
-and `AsyncEndpoint::with_polling` also support providers that reject native
-wait objects during CQ creation. `AsyncCompletionQueue::wait_fd()` returns
+Async CQs use native wait descriptors when available. Without one, the default
+is a one-millisecond Tokio timer between empty reads; enable time in the runtime.
+`AsyncCompletionQueue::with_options` and `AsyncEndpoint::with_options` accept
+`AsyncCompletionQueueOptions` to select `PollingStrategy::Sleep(interval)` or
+`PollingStrategy::Yield`. Sleep uses
+[Tokio's millisecond timer resolution](https://docs.rs/tokio/latest/tokio/time/fn.sleep.html).
+Yield polls again after yielding to Tokio and needs no time driver, but may
+occupy a CPU while idle. Both modes wake on routed completions and bound work
+per poll. Choose the policy based on measured latency and CPU requirements.
+
+Set `options.queue.wait_obj = false` to use manual polling even when native
+wait descriptors are available. The existing `with_polling` constructors do
+this with the default timer, supporting providers that reject native wait
+objects during CQ creation. `AsyncCompletionQueue::wait_fd()` returns
 an optional borrowed descriptor; it replaces the unconditional `AsRawFd` API.
 An exported region on a manual-progress provider still needs an active
 progress task for its entire advertised lifetime, including while idle.
