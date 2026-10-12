@@ -26,7 +26,14 @@ struct submission_provider {
         loom::get_default_resource(),
         &handle,
         loom::endpoint_types::msg,
-        loom::address_format::unspecified)};
+        loom::address_format::unspecified,
+        0UZ,
+        0UZ,
+        loom::caps{},
+        0,
+        0,
+        nullptr,
+        loom::endpoint_iov_limits{1, 1, 1})};
 
     explicit submission_provider(support state) {
         if (state == support::no_table) {

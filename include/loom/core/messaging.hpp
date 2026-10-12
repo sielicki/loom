@@ -255,7 +255,8 @@ template <operation_defaults Defaults, context_like Ctx>
         return make_error_result<void>(errc::not_supported);
     }
 
-    if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
+    if (msg.iov.size() > ep.iov_limits().transmit ||
+        (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     auto raw_desc = detail::descriptors_to_raw(msg.desc);
@@ -308,7 +309,8 @@ template <operation_defaults Defaults, context_like Ctx>
         return make_error_result<void>(errc::not_supported);
     }
 
-    if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
+    if (msg.iov.size() > ep.iov_limits().receive ||
+        (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     auto raw_desc = detail::descriptors_to_raw(msg.desc);
@@ -355,7 +357,8 @@ template <operation_defaults Defaults, context_like Ctx>
         return make_error_result<void>(errc::not_supported);
     }
 
-    if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
+    if (msg.iov.size() > ep.iov_limits().transmit ||
+        (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     auto raw_desc = detail::descriptors_to_raw(msg.desc);
@@ -419,7 +422,8 @@ template <operation_defaults Defaults, context_like Ctx>
         return make_error_result<void>(errc::not_supported);
     }
 
-    if (!msg.desc.empty() && msg.desc.size() != msg.iov.size()) {
+    if (msg.iov.size() > ep.iov_limits().receive ||
+        (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<void>(errc::invalid_argument);
     }
     auto raw_desc = detail::descriptors_to_raw(msg.desc);
@@ -1008,7 +1012,8 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
     }
 
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
-    if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
+    if (std::ranges::size(iov) > ep.iov_limits().transmit ||
+        (!desc_span.empty() && desc_span.size() != std::ranges::size(iov))) {
         return make_error_result<void>(errc::invalid_argument);
     }
     auto raw_desc = msg::detail::descriptors_to_raw(desc_span);
@@ -1057,7 +1062,8 @@ template <iov_range Iov, descriptor_range Desc, context_like Ctx = void*>
     }
 
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
-    if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
+    if (std::ranges::size(iov) > ep.iov_limits().receive ||
+        (!desc_span.empty() && desc_span.size() != std::ranges::size(iov))) {
         return make_error_result<void>(errc::invalid_argument);
     }
     auto raw_desc = msg::detail::descriptors_to_raw(desc_span);
@@ -1099,7 +1105,8 @@ sendv(endpoint& ep, Iov&& iov, Desc&& descriptors, fabric_addr dest, Ctx ctx = {
     }
 
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
-    if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
+    if (std::ranges::size(iov) > ep.iov_limits().transmit ||
+        (!desc_span.empty() && desc_span.size() != std::ranges::size(iov))) {
         return make_error_result<void>(errc::invalid_argument);
     }
     auto raw_desc = msg::detail::descriptors_to_raw(desc_span);
@@ -1141,7 +1148,8 @@ recvv(receive_target auto& ep, Iov&& iov, Desc&& descriptors, fabric_addr src, C
     }
 
     auto desc_span = std::span{std::ranges::data(descriptors), std::ranges::size(descriptors)};
-    if (!desc_span.empty() && desc_span.size() != std::ranges::size(iov)) {
+    if (std::ranges::size(iov) > ep.iov_limits().receive ||
+        (!desc_span.empty() && desc_span.size() != std::ranges::size(iov))) {
         return make_error_result<void>(errc::invalid_argument);
     }
     auto raw_desc = msg::detail::descriptors_to_raw(desc_span);

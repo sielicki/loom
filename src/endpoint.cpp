@@ -209,6 +209,9 @@ auto endpoint::sendv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_
         return make_error_result<void>(errc::not_supported);
     }
 
+    if (iov.size() > impl_->iov_limits.transmit)
+        return make_error_result<void>(errc::invalid_argument);
+
     ssize_t ret = ::fi_sendv(impl_->ep, iov.data(), nullptr, iov.size(), FI_ADDR_UNSPEC, ctx.get());
 
     if (ret < 0) {
@@ -225,6 +228,9 @@ auto endpoint::recvv(std::span<const iovec> iov, context_ptr<void> ctx) -> void_
     if (!FI_CHECK_OP(impl_->ep->msg, fi_ops_msg, recvv)) {
         return make_error_result<void>(errc::not_supported);
     }
+
+    if (iov.size() > impl_->iov_limits.receive)
+        return make_error_result<void>(errc::invalid_argument);
 
     ssize_t ret = ::fi_recvv(impl_->ep, iov.data(), nullptr, iov.size(), FI_ADDR_UNSPEC, ctx.get());
 

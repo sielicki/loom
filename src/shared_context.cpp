@@ -74,6 +74,7 @@ struct shared_tx_context_impl {
 struct shared_rx_context_impl {
     ::fid_ep* srx{nullptr};  ///< Libfabric shared RX context handle
     std::uint64_t rx_op_flags{};
+    std::size_t iov_limit{};
 
     /**
      * @brief Default constructor.
@@ -83,8 +84,8 @@ struct shared_rx_context_impl {
      * @brief Constructs implementation from libfabric SRX handle.
      * @param srx_ The libfabric shared RX context handle.
      */
-    explicit shared_rx_context_impl(::fid_ep* srx_, std::uint64_t flags = 0)
-        : srx(srx_), rx_op_flags(flags) {}
+    explicit shared_rx_context_impl(::fid_ep* srx_, std::uint64_t flags = 0, std::size_t limit = 0)
+        : srx(srx_), rx_op_flags(flags), iov_limit(limit) {}
 
     /**
      * @brief Destructor that closes the libfabric SRX handle.
@@ -201,17 +202,18 @@ auto shared_rx_context::create(const domain& dom,
 
     detail::unique_fid<::fid_ep> pending{srx};
     const auto rx_flags = rx_attr ? rx_attr->op_flags : 0;
+    const auto limit = rx_attr ? rx_attr->iov_limit : 0;
 
     if (resource) {
         auto impl =
-            detail::make_pmr_unique<detail::shared_rx_context_impl>(resource, srx, rx_flags);
+            detail::make_pmr_unique<detail::shared_rx_context_impl>(resource, srx, rx_flags, limit);
         (void)pending.release();
         return shared_rx_context{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl =
-        detail::make_pmr_unique<detail::shared_rx_context_impl>(default_resource, srx, rx_flags);
+    auto impl = detail::make_pmr_unique<detail::shared_rx_context_impl>(
+        default_resource, srx, rx_flags, limit);
     (void)pending.release();
     return shared_rx_context{std::move(impl)};
 }
@@ -237,6 +239,10 @@ auto shared_rx_context::close() -> void_result {
         return make_error_result_from_fi_errno<void>(-status);
     impl_->srx = nullptr;
     return make_success();
+}
+
+auto shared_rx_context::iov_limits() const noexcept -> endpoint_iov_limits {
+    return {.receive = impl_ && impl_->srx ? impl_->iov_limit : 0};
 }
 
 auto shared_rx_context::impl_operation_flags(completion_direction direction) const noexcept

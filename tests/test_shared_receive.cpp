@@ -64,7 +64,7 @@ struct shared_provider {
     std::vector<iovec> buffers;
     std::vector<void*> descriptors;
     static constexpr std::uint64_t defaults = FI_COMPLETION | FI_MORE;
-    fi_rx_attr attributes{.op_flags = defaults};
+    fi_rx_attr attributes{.op_flags = defaults, .iov_limit = 64};
 
     static auto owner(fid* handle) -> shared_provider& {
         return *static_cast<shared_provider*>(handle->context);
@@ -236,6 +236,24 @@ enum class receive_form {
 };
 enum class native_support { available, no_table, short_table, no_entry };
 }  // namespace
+
+TEST_CASE("shared receive contexts retain negotiated IOV limits", "[shared_receive][iov]") {
+    using namespace loom;
+    const auto limit = GENERATE(0UZ, 1UZ, 16UZ, 17UZ);
+    const auto explicit_resource = GENERATE(false, true);
+    shared_provider provider;
+    provider.attributes.iov_limit = limit;
+    provider.info = fabric_info::copy_native(fi_info{.rx_attr = &provider.attributes}).value();
+    auto result = shared_rx_context::create(
+        provider.domain, provider.info, explicit_resource ? get_default_resource() : nullptr);
+    REQUIRE(result);
+    CHECK(result->iov_limits() == endpoint_iov_limits{.receive = limit});
+    auto moved = std::move(*result);
+    CHECK(result->iov_limits() == endpoint_iov_limits{});
+    CHECK(moved.iov_limits() == endpoint_iov_limits{.receive = limit});
+    REQUIRE(moved.close());
+    CHECK(moved.iov_limits() == endpoint_iov_limits{});
+}
 
 TEST_CASE("shared receives preserve native arguments and operation support", "[shared_receive]") {
     using namespace loom;

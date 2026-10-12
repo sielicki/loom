@@ -131,6 +131,7 @@ auto deferred_work::create_send(domain& dom,
                                 msg::send_flags flags,
                                 memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || !trigger.cntr || !*trigger.cntr || (completion_cntr && !*completion_cntr) ||
+        msg.iov.size() > ep.iov_limits().transmit ||
         (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -181,6 +182,7 @@ auto deferred_work::create_recv(domain& dom,
                                 msg::recv_flags flags,
                                 memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || !trigger.cntr || !*trigger.cntr || (completion_cntr && !*completion_cntr) ||
+        msg.iov.size() > ep.iov_limits().receive ||
         (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -233,6 +235,7 @@ auto deferred_work::create_tagged_send(domain& dom,
                                        msg::send_flags flags,
                                        memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || !trigger.cntr || !*trigger.cntr || (completion_cntr && !*completion_cntr) ||
+        msg.iov.size() > ep.iov_limits().transmit ||
         (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
@@ -285,6 +288,7 @@ auto deferred_work::create_tagged_recv(domain& dom,
                                        msg::recv_flags flags,
                                        memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || !trigger.cntr || !*trigger.cntr || (completion_cntr && !*completion_cntr) ||
+        msg.iov.size() > ep.iov_limits().receive ||
         (!msg.desc.empty() && msg.desc.size() != msg.iov.size())) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }

@@ -8,6 +8,7 @@
 
 #include "loom/core/allocator.hpp"
 #include "loom/core/crtp/fabric_object_base.hpp"
+#include "loom/core/endpoint_types.hpp"
 #include "loom/core/result.hpp"
 #include "loom/core/types.hpp"
 
@@ -144,6 +145,9 @@ public:
     [[nodiscard]] auto cancel(context_ptr<void> context) -> void_result;
     /// Close after bound endpoints; failure retains the native handle for retry.
     [[nodiscard]] auto close() -> void_result;
+
+    /// Negotiated receive vector count; other directions and missing metadata are zero.
+    [[nodiscard]] auto iov_limits() const noexcept -> endpoint_iov_limits;
 
     /// Native receive defaults captured at creation; transmit defaults are zero.
     [[nodiscard]] auto impl_operation_flags(completion_direction direction) const noexcept

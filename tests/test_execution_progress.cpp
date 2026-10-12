@@ -257,7 +257,8 @@ struct provider {
               loom::caps{},
               transmit_defaults,
               receive_defaults,
-              &domain_handle)} {
+              &domain_handle,
+              loom::endpoint_iov_limits{1, 1, 1})} {
         if (bind_completions)
             REQUIRE(ep.bind_cq(cq, loom::cq_bind::transmit | loom::cq_bind::recv));
     }

@@ -47,7 +47,14 @@ TEST_CASE("deferred operations retain their buffers and peers", "[asio][endpoint
         loom::get_default_resource(),
         &native,
         loom::endpoint_types::rdm,
-        loom::address_format::unspecified)};
+        loom::address_format::unspecified,
+        0UZ,
+        0UZ,
+        loom::caps{},
+        0,
+        0,
+        nullptr,
+        loom::endpoint_iov_limits{1, 1, 1})};
     REQUIRE(fabric.bind_cq(cq, loom::cq_bind::transmit));
     loom::asio::endpoint endpoint{ioc.get_executor(), std::move(fabric)};
     std::array<std::byte, 64> storage{};
@@ -283,7 +290,14 @@ TEST_CASE("Asio rejects an unavailable native send operation", "[asio][endpoint]
         loom::get_default_resource(),
         &native,
         loom::endpoint_types::rdm,
-        loom::address_format::unspecified)};
+        loom::address_format::unspecified,
+        0UZ,
+        0UZ,
+        loom::caps{},
+        0,
+        0,
+        nullptr,
+        loom::endpoint_iov_limits{1, 1, 1})};
     REQUIRE(fabric.bind_cq(cq, loom::cq_bind::transmit));
     ::asio::io_context ioc;
     loom::asio::endpoint ep{ioc.get_executor(), std::move(fabric)};

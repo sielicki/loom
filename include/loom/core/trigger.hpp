@@ -274,6 +274,9 @@ template <structured_triggered_context Ctx>
         return make_error_result<void>(errc::not_supported);
     }
 
+    if (m.iov.size() > ep.iov_limits().transmit)
+        return make_error_result<void>(errc::invalid_argument);
+
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
 
@@ -320,6 +323,9 @@ template <structured_triggered_context Ctx>
         return make_error_result<void>(errc::not_supported);
     }
 
+    if (m.iov.size() > ep.iov_limits().receive)
+        return make_error_result<void>(errc::invalid_argument);
+
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
 
@@ -361,6 +367,9 @@ template <structured_triggered_context Ctx>
     if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, sendmsg)) {
         return make_error_result<void>(errc::not_supported);
     }
+
+    if (m.iov.size() > ep.iov_limits().transmit)
+        return make_error_result<void>(errc::invalid_argument);
 
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);
@@ -409,6 +418,9 @@ template <structured_triggered_context Ctx>
     if (!FI_CHECK_OP(fid_ep->tagged, fi_ops_tagged, recvmsg)) {
         return make_error_result<void>(errc::not_supported);
     }
+
+    if (m.iov.size() > ep.iov_limits().receive)
+        return make_error_result<void>(errc::invalid_argument);
 
     m.context->set_threshold_trigger(static_cast<::fid_cntr*>(trigger.cntr->impl_internal_ptr()),
                                      trigger.threshold);

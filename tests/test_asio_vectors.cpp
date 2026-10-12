@@ -575,6 +575,57 @@ TEST_CASE("Asio operations register and complete without later submissions",
     REQUIRE(completions == 1);
 }
 
+TEST_CASE("Asio messages report vector limit errors asynchronously", "[asio][endpoint][iov]") {
+    const auto receive = GENERATE(false, true);
+    const auto tagged = GENERATE(false, true);
+    const auto helper = GENERATE(false, true);
+    const auto limit = GENERATE(0UZ, 1UZ);
+    vector_provider native;
+    native.limits =
+        receive ? loom::endpoint_iov_limits{64, limit, 1} : loom::endpoint_iov_limits{limit, 64, 1};
+    ::asio::io_context ioc;
+    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    std::array<std::byte, 2> storage{};
+    const std::array buffers{::asio::buffer(storage.data(), 1),
+                             ::asio::buffer(storage.data() + 1, 1)};
+    int completed{};
+    const auto handler =
+        ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
+            ++completed;
+            CHECK(error == loom::errc::invalid_argument);
+            CHECK(bytes == 0);
+        });
+    const loom::fabric_addr peer{19};
+    if (receive) {
+        if (helper) {
+            if (tagged)
+                loom::asio::initiate_fabric_tagged_recv{ep.native_handle()}(
+                    handler, buffers, 42, 0, peer);
+            else
+                loom::asio::initiate_fabric_recv{ep.native_handle()}(handler, buffers, peer);
+        } else if (tagged)
+            ep.async_tagged_receive_from(buffers, peer, 42, 0, handler);
+        else
+            ep.async_receive_from(buffers, peer, handler);
+    } else {
+        if (helper) {
+            if (tagged)
+                loom::asio::initiate_fabric_tagged_send{ep.native_handle()}(
+                    handler, buffers, 42, peer);
+            else
+                loom::asio::initiate_fabric_send{ep.native_handle()}(handler, buffers, peer);
+        } else if (tagged)
+            ep.async_tagged_send_to(buffers, peer, 42, handler);
+        else
+            ep.async_send_to(buffers, peer, handler);
+    }
+    CHECK(completed == 0);
+    CHECK(native.attempted_context == nullptr);
+    CHECK_FALSE(native.completion_pending);
+    ioc.run();
+    CHECK(completed == 1);
+}
+
 TEST_CASE("Asio messages preserve registered peers and descriptors", "[asio][endpoint][buffer]") {
     const auto receive = GENERATE(false, true);
     const auto tagged = GENERATE(false, true);

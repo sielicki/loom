@@ -198,7 +198,8 @@ struct blocking_provider {
             loom::caps{},
             FI_MORE | FI_FENCE | FI_DELIVERY_COMPLETE,
             rx_defaults,
-            &domain_handle)};
+            &domain_handle,
+            loom::endpoint_iov_limits{2, 2, 1})};
         REQUIRE(ep.bind_cq(cq, loom::cq_bind::transmit | loom::cq_bind::recv));
         return ep;
     }

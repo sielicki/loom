@@ -63,11 +63,18 @@ struct cancellation_provider {
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .ops = &endpoint_ops, .msg = &messages};
 
     auto endpoint() -> loom::endpoint {
-        auto ep = loom::endpoint{
-            loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
-                                                                       &handle,
-                                                                       loom::endpoint_types::msg,
-                                                                       loom::address_format::inet)};
+        auto ep = loom::endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+            loom::get_default_resource(),
+            &handle,
+            loom::endpoint_types::msg,
+            loom::address_format::inet,
+            0UZ,
+            0UZ,
+            loom::caps{},
+            0,
+            0,
+            nullptr,
+            loom::endpoint_iov_limits{1, 1, 1})};
         REQUIRE(ep.bind_cq(queue, loom::cq_bind::recv | loom::cq_bind::transmit));
         return ep;
     }

@@ -7,6 +7,7 @@
 #include <loom/detail/impl/shared_context_impl.hpp>
 #include <loom/loom.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <thread>
@@ -19,6 +20,7 @@
 namespace {
 struct message_provider {
     int calls{};
+    loom::endpoint_iov_limits limits{64, 64, 64};
     int status{};
     std::uint64_t flags{}, tx_defaults{}, rx_defaults{}, data{}, tag{}, ignore{};
     fi_addr_t peer{};
@@ -120,18 +122,18 @@ struct message_provider {
     fid_domain domain_handle{.fid = {.ops = &ops}};
 
     auto endpoint() -> loom::endpoint {
-        return loom::endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
-            loom::get_default_resource(),
-            &handle,
-            loom::endpoint_types::rdm,
-            loom::address_format::inet,
-            0UZ,
-            0UZ,
-            loom::caps{},
-            tx_defaults,
-            rx_defaults,
-            nullptr,
-            loom::endpoint_iov_limits{64, 64, 64})};
+        return loom::endpoint{
+            loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
+                                                                       &handle,
+                                                                       loom::endpoint_types::rdm,
+                                                                       loom::address_format::inet,
+                                                                       0UZ,
+                                                                       0UZ,
+                                                                       loom::caps{},
+                                                                       tx_defaults,
+                                                                       rx_defaults,
+                                                                       nullptr,
+                                                                       limits)};
     }
     auto counter() -> loom::counter {
         return loom::counter{loom::detail::make_pmr_unique<loom::detail::counter_impl>(
@@ -175,6 +177,157 @@ constexpr auto receive_flag_cases = [] {
 
 enum class unavailable_operation { endpoint, table, entry, layout };
 }  // namespace
+
+TEST_CASE("message vectors enforce directional IOV limits", "[message][iov]") {
+    using namespace loom;
+    enum class form { vector, message, inherited, member };
+    const auto shared = GENERATE(false, true);
+    const auto path = shared ? GENERATE(form::vector, form::message, form::inherited)
+                             : GENERATE(form::vector, form::message, form::inherited, form::member);
+    const auto receive = shared || GENERATE(false, true);
+    const auto tagged = path != form::member && GENERATE(false, true);
+    const auto limit = GENERATE(0UZ, 1UZ, 16UZ, 17UZ);
+    const auto delta = GENERATE(-1, 0, 1);
+    const auto count = static_cast<std::size_t>(std::max(0, static_cast<int>(limit) + delta));
+    const auto status = GENERATE(0, -FI_EAGAIN);
+    CAPTURE(shared, path, receive, tagged, limit, count, status);
+    message_provider native;
+    native.limits = receive ? endpoint_iov_limits{64, limit, 1} : endpoint_iov_limits{limit, 64, 1};
+    native.status = status;
+    std::array<iovec, 18> storage{};
+    const auto buffers = std::span{storage}.first(count);
+    const std::array<mr_descriptor, 0> descriptors{};
+    auto submit = [&](auto& target) -> void_result {
+        if constexpr (std::same_as<std::remove_cvref_t<decltype(target)>, endpoint>) {
+            if (path == form::member)
+                return receive ? target.recvv(buffers) : target.sendv(buffers);
+            if (!receive) {
+                if (path == form::vector)
+                    return tagged ? tagged_sendv(target, buffers, descriptors, fabric_addr{19}, 42)
+                                  : sendv(target, buffers, descriptors, fabric_addr{19});
+                if (path == form::inherited)
+                    return tagged ? msg::tagged_sendmsg<operation_defaults::inherit>(
+                                        target, msg::tagged_send_message<>{.iov = buffers})
+                                  : msg::sendmsg<operation_defaults::inherit>(
+                                        target, msg::send_message<>{.iov = buffers});
+                return tagged
+                           ? msg::tagged_sendmsg(target, msg::tagged_send_message<>{.iov = buffers})
+                           : msg::sendmsg(target, msg::send_message<>{.iov = buffers});
+            }
+        }
+        if (path == form::vector)
+            return tagged ? tagged_recvv(target, buffers, descriptors, fabric_addr{19}, 42)
+                          : recvv(target, buffers, descriptors, fabric_addr{19});
+        if (path == form::inherited)
+            return tagged ? msg::tagged_recvmsg<operation_defaults::inherit>(
+                                target, msg::tagged_recv_message<>{.iov = buffers})
+                          : msg::recvmsg<operation_defaults::inherit>(
+                                target, msg::recv_message<>{.iov = buffers});
+        return tagged ? msg::tagged_recvmsg(target, msg::tagged_recv_message<>{.iov = buffers})
+                      : msg::recvmsg(target, msg::recv_message<>{.iov = buffers});
+    };
+    const auto result = [&] {
+        if (shared) {
+            shared_rx_context target{detail::make_pmr_unique<detail::shared_rx_context_impl>(
+                get_default_resource(), &native.handle, 0, native.limits.receive)};
+            return submit(target);
+        }
+        auto target = native.endpoint();
+        return submit(target);
+    }();
+    const bool valid = count <= limit;
+    CHECK(native.calls == (valid ? 1 : 0));
+    if (!valid || status) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == (valid ? make_error_code_from_fi_errno(status)
+                                       : make_error_code(errc::invalid_argument)));
+    } else {
+        CHECK(result);
+    }
+}
+
+TEST_CASE("triggered message vectors enforce directional IOV limits", "[message][trigger][iov]") {
+    using namespace loom;
+    const auto deferred = GENERATE(false, true);
+    const auto receive = GENERATE(false, true);
+    const auto tagged = GENERATE(false, true);
+    const auto limit = GENERATE(0UZ, 1UZ, 16UZ, 17UZ);
+    const auto delta = GENERATE(-1, 0, 1);
+    const auto count = static_cast<std::size_t>(std::max(0, static_cast<int>(limit) + delta));
+    const auto status = GENERATE(0, -FI_EAGAIN);
+    CAPTURE(deferred, receive, tagged, limit, count, status);
+    message_provider native;
+    native.limits = receive ? endpoint_iov_limits{64, limit, 1} : endpoint_iov_limits{limit, 64, 1};
+    native.status = status;
+    auto ep = native.endpoint();
+    auto domain = native.domain();
+    auto counter = native.counter();
+    const trigger::threshold_condition condition{&counter, 7};
+    context trigger_context{};
+    std::array<iovec, 18> storage{};
+    const auto buffers = std::span{storage}.first(count);
+    const auto result = [&]() -> void_result {
+        if (deferred) {
+            auto work = [&]() -> loom::result<trigger::deferred_work> {
+                using trigger::deferred_work;
+                if (receive)
+                    return tagged ? deferred_work::create_tagged_recv(
+                                        domain,
+                                        ep,
+                                        condition,
+                                        nullptr,
+                                        msg::tagged_recv_message<>{.iov = buffers})
+                                  : deferred_work::create_recv(domain,
+                                                               ep,
+                                                               condition,
+                                                               nullptr,
+                                                               msg::recv_message<>{.iov = buffers});
+                return tagged ? deferred_work::create_tagged_send(
+                                    domain,
+                                    ep,
+                                    condition,
+                                    nullptr,
+                                    msg::tagged_send_message<>{.iov = buffers})
+                              : deferred_work::create_send(domain,
+                                                           ep,
+                                                           condition,
+                                                           nullptr,
+                                                           msg::send_message<>{.iov = buffers});
+            }();
+            if (!work)
+                return std::unexpected{work.error()};
+            work->mark_completed();
+            return make_success();
+        }
+        if (receive)
+            return tagged
+                       ? trigger::tagged_recvmsg(ep,
+                                                 msg::tagged_recv_message<context*>{
+                                                     .iov = buffers, .context = &trigger_context},
+                                                 condition)
+                       : trigger::recvmsg(ep,
+                                          msg::recv_message<context*>{.iov = buffers,
+                                                                      .context = &trigger_context},
+                                          condition);
+        return tagged ? trigger::tagged_sendmsg(ep,
+                                                msg::tagged_send_message<context*>{
+                                                    .iov = buffers, .context = &trigger_context},
+                                                condition)
+                      : trigger::sendmsg(ep,
+                                         msg::send_message<context*>{.iov = buffers,
+                                                                     .context = &trigger_context},
+                                         condition);
+    }();
+    const bool valid = count <= limit;
+    CHECK(native.calls == (valid ? 1 : 0));
+    if (!valid || status) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == (valid ? make_error_code_from_fi_errno(status)
+                                       : make_error_code(errc::invalid_argument)));
+    } else {
+        CHECK(result);
+    }
+}
 
 TEST_CASE("message APIs reject unavailable native operations", "[message][submission]") {
     const auto unavailable = GENERATE(unavailable_operation::endpoint,
