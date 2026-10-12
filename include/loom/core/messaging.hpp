@@ -135,11 +135,36 @@ namespace detail {
     return loom::detail::native_array<void*>{desc, &mr_descriptor::raw};
 }
 
+[[nodiscard]] constexpr auto valid_receive_flags(std::uint64_t flags) noexcept -> bool {
+    return (flags & (FI_PEEK | FI_CLAIM | FI_DISCARD)) == 0;
+}
+
+[[nodiscard]] constexpr auto valid_tagged_receive_flags(std::uint64_t flags,
+                                                        const void* context) noexcept -> bool {
+    return (!(flags & FI_CLAIM) || context != nullptr) &&
+           (!(flags & FI_DISCARD) || (flags & (FI_PEEK | FI_CLAIM)));
+}
+
+/// The caller validates the endpoint and its recvmsg entry. Descriptor
+/// storage belongs to the caller, allowing persistent, allocation-free inputs.
+[[nodiscard]] inline auto submit_receive(::fid_ep& ep, const ::fi_msg& message, std::uint64_t flags)
+    -> result<void> {
+    if (!valid_receive_flags(flags))
+        return make_error_result<void>(errc::invalid_argument);
+    const auto status = ::fi_recvmsg(&ep, &message, flags);
+    if (status != 0) {
+        return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
+    }
+    return make_success();
+}
+
 /// The caller validates the endpoint and its tagged recvmsg entry. Descriptor
 /// storage belongs to the caller, allowing persistent, allocation-free inputs.
 [[nodiscard]] inline auto submit_tagged_receive(::fid_ep& ep,
                                                 const ::fi_msg_tagged& message,
                                                 std::uint64_t flags) -> result<void> {
+    if (!valid_tagged_receive_flags(flags, message.context))
+        return make_error_result<void>(errc::invalid_argument);
     const auto status = ::fi_trecvmsg(&ep, &message, flags);
     if (status != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-status));
@@ -263,6 +288,7 @@ template <context_like Ctx>
 
 /**
  * @brief Receives a message using scatter/gather I/O.
+ * Tagged-only peek, claim and discard flags return errc::invalid_argument.
  * @tparam Ctx The context type for completion handling.
  * @param ep The endpoint for the operation.
  * @param msg The message descriptor.
@@ -297,12 +323,7 @@ template <operation_defaults Defaults, context_like Ctx>
 
     const auto native_flags = loom::detail::operation_flags<Defaults>(
         ep, completion_direction::receive, detail::translate_recv_flags(flags));
-    auto ret = ::fi_recvmsg(fid_ep, &fi_m, native_flags);
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
-    }
-
-    return make_success();
+    return detail::submit_receive(*fid_ep, fi_m, native_flags);
 }
 
 /// Per-call flags replace defaults unless an explicit inheritance policy is selected.
@@ -376,6 +397,9 @@ template <context_like Ctx>
  * receive or discard completes. Do not move, clear, or recycle its storage
  * after the peek completion. Discard requires peek or claim. These flags
  * apply only to tagged receives; support depends on the selected provider.
+ * A null claim context or discard without peek/claim returns
+ * errc::invalid_argument before submission. The caller remains responsible
+ * for the context's native type, storage lifetime and paired claim state.
  * @tparam Ctx The context type for completion handling.
  * @param ep The endpoint for the operation.
  * @param msg The tagged message descriptor.

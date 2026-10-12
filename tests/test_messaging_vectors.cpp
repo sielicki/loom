@@ -4,6 +4,7 @@
 #include <loom/detail/impl/counter_impl.hpp>
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
+#include <loom/detail/impl/shared_context_impl.hpp>
 #include <loom/loom.hpp>
 
 #include <array>
@@ -13,6 +14,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <catch2/generators/catch_generators_range.hpp>
 
 namespace {
 struct message_provider {
@@ -58,12 +60,11 @@ struct message_provider {
                 case FI_OP_SEND:
                 case FI_OP_RECV:
                     return static_cast<int>(
-                        record(work.op.msg->ep, work.op.msg->msg.desc, work.op.msg->msg.iov_count));
+                        record_message(work.op.msg->ep, &work.op.msg->msg, work.op.msg->flags));
                 case FI_OP_TSEND:
                 case FI_OP_TRECV:
-                    return static_cast<int>(record(work.op.tagged->ep,
-                                                   work.op.tagged->msg.desc,
-                                                   work.op.tagged->msg.iov_count));
+                    return static_cast<int>(record_message(
+                        work.op.tagged->ep, &work.op.tagged->msg, work.op.tagged->flags));
                 case FI_OP_READ:
                 case FI_OP_WRITE:
                     return static_cast<int>(
@@ -141,6 +142,34 @@ struct message_provider {
 };
 
 struct context : loom::triggered_context<context> {};
+
+struct receive_flag_case {
+    loom::msg::recv_flags flags;
+    std::uint64_t native;
+    bool untagged_valid;
+    bool tagged_valid;
+    bool needs_context;
+};
+
+constexpr auto receive_flag_cases = [] {
+    using namespace loom::msg;
+    return std::array{
+        receive_flag_case{recv_flag::none, 0, true, true, false},
+        receive_flag_case{recv_flag::peek, FI_PEEK, false, true, false},
+        receive_flag_case{recv_flag::claim, FI_CLAIM, false, true, true},
+        receive_flag_case{recv_flag::discard, FI_DISCARD, false, false, false},
+        receive_flag_case{
+            recv_flag::peek | recv_flag::claim, FI_PEEK | FI_CLAIM, false, true, true},
+        receive_flag_case{
+            recv_flag::peek | recv_flag::discard, FI_PEEK | FI_DISCARD, false, true, false},
+        receive_flag_case{
+            recv_flag::claim | recv_flag::discard, FI_CLAIM | FI_DISCARD, false, true, true},
+        receive_flag_case{recv_flag::peek | recv_flag::claim | recv_flag::discard,
+                          FI_PEEK | FI_CLAIM | FI_DISCARD,
+                          false,
+                          true,
+                          true}};
+}();
 
 enum class unavailable_operation { endpoint, table, entry, layout };
 }  // namespace
@@ -442,6 +471,158 @@ TEST_CASE("message flags distinguish inherited direction from explicit overrides
         REQUIRE(result.error() == make_error_code_from_fi_errno(-status));
     else
         REQUIRE(result);
+}
+
+TEST_CASE("receive messages validate effective probe flags", "[message][probe][validation]") {
+    using namespace loom;
+    const auto entry = GENERATE(Catch::Generators::from_range(receive_flag_cases));
+    const auto tagged = GENERATE(false, true);
+    const auto with_context = GENERATE(false, true);
+    const auto from_defaults = GENERATE(false, true);
+    const auto policy = GENERATE(operation_defaults::replace,
+                                 operation_defaults::inherit,
+                                 operation_defaults::inherit_without_more);
+    const auto shared = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN);
+    CAPTURE(entry.native, tagged, with_context, from_defaults, policy, shared, status);
+    message_provider native;
+    native.status = status;
+    native.rx_defaults = FI_MORE | (from_defaults ? entry.native : 0);
+    fi_context2 context{};
+    const auto selected_flags =
+        (from_defaults ? msg::recv_flag::none : entry.flags) | msg::recv_flag::completion;
+    const bool inherited = policy != operation_defaults::replace;
+    const bool probe_applies = !from_defaults || inherited;
+    const bool valid =
+        !probe_applies || (tagged ? entry.tagged_valid && (!entry.needs_context || with_context)
+                                  : entry.untagged_valid);
+    auto submit = [&]<operation_defaults Defaults>(auto& ep) {
+        if (tagged)
+            return msg::tagged_recvmsg<Defaults>(
+                ep,
+                msg::tagged_recv_message<>{.context = with_context ? &context : nullptr},
+                selected_flags);
+        return msg::recvmsg<Defaults>(
+            ep, msg::recv_message<>{.context = with_context ? &context : nullptr}, selected_flags);
+    };
+    auto run = [&](auto& ep) {
+        switch (policy) {
+            case operation_defaults::replace:
+                return submit.template operator()<operation_defaults::replace>(ep);
+            case operation_defaults::inherit:
+                return submit.template operator()<operation_defaults::inherit>(ep);
+            default:
+                return submit.template operator()<operation_defaults::inherit_without_more>(ep);
+        }
+    };
+    const auto result = [&] {
+        if (shared) {
+            shared_rx_context ep{detail::make_pmr_unique<detail::shared_rx_context_impl>(
+                get_default_resource(), &native.handle, native.rx_defaults)};
+            return run(ep);
+        }
+        auto ep = native.endpoint();
+        return run(ep);
+    }();
+    CHECK(native.calls == (valid ? 1 : 0));
+    if (!valid) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == errc::invalid_argument);
+    } else {
+        CHECK(native.flags == (FI_COMPLETION | (probe_applies ? entry.native : 0) |
+                               (policy == operation_defaults::inherit ? FI_MORE : 0)));
+        CHECK(native.operation_context == (with_context ? &context : nullptr));
+        if (status) {
+            REQUIRE_FALSE(result);
+            CHECK(result.error() == make_error_code_from_fi_errno(status));
+        } else {
+            CHECK(result);
+        }
+    }
+}
+
+TEST_CASE("tagged discard can inherit its peek flag", "[message][probe][validation]") {
+    using namespace loom;
+    message_provider native;
+    native.rx_defaults = FI_PEEK;
+    auto ep = native.endpoint();
+    REQUIRE(msg::tagged_recvmsg<operation_defaults::inherit>(
+        ep, msg::tagged_recv_message<>{}, msg::recv_flag::discard));
+    CHECK(native.calls == 1);
+    CHECK(native.flags == (FI_PEEK | FI_DISCARD));
+}
+
+TEST_CASE("triggered receives validate probe flags", "[message][trigger][validation]") {
+    using namespace loom;
+    const auto entry = GENERATE(Catch::Generators::from_range(receive_flag_cases));
+    const auto tagged = GENERATE(false, true);
+    const auto deferred = GENERATE(false, true);
+    const auto with_context = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EAGAIN);
+    CAPTURE(entry.native, tagged, deferred, with_context, status);
+    message_provider native;
+    native.status = status;
+    auto ep = native.endpoint();
+    auto domain = native.domain();
+    auto counter = native.counter();
+    const trigger::threshold_condition condition{&counter, 7};
+    context trigger_context{};
+    fi_context2 deferred_context{};
+    auto* provided_context = with_context ? &deferred_context : nullptr;
+    // Deferred work supplies its embedded fi_context2 when none is provided.
+    const bool valid =
+        (tagged ? entry.tagged_valid : entry.untagged_valid) && (deferred || with_context);
+    const auto result = [&]() -> void_result {
+        if (deferred) {
+            auto work = tagged ? trigger::deferred_work::create_tagged_recv(
+                                     domain,
+                                     ep,
+                                     condition,
+                                     nullptr,
+                                     msg::tagged_recv_message<>{.context = provided_context},
+                                     entry.flags)
+                               : trigger::deferred_work::create_recv(
+                                     domain,
+                                     ep,
+                                     condition,
+                                     nullptr,
+                                     msg::recv_message<>{.context = provided_context},
+                                     entry.flags);
+            if (!work)
+                return std::unexpected{work.error()};
+            CHECK(native.operation_context ==
+                  (with_context ? provided_context : work->internal_ptr()));
+            work->mark_completed();
+            return make_success();
+        }
+        if (tagged)
+            return trigger::tagged_recvmsg(
+                ep,
+                msg::tagged_recv_message<context*>{.context =
+                                                       with_context ? &trigger_context : nullptr},
+                condition,
+                entry.flags);
+        return trigger::recvmsg(
+            ep,
+            msg::recv_message<context*>{.context = with_context ? &trigger_context : nullptr},
+            condition,
+            entry.flags);
+    }();
+    CHECK(native.calls == (valid ? 1 : 0));
+    if (!valid) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == errc::invalid_argument);
+    } else {
+        CHECK(native.flags == (entry.native | (deferred ? 0 : FI_TRIGGER)));
+        if (!deferred)
+            CHECK(native.operation_context == trigger_context.raw());
+        if (status) {
+            REQUIRE_FALSE(result);
+            CHECK(result.error() == make_error_code_from_fi_errno(status));
+        } else {
+            CHECK(result);
+        }
+    }
 }
 
 TEST_CASE("tagged probe flags and context reach the provider", "[message][probe]") {

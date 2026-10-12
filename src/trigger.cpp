@@ -151,6 +151,8 @@ auto deferred_work::create_recv(domain& dom,
     impl->op_msg.msg.context = msg.context ? msg.context : &impl->work.context;
     impl->op_msg.msg.data = 0;
     impl->op_msg.flags = loom::msg::detail::translate_recv_flags(flags);
+    if (!loom::msg::detail::valid_receive_flags(impl->op_msg.flags))
+        return make_error_result<deferred_work>(errc::invalid_argument);
 
     impl->work.threshold = trigger.threshold;
     impl->work.triggering_cntr =
@@ -255,6 +257,9 @@ auto deferred_work::create_tagged_recv(domain& dom,
     impl->op_tagged.msg.context = msg.context ? msg.context : &impl->work.context;
     impl->op_tagged.msg.data = 0;
     impl->op_tagged.flags = loom::msg::detail::translate_recv_flags(flags);
+    if (!loom::msg::detail::valid_tagged_receive_flags(impl->op_tagged.flags,
+                                                       impl->op_tagged.msg.context))
+        return make_error_result<deferred_work>(errc::invalid_argument);
 
     impl->work.threshold = trigger.threshold;
     impl->work.triggering_cntr =

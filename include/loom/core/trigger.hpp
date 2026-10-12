@@ -163,6 +163,8 @@ public:
                                                  memory_resource* resource = nullptr)
         -> result<deferred_work>;
 
+    /// Claims using the embedded context must keep this work object alive
+    /// until the paired claim receive or discard completes.
     [[nodiscard]] static auto create_tagged_recv(domain& dom,
                                                  endpoint& ep,
                                                  const threshold_condition& trigger,
@@ -334,12 +336,8 @@ template <structured_triggered_context Ctx>
     fi_m.context = m.context->raw();
     fi_m.data = 0;
 
-    auto ret = ::fi_recvmsg(fid_ep, &fi_m, msg::detail::translate_recv_flags(flags) | FI_TRIGGER);
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
-    }
-
-    return make_success();
+    return msg::detail::submit_receive(
+        *fid_ep, fi_m, msg::detail::translate_recv_flags(flags) | FI_TRIGGER);
 }
 
 /**
@@ -430,12 +428,8 @@ template <structured_triggered_context Ctx>
     fi_m.context = m.context->raw();
     fi_m.data = 0;
 
-    auto ret = ::fi_trecvmsg(fid_ep, &fi_m, msg::detail::translate_recv_flags(flags) | FI_TRIGGER);
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
-    }
-
-    return make_success();
+    return msg::detail::submit_tagged_receive(
+        *fid_ep, fi_m, msg::detail::translate_recv_flags(flags) | FI_TRIGGER);
 }
 
 /**
