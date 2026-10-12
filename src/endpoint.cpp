@@ -65,6 +65,10 @@ auto endpoint::impl_operation_flags(completion_direction direction) const noexce
     return 0;
 }
 
+auto endpoint::iov_limits() const noexcept -> endpoint_iov_limits {
+    return impl_ && impl_->ep ? impl_->iov_limits : endpoint_iov_limits{};
+}
+
 auto endpoint::belongs_to(const domain& dom) const noexcept -> bool {
     return impl_ && impl_->ep && dom && impl_->origin_domain == dom.internal_ptr();
 }
@@ -100,31 +104,35 @@ auto endpoint::create(const domain& dom, const fabric_info& info, memory_resourc
     const auto rx_flags = info_ptr->rx_attr ? info_ptr->rx_attr->op_flags : 0;
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
-                                                                   ep,
-                                                                   ep_type,
-                                                                   addr_fmt,
-                                                                   max_msg_size,
-                                                                   inject_size,
-                                                                   capabilities,
-                                                                   tx_flags,
-                                                                   rx_flags,
-                                                                   dom_ptr);
+        auto impl =
+            detail::make_pmr_unique<detail::endpoint_impl>(resource,
+                                                           ep,
+                                                           ep_type,
+                                                           addr_fmt,
+                                                           max_msg_size,
+                                                           inject_size,
+                                                           capabilities,
+                                                           tx_flags,
+                                                           rx_flags,
+                                                           dom_ptr,
+                                                           detail::from_fi_iov_limits(*info_ptr));
         (void)pending.release();
         return endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::endpoint_impl>(default_resource,
-                                                               ep,
-                                                               ep_type,
-                                                               addr_fmt,
-                                                               max_msg_size,
-                                                               inject_size,
-                                                               capabilities,
-                                                               tx_flags,
-                                                               rx_flags,
-                                                               dom_ptr);
+    auto impl =
+        detail::make_pmr_unique<detail::endpoint_impl>(default_resource,
+                                                       ep,
+                                                       ep_type,
+                                                       addr_fmt,
+                                                       max_msg_size,
+                                                       inject_size,
+                                                       capabilities,
+                                                       tx_flags,
+                                                       rx_flags,
+                                                       dom_ptr,
+                                                       detail::from_fi_iov_limits(*info_ptr));
     (void)pending.release();
     return endpoint{std::move(impl)};
 }

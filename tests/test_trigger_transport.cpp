@@ -87,7 +87,8 @@ struct trigger_provider {
     loom::domain domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
         loom::get_default_resource(), &domain_handle)};
     loom::endpoint endpoint;
-    explicit trigger_provider(fid_domain* origin = nullptr)
+    explicit trigger_provider(fid_domain* origin = nullptr,
+                              loom::endpoint_iov_limits limits = {64, 64, 64})
         : endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
               loom::get_default_resource(),
               &endpoint_handle,
@@ -98,7 +99,8 @@ struct trigger_provider {
               loom::caps{},
               0,
               0,
-              origin ? origin : &domain_handle)} {}
+              origin ? origin : &domain_handle,
+              limits)} {}
     loom::counter counter{loom::detail::make_pmr_unique<loom::detail::counter_impl>(
         loom::get_default_resource(), &counter_handle)};
 
@@ -106,6 +108,7 @@ struct trigger_provider {
         -> loom::result<loom::trigger::deferred_work> {
         using loom::trigger::deferred_work;
         const loom::trigger::threshold_condition condition{trigger, 7};
+        const std::array remote{loom::rma::rma_iov{}};
         switch (operation) {
             case 0:
                 return deferred_work::create_send(domain, endpoint, condition, completion, {});
@@ -119,10 +122,10 @@ struct trigger_provider {
                     domain, endpoint, condition, completion, {});
             case 4:
                 return deferred_work::create_read(
-                    domain, endpoint, condition, completion, {}, {}, {});
+                    domain, endpoint, condition, completion, {}, {}, remote);
             case 5:
                 return deferred_work::create_write(
-                    domain, endpoint, condition, completion, {}, {}, {});
+                    domain, endpoint, condition, completion, {}, {}, remote);
             case 6:
                 return deferred_work::create_counter_set(domain, condition, counter, 1);
             default:
@@ -186,6 +189,41 @@ TEST_CASE("unavailable native cancellation retains deferred work", "[trigger]") 
     REQUIRE_FALSE(work->is_pending());
     REQUIRE(native.pending == nullptr);
     REQUIRE(native.cancellations == 1);
+}
+
+TEST_CASE("deferred RMA enforces negotiated IOV counts", "[trigger][iov]") {
+    using namespace loom;
+    const auto write = GENERATE(false, true);
+    const auto tx_limit = GENERATE(0UZ, 2UZ, 17UZ);
+    const auto remote_limit = GENERATE(0UZ, 3UZ, 17UZ);
+    const auto local_count = GENERATE(0UZ, 1UZ, 2UZ, 3UZ, 16UZ, 17UZ, 18UZ);
+    const auto remote_count = GENERATE(0UZ, 1UZ, 2UZ, 3UZ, 4UZ, 16UZ, 17UZ, 18UZ);
+    CAPTURE(write, tx_limit, remote_limit, local_count, remote_count);
+    trigger_provider native{nullptr, {tx_limit, 64, remote_limit}};
+    std::array<iovec, 18> local{};
+    std::array<rma::rma_iov, 18> remote{};
+    const auto local_iov = std::span{local}.first(local_count);
+    const auto remote_iov = std::span{remote}.first(remote_count);
+    const trigger::threshold_condition condition{&native.counter, 7};
+    auto work =
+        write ? trigger::deferred_work::create_write(
+                    native.domain, native.endpoint, condition, nullptr, local_iov, {}, remote_iov)
+              : trigger::deferred_work::create_read(
+                    native.domain, native.endpoint, condition, nullptr, local_iov, {}, remote_iov);
+    const bool valid = remote_count != 0 && local_count <= tx_limit && remote_count <= remote_limit;
+    CHECK(native.submissions == (valid ? 1 : 0));
+    if (valid) {
+        REQUIRE(work);
+        REQUIRE(native.pending);
+        CHECK(native.pending->op.rma->msg.iov_count == local_count);
+        CHECK(native.pending->op.rma->msg.rma_iov_count == remote_count);
+        REQUIRE(work->cancel());
+    } else {
+        REQUIRE_FALSE(work);
+        CHECK(work.error() == errc::invalid_argument);
+        CHECK(native.pending == nullptr);
+        CHECK(native.cancellations == 0);
+    }
 }
 
 TEST_CASE("deferred RMA validates vector ranges before queuing work", "[trigger][bounds]") {

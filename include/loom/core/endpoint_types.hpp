@@ -2,6 +2,7 @@
 #pragma once
 
 #include <concepts>
+#include <cstddef>
 #include <variant>
 
 /**
@@ -9,6 +10,18 @@
  * @brief Core namespace for the loom libfabric bindings library.
  */
 namespace loom {
+
+/// Maximum vector counts negotiated when an endpoint is created.
+/// Transmit covers local RMA buffers as well as sends; rma covers remote
+/// segments. Zero means no vector capacity was reported for that direction.
+struct endpoint_iov_limits {
+    std::size_t transmit{};
+    std::size_t receive{};
+    std::size_t rma{};
+
+    [[nodiscard]] constexpr auto operator==(const endpoint_iov_limits&) const noexcept
+        -> bool = default;
+};
 
 /**
  * @struct msg_endpoint_tag

@@ -22,6 +22,7 @@
 namespace {
 struct vector_provider {
     fid_domain domain_handle{};
+    loom::endpoint_iov_limits limits{64, 64, 64};
     std::span<const iovec> buffers;
     void* context{};
     void* attempted_context{};
@@ -195,7 +196,8 @@ struct vector_provider {
                                                                        loom::caps{},
                                                                        transmit_defaults,
                                                                        receive_defaults,
-                                                                       &domain_handle)};
+                                                                       &domain_handle,
+                                                                       limits)};
         if (bindings.has(loom::cq_bind::transmit))
             REQUIRE(ep.bind_cq(tx, loom::cq_bind::transmit));
         if (bindings.has(loom::cq_bind::recv))
@@ -302,7 +304,9 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
         unmapped,
         foreign_domain,
         unknown_domain,
-        disabled
+        disabled,
+        local_iov_limit,
+        remote_iov_limit
     };
     const auto local = GENERATE(local_range::valid,
                                 local_range::empty,
@@ -312,11 +316,17 @@ TEST_CASE("Asio RMA preserves registered peers and remote bounds", "[asio][endpo
                                 local_range::unmapped,
                                 local_range::foreign_domain,
                                 local_range::unknown_domain,
-                                local_range::disabled);
+                                local_range::disabled,
+                                local_range::local_iov_limit,
+                                local_range::remote_iov_limit);
     const bool invalid_range = range != remote_range::valid || local != local_range::valid;
     const auto null_descriptor = GENERATE(false, true);
     vector_provider native;
     native.submission_status = status;
+    if (local == local_range::local_iov_limit)
+        native.limits.transmit = 1;
+    if (local == local_range::remote_iov_limit)
+        native.limits.rma = 0;
     ::asio::io_context ioc;
     loom::asio::endpoint ep{ioc.get_executor(),
                             native.endpoint(loom::cq_bind::transmit | loom::cq_bind::recv,

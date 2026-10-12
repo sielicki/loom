@@ -148,6 +148,9 @@ public:
     /// Current untagged inject bound; unsupported size queries use the creation attributes.
     [[nodiscard]] auto message_inject_size() const -> result<std::size_t>;
 
+    /// Negotiated vector counts; empty endpoints and missing metadata return zero.
+    [[nodiscard]] auto iov_limits() const noexcept -> endpoint_iov_limits;
+
     [[nodiscard]] auto send(std::span<const std::byte> data, context_ptr<void> ctx = {})
         -> void_result;
 

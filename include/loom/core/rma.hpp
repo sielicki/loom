@@ -130,6 +130,13 @@ struct rma_iov {
 };
 
 namespace detail {
+/// Check negotiated local and remote vector bounds before native dispatch.
+[[nodiscard]] inline auto
+valid_iov_counts(const endpoint& ep, std::size_t local, std::size_t remote) noexcept -> bool {
+    const auto limits = ep.iov_limits();
+    return remote != 0 && local <= limits.transmit && remote <= limits.rma;
+}
+
 /// Native RMA consumes complete SGLs; their totals must agree without wrapping.
 [[nodiscard]] constexpr auto valid_iov_ranges(std::span<const iovec> local,
                                               std::span<const rma_iov> remote) noexcept -> bool {
@@ -212,6 +219,9 @@ auto readv_to(endpoint& ep,
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, readmsg)) {
         return make_error_result<void>(errc::not_supported);
     }
+
+    if (!detail::valid_iov_counts(ep, local_iov.size(), remote_iov.size()))
+        return make_error_result<void>(errc::invalid_argument);
 
     loom::detail::native_array<void*> raw_desc{desc, &mr_descriptor::raw};
     loom::detail::native_array<::fi_rma_iov> raw_remote{
@@ -331,6 +341,9 @@ auto writev_to(endpoint& ep,
     if (!FI_CHECK_OP(fid_ep->rma, fi_ops_rma, writemsg)) {
         return make_error_result<void>(errc::not_supported);
     }
+
+    if (!detail::valid_iov_counts(ep, local_iov.size(), remote_iov.size()))
+        return make_error_result<void>(errc::invalid_argument);
 
     loom::detail::native_array<void*> raw_desc{desc, &mr_descriptor::raw};
     loom::detail::native_array<::fi_rma_iov> raw_remote{

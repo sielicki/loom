@@ -21,6 +21,14 @@
  */
 namespace loom::detail {
 
+/// Preserve negotiated bounds, including a provider's explicit zero limits.
+[[nodiscard]] constexpr auto from_fi_iov_limits(const ::fi_info& info) noexcept
+    -> endpoint_iov_limits {
+    return {.transmit = info.tx_attr ? info.tx_attr->iov_limit : 0,
+            .receive = info.rx_attr ? info.rx_attr->iov_limit : 0,
+            .rma = info.tx_attr ? info.tx_attr->rma_iov_limit : 0};
+}
+
 [[nodiscard]] constexpr auto from_fi_counter_limit(std::uint64_t limit) noexcept -> std::uint64_t {
     return limit ? limit : std::numeric_limits<std::uint64_t>::max();
 }

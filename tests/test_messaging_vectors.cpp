@@ -120,16 +120,18 @@ struct message_provider {
     fid_domain domain_handle{.fid = {.ops = &ops}};
 
     auto endpoint() -> loom::endpoint {
-        return loom::endpoint{
-            loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
-                                                                       &handle,
-                                                                       loom::endpoint_types::rdm,
-                                                                       loom::address_format::inet,
-                                                                       0UZ,
-                                                                       0UZ,
-                                                                       loom::caps{},
-                                                                       tx_defaults,
-                                                                       rx_defaults)};
+        return loom::endpoint{loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(
+            loom::get_default_resource(),
+            &handle,
+            loom::endpoint_types::rdm,
+            loom::address_format::inet,
+            0UZ,
+            0UZ,
+            loom::caps{},
+            tx_defaults,
+            rx_defaults,
+            nullptr,
+            loom::endpoint_iov_limits{64, 64, 64})};
     }
     auto counter() -> loom::counter {
         return loom::counter{loom::detail::make_pmr_unique<loom::detail::counter_impl>(

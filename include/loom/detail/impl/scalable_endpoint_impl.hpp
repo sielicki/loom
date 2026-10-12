@@ -29,6 +29,7 @@ struct scalable_endpoint_impl {
     std::uint64_t tx_op_flags{};
     std::uint64_t rx_op_flags{};
     ::fid_domain* origin_domain{};
+    endpoint_iov_limits iov_limits{};
 
     /// @brief Default constructor.
     scalable_endpoint_impl() = default;
@@ -44,6 +45,7 @@ struct scalable_endpoint_impl {
     /// @param capabilities_ The negotiated capabilities inherited by contexts.
     /// @param tx_op_flags_ Native transmit flags from the creation attributes.
     /// @param rx_op_flags_ Native receive flags from the creation attributes.
+    /// @param limits Negotiated vector counts; omit only when no vector I/O is used.
     scalable_endpoint_impl(::fid_ep* sep_,
                            std::size_t tx_cnt,
                            std::size_t rx_cnt,
@@ -54,10 +56,12 @@ struct scalable_endpoint_impl {
                            caps capabilities_ = {},
                            std::uint64_t tx_op_flags_ = 0,
                            std::uint64_t rx_op_flags_ = 0,
-                           ::fid_domain* origin = nullptr)
+                           ::fid_domain* origin = nullptr,
+                           endpoint_iov_limits limits = {})
         : sep(sep_), tx_ctx_cnt(tx_cnt), rx_ctx_cnt(rx_cnt), type(type_), addr_format(format),
           max_msg_size(max_msg_size_), inject_size(inject_size_), capabilities(capabilities_),
-          tx_op_flags(tx_op_flags_), rx_op_flags(rx_op_flags_), origin_domain(origin) {}
+          tx_op_flags(tx_op_flags_), rx_op_flags(rx_op_flags_), origin_domain(origin),
+          iov_limits(limits) {}
 
     /// @brief Destructor that closes the libfabric scalable endpoint.
     ~scalable_endpoint_impl() {
@@ -127,35 +131,39 @@ auto scalable_endpoint::create(const domain& dom,
     }
 
     if (resource) {
-        auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(resource,
-                                                                            sep,
-                                                                            tx_ctx_cnt,
-                                                                            rx_ctx_cnt,
-                                                                            type,
-                                                                            format,
-                                                                            max_msg_size,
-                                                                            inject_size,
-                                                                            capabilities,
-                                                                            tx_flags,
-                                                                            rx_flags,
-                                                                            dom_ptr);
+        auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
+            resource,
+            sep,
+            tx_ctx_cnt,
+            rx_ctx_cnt,
+            type,
+            format,
+            max_msg_size,
+            inject_size,
+            capabilities,
+            tx_flags,
+            rx_flags,
+            dom_ptr,
+            detail::from_fi_iov_limits(*info_ptr));
         (void)pending.release();
         return scalable_endpoint{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
-    auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(default_resource,
-                                                                        sep,
-                                                                        tx_ctx_cnt,
-                                                                        rx_ctx_cnt,
-                                                                        type,
-                                                                        format,
-                                                                        max_msg_size,
-                                                                        inject_size,
-                                                                        capabilities,
-                                                                        tx_flags,
-                                                                        rx_flags,
-                                                                        dom_ptr);
+    auto impl = detail::make_pmr_unique<detail::scalable_endpoint_impl>(
+        default_resource,
+        sep,
+        tx_ctx_cnt,
+        rx_ctx_cnt,
+        type,
+        format,
+        max_msg_size,
+        inject_size,
+        capabilities,
+        tx_flags,
+        rx_flags,
+        dom_ptr,
+        detail::from_fi_iov_limits(*info_ptr));
     (void)pending.release();
     return scalable_endpoint{std::move(impl)};
 }
@@ -221,7 +229,8 @@ auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
                                                                   impl_->capabilities,
                                                                   impl_->tx_op_flags,
                                                                   impl_->rx_op_flags,
-                                                                  impl_->origin_domain);
+                                                                  impl_->origin_domain,
+                                                                  impl_->iov_limits);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }
@@ -254,7 +263,8 @@ auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
                                                                   impl_->capabilities,
                                                                   impl_->tx_op_flags,
                                                                   impl_->rx_op_flags,
-                                                                  impl_->origin_domain);
+                                                                  impl_->origin_domain,
+                                                                  impl_->iov_limits);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }

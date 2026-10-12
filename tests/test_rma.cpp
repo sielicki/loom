@@ -41,6 +41,7 @@ TEST_CASE("RMA operations reject an empty endpoint", "[rma]") {
 namespace {
 struct rma_provider {
     std::size_t calls{};
+    endpoint_iov_limits limits{64, 64, 64};
     std::uint64_t flags{};
     std::uint64_t defaults{};
     fi_addr_t peer{};
@@ -81,7 +82,8 @@ struct rma_provider {
                                                                        loom::caps{},
                                                                        defaults,
                                                                        0,
-                                                                       origin)};
+                                                                       origin,
+                                                                       limits)};
     }
 
     auto transfer(const fi_msg_rma& msg, bool write, std::uint64_t requested_flags) -> ssize_t {
@@ -123,6 +125,54 @@ struct rma_provider {
     }
 };
 }  // namespace
+
+TEST_CASE("vectored RMA enforces negotiated IOV counts", "[rma][iov]") {
+    const auto limit = GENERATE(0UZ, 1UZ, 16UZ, 17UZ);
+    const auto local_delta = GENERATE(-1, 0, 1);
+    const auto remote_delta = GENERATE(-1, 0, 1);
+    const auto form = GENERATE(0, 1, 2, 3, 4, 5);
+    const auto status = GENERATE(0, -FI_EAGAIN);
+    const auto local_count =
+        static_cast<std::size_t>(std::max(0, static_cast<int>(limit) + local_delta));
+    const auto remote_count = static_cast<std::size_t>(static_cast<int>(limit) + 2 + remote_delta);
+    CAPTURE(limit, local_count, remote_count, form, status);
+    rma_provider native;
+    native.limits = {.transmit = limit, .receive = 64, .rma = limit + 2};
+    native.status = status;
+    auto ep = native.endpoint();
+    std::array<iovec, 20> local{};
+    std::array<rma::rma_iov, 20> remote{};
+    const auto local_iov = std::span{local}.first(local_count);
+    const auto remote_iov = std::span{remote}.first(remote_count);
+    const auto result = [&] {
+        switch (form) {
+            case 0:
+                return rma::readv(ep, local_iov, {}, remote_iov);
+            case 1:
+                return rma::writev(ep, local_iov, {}, remote_iov);
+            case 2:
+                return rma::readv_to(ep, local_iov, {}, fabric_addr{19}, remote_iov);
+            case 3:
+                return rma::writev_to(ep, local_iov, {}, fabric_addr{19}, remote_iov);
+            case 4:
+                return rma::readv_to<operation_defaults::inherit>(
+                    ep, local_iov, {}, fabric_addr{19}, remote_iov, op_flag::completion);
+            default:
+                return rma::writev_to<operation_defaults::inherit>(
+                    ep, local_iov, {}, fabric_addr{19}, remote_iov, op_flag::completion);
+        }
+    }();
+    const bool valid = local_count <= limit && remote_count <= limit + 2;
+    CHECK(native.calls == (valid ? 1 : 0));
+    if (!valid || status) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == (valid ? make_error_code_from_fi_errno(status)
+                                       : make_error_code(errc::invalid_argument)));
+    } else {
+        REQUIRE(result);
+        CHECK(native.keys.size() == remote_count);
+    }
+}
 
 TEST_CASE("RMA scalar submissions enforce remote extents", "[rma][bounds]") {
     constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();

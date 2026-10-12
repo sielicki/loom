@@ -78,6 +78,9 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     raw_info->tx_attr->inject_size = 32;
     raw_info->tx_attr->op_flags = FI_FENCE | FI_DELIVERY_COMPLETE;
     raw_info->rx_attr->op_flags = FI_COMPLETION;
+    raw_info->tx_attr->iov_limit = 3;
+    raw_info->rx_attr->iov_limit = 5;
+    raw_info->tx_attr->rma_iov_limit = 7;
     raw_info->ep_attr->tx_ctx_cnt = 2;
     raw_info->ep_attr->rx_ctx_cnt = 3;
     raw_info->addr_format = FI_SOCKADDR_IN6;
@@ -86,12 +89,16 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     auto sep = loom::scalable_endpoint::create(
         domain, info, explicit_resource ? loom::get_default_resource() : nullptr);
     REQUIRE(sep);
+    raw_info->tx_attr->iov_limit = 9;
+    raw_info->rx_attr->iov_limit = 9;
+    raw_info->tx_attr->rma_iov_limit = 9;
     REQUIRE(sep->tx_context_count() == 2);
     REQUIRE(sep->rx_context_count() == 3);
     REQUIRE_FALSE(sep->tx_context(2));
     REQUIRE_FALSE(sep->rx_context(3));
     auto context = receive ? sep->rx_context(2) : sep->tx_context(1);
     REQUIRE(context);
+    CHECK(context->iov_limits() == loom::endpoint_iov_limits{3, 5, 7});
     CHECK(context->belongs_to(domain));
     loom::domain empty_domain;
     CHECK_FALSE(context->belongs_to(empty_domain));

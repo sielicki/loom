@@ -460,7 +460,12 @@ and work with virtual-address and offset-based registrations.
 
 Registered message helpers and vectored RMA keep up to 16 native entries
 per descriptor or remote-IOV array inline. Larger arrays use heap storage
-and preserve every entry; the endpoint's advertised IOV limits still apply.
+and preserve every entry. `endpoint::iov_limits()` reports the negotiated
+transmit, receive and remote RMA counts. Vectored RMA and deferred RMA reject
+requests exceeding the transmit or remote count with `invalid_argument`
+before provider submission. Both paths require at least one remote segment,
+including for zero-byte operations. Missing metadata reports zero capacity;
+internal native-handle adoption must supply the negotiated limits for vector I/O.
 This avoids temporary-array allocations for small submissions. Provider
 work and asynchronous operation state can allocate independently.
 

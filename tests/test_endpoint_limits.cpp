@@ -4,6 +4,8 @@
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
+#include <cstdlib>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -12,6 +14,8 @@ struct limit_provider {
     std::uint64_t capabilities{};
     std::uint64_t tx_flags{};
     std::uint64_t rx_flags{};
+    loom::endpoint_iov_limits limits{};
+    bool tx_attributes = true, rx_attributes = true;
     int query_result = -FI_ENOPROTOOPT;
     std::size_t rma_limit = 8192;
     std::size_t inject_limit = 24;
@@ -45,7 +49,7 @@ struct limit_provider {
     loom::domain domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
         loom::get_default_resource(), &domain_handle)};
 
-    auto endpoint() -> loom::endpoint {
+    auto endpoint(loom::memory_resource* resource = nullptr) -> loom::endpoint {
         auto* raw = fi_allocinfo();
         REQUIRE(raw);
         raw->caps = capabilities;
@@ -54,9 +58,20 @@ struct limit_provider {
         raw->tx_attr->inject_size = 48;
         raw->tx_attr->op_flags = tx_flags;
         raw->rx_attr->op_flags = rx_flags;
+        raw->tx_attr->iov_limit = limits.transmit;
+        raw->tx_attr->rma_iov_limit = limits.rma;
+        raw->rx_attr->iov_limit = limits.receive;
+        if (!tx_attributes) {
+            std::free(raw->tx_attr);
+            raw->tx_attr = nullptr;
+        }
+        if (!rx_attributes) {
+            std::free(raw->rx_attr);
+            raw->rx_attr = nullptr;
+        }
         loom::fabric_info info{loom::detail::make_pmr_unique<loom::detail::fabric_info_impl>(
             loom::get_default_resource(), raw)};
-        auto result = loom::endpoint::create(domain, info);
+        auto result = loom::endpoint::create(domain, info, resource);
         REQUIRE(result);
         return std::move(*result);
     }
@@ -167,4 +182,24 @@ TEST_CASE("endpoint operation defaults survive discovery and wrapper moves", "[e
     REQUIRE(moved.impl_operation_flags(loom::completion_direction::transmit) == native.tx_flags);
     REQUIRE(moved.impl_operation_flags(loom::completion_direction::receive) == native.rx_flags);
     REQUIRE(original.impl_operation_flags(loom::completion_direction::transmit) == 0);
+}
+
+TEST_CASE("endpoint IOV limits preserve negotiated counts", "[endpoint][iov]") {
+    const auto limit = GENERATE(0UZ, 1UZ, 16UZ, 17UZ);
+    const auto tx_attributes = GENERATE(false, true);
+    const auto rx_attributes = GENERATE(false, true);
+    const auto explicit_resource = GENERATE(false, true);
+    limit_provider native;
+    native.limits = {limit, limit + 1, limit + 2};
+    native.tx_attributes = tx_attributes;
+    native.rx_attributes = rx_attributes;
+    auto original = native.endpoint(explicit_resource ? loom::get_default_resource() : nullptr);
+    const loom::endpoint_iov_limits expected{
+        tx_attributes ? limit : 0, rx_attributes ? limit + 1 : 0, tx_attributes ? limit + 2 : 0};
+    CHECK(original.iov_limits() == expected);
+    auto moved = std::move(original);
+    CHECK(original.iov_limits() == loom::endpoint_iov_limits{});
+    CHECK(moved.iov_limits() == expected);
+    REQUIRE(moved.close());
+    CHECK(moved.iov_limits() == loom::endpoint_iov_limits{});
 }
