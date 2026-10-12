@@ -214,6 +214,7 @@ auto completion_queue::create(const domain& dom,
                                                                            attr.size.get(),
                                                                            attr.source_addresses,
                                                                            resource);
+        impl->parent_fabric = dom.impl_->parent_fabric;
         impl->max_error_data = dom.impl_->max_error_data;
         (void)pending.release();
         return completion_queue{std::move(impl)};
@@ -228,6 +229,7 @@ auto completion_queue::create(const domain& dom,
                                                                        attr.size.get(),
                                                                        attr.source_addresses,
                                                                        default_resource);
+    impl->parent_fabric = dom.impl_->parent_fabric;
     impl->max_error_data = dom.impl_->max_error_data;
     (void)pending.release();
     return completion_queue{std::move(impl)};
@@ -515,6 +517,8 @@ auto completion_queue::supports_blocking_wait() const noexcept -> bool {
     if (!impl_ || !impl_->cq) {
         return false;
     }
+    if (!FI_CHECK_OP(impl_->cq->fid.ops, fi_ops, control))
+        return false;
     fi_wait_obj object = FI_WAIT_NONE;
     return ::fi_control(&impl_->cq->fid, FI_GETWAITOBJ, &object) == 0 && object != FI_WAIT_NONE &&
            object != FI_WAIT_UNSPEC;
@@ -527,23 +531,19 @@ auto completion_queue::requires_manual_progress() const noexcept -> bool {
     return impl_->progress.requires_manual_data_progress();
 }
 
-auto completion_queue::try_wait(const fabric& parent) const -> result<bool> {
-    if (!impl_ || !impl_->cq || !parent) {
+auto completion_queue::try_wait() const -> result<bool> {
+    if (!impl_ || !impl_->cq)
         return make_error_result<bool>(errc::invalid_argument);
-    }
-    const std::unique_lock lock{impl_->read_mutex, std::try_to_lock};
-    if (!lock || !impl_->preserved.empty())
-        return false;
+    return impl_->prepare_wait(impl_->parent_fabric);
+}
+
+auto completion_queue::try_wait(const fabric& parent) const -> result<bool> {
+    if (!impl_ || !impl_->cq || !parent)
+        return make_error_result<bool>(errc::invalid_argument);
     auto* fabric_ptr = static_cast<::fid_fabric*>(parent.internal_ptr());
-    auto* descriptor = &impl_->cq->fid;
-    const int ret = ::fi_trywait(fabric_ptr, &descriptor, 1);
-    if (ret == -FI_EAGAIN) {
-        return false;
-    }
-    if (ret != 0) {
-        return make_error_result_from_fi_errno<bool>(ret);
-    }
-    return true;
+    if (impl_->parent_fabric && impl_->parent_fabric != fabric_ptr)
+        return make_error_result<bool>(errc::invalid_argument);
+    return impl_->prepare_wait(fabric_ptr);
 }
 
 auto completion_queue::get_wait_fd() const -> result<int> {
@@ -551,6 +551,8 @@ auto completion_queue::get_wait_fd() const -> result<int> {
         return make_error_result<int>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->cq->fid.ops, fi_ops, control))
+        return make_error_result<int>(errc::not_supported);
     fi_wait_obj object = FI_WAIT_NONE;
     int ret = ::fi_control(&impl_->cq->fid, FI_GETWAITOBJ, &object);
     if (ret != 0) {

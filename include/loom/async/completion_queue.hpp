@@ -306,8 +306,13 @@ public:
      */
     [[nodiscard]] auto get_wait_fd() const -> result<int>;
 
-    /// Prepare this queue for a native wait using its parent fabric.
+    /// Prepare a native wait using the fabric recorded during queue creation.
     /// False means poll again; call this before every potentially blocking wait.
+    /// The native fabric must outlive the queue. Unknown parents are unsupported.
+    [[nodiscard]] auto try_wait() const -> result<bool>;
+
+    /// Supply the parent for an imported queue without recorded provenance.
+    /// A different fabric is rejected when the queue's parent is known.
     [[nodiscard]] auto try_wait(const fabric& parent) const -> result<bool>;
 
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;

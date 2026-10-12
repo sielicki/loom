@@ -513,6 +513,25 @@ TEST_CASE("wait descriptors require a file descriptor wait object", "[completion
     REQUIRE(provider.wait_requested);
 }
 
+TEST_CASE("wait descriptor queries reject unavailable control operations", "[completion_queue]") {
+    enum class unavailable { table, operation, version };
+    const auto missing = GENERATE(unavailable::table, unavailable::operation, unavailable::version);
+    mock_cq provider;
+    if (missing == unavailable::table)
+        provider.handle.fid.ops = nullptr;
+    else if (missing == unavailable::operation)
+        provider.ops.control = nullptr;
+    else
+        provider.ops.size = offsetof(fi_ops, control);
+    const auto descriptor = provider.queue.get_wait_fd();
+    const auto blocking = provider.queue.supports_blocking_wait();
+    provider.handle.fid.ops = &provider.ops;
+    REQUIRE_FALSE(descriptor);
+    REQUIRE(descriptor.error() == loom::errc::not_supported);
+    REQUIRE_FALSE(blocking);
+    REQUIRE_FALSE(provider.wait_requested);
+}
+
 TEST_CASE("native waits consult the fabric before blocking", "[completion_queue]") {
     mock_cq provider;
     struct wait_state {
@@ -539,6 +558,101 @@ TEST_CASE("native waits consult the fabric before blocking", "[completion_queue]
     state.status = -FI_EINVAL;
     REQUIRE(provider.queue.try_wait(fabric).error() == loom::errc::invalid_argument);
     REQUIRE_FALSE(provider.queue.try_wait(loom::fabric{}));
+    REQUIRE(provider.queue.try_wait().error() == loom::errc::not_supported);
+    REQUIRE(loom::completion_queue{}.try_wait().error() == loom::errc::invalid_argument);
+    SECTION("missing wait operation") {
+        fabric_ops.trywait = nullptr;
+        REQUIRE(provider.queue.try_wait(fabric).error() == loom::errc::not_supported);
+    }
+    SECTION("older operation table") {
+        fabric_ops.size = offsetof(fi_ops_fabric, trywait);
+        REQUIRE(provider.queue.try_wait(fabric).error() == loom::errc::not_supported);
+    }
+    SECTION("missing fabric operation table") {
+        handle.ops = nullptr;
+        REQUIRE(provider.queue.try_wait(fabric).error() == loom::errc::not_supported);
+    }
+}
+
+TEST_CASE("created completion queues retain their native wait fabric", "[completion_queue]") {
+    const auto custom_resource = GENERATE(false, true);
+    std::pmr::monotonic_buffer_resource arena;
+    auto* resource = custom_resource ? &arena : nullptr;
+    mock_cq provider;
+    provider.queue = {};
+    struct wait_state {
+        fid_domain* domain{};
+        fid_cq* cq{};
+        int status{};
+        int calls{};
+    } state;
+    fi_ops lifetime{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_domain domain_ops{
+        .size = sizeof(fi_ops_domain),
+        .cq_open =
+            [](fid_domain* domain, fi_cq_attr*, fid_cq** output, void*) {
+                *output = static_cast<wait_state*>(domain->fid.context)->cq;
+                return 0;
+            },
+    };
+    fid_domain native_domain{.fid = {.context = &state, .ops = &lifetime}, .ops = &domain_ops};
+    state.domain = &native_domain;
+    state.cq = &provider.handle;
+    fi_ops_fabric fabric_ops{
+        .size = sizeof(fi_ops_fabric),
+        .domain =
+            [](fid_fabric* fabric, fi_info*, fid_domain** output, void*) {
+                *output = static_cast<wait_state*>(fabric->fid.context)->domain;
+                return 0;
+            },
+        .trywait =
+            [](fid_fabric* fabric, fid** descriptors, int count) {
+                auto& state = *static_cast<wait_state*>(fabric->fid.context);
+                ++state.calls;
+                CHECK(count == 1);
+                CHECK(descriptors[0] == &state.cq->fid);
+                return state.status;
+            },
+    };
+    fid_fabric native_fabric{.fid = {.context = &state, .ops = &lifetime}, .ops = &fabric_ops};
+    loom::fabric fabric{loom::detail::make_pmr_unique<loom::detail::fabric_impl>(
+        loom::get_default_resource(), &native_fabric, nullptr)};
+    auto* native_info = fi_allocinfo();
+    REQUIRE(native_info);
+    native_info->domain_attr->mr_mode = FI_MR_PROV_KEY;
+    loom::fabric_info info{loom::detail::make_pmr_unique<loom::detail::fabric_info_impl>(
+        loom::get_default_resource(), native_info)};
+    auto domain = loom::domain::create(fabric, info, resource);
+    REQUIRE(domain);
+    auto created = loom::completion_queue::create(*domain, {.wait_obj = true}, resource);
+    REQUIRE(created);
+    auto queue = std::move(*created);
+    auto moved_fabric = std::move(fabric);
+    auto moved_domain = std::move(*domain);
+    REQUIRE(queue.try_wait().value());
+    REQUIRE(queue.try_wait(moved_fabric).value());
+    REQUIRE(state.calls == 2);
+    fid_fabric unrelated{.fid = {.context = &state, .ops = &lifetime}, .ops = &fabric_ops};
+    loom::fabric other{loom::detail::make_pmr_unique<loom::detail::fabric_impl>(
+        loom::get_default_resource(), &unrelated, nullptr)};
+    REQUIRE(queue.try_wait(other).error() == loom::errc::invalid_argument);
+    REQUIRE(state.calls == 2);
+    state.status = -FI_EAGAIN;
+    REQUIRE_FALSE(queue.try_wait().value());
+    state.status = -FI_EIO;
+    REQUIRE(queue.try_wait().error() == loom::errc::io_error);
+    REQUIRE(state.calls == 4);
+    provider.read_status = 1;
+    int other_context{};
+    REQUIRE(queue.read_for(loom::context_ptr<void>{&other_context}).error() == loom::errc::again);
+    REQUIRE_FALSE(queue.try_wait().value());
+    REQUIRE(state.calls == 4);
+    REQUIRE(queue.poll());
+    state.status = 0;
+    REQUIRE(queue.try_wait().value());
+    REQUIRE(state.calls == 5);
+    queue = {};
+    moved_domain = {};
 }
 
 TEST_CASE("completion reads preserve received message locations", "[completion_queue][buffer]") {

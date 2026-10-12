@@ -32,6 +32,7 @@ struct domain_impl {
     std::size_t max_error_data{};  ///< Negotiated maximum CQ/EQ diagnostic size.
     std::uint64_t max_counter_value{std::numeric_limits<std::uint64_t>::max()};
     std::uint64_t max_error_counter_value{std::numeric_limits<std::uint64_t>::max()};
+    ::fid_fabric* parent_fabric{};  ///< Borrowed parent; must outlive the domain and its resources.
 
     /// @brief Default constructor.
     domain_impl() = default;
@@ -136,6 +137,7 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
                                                                  registration_mode,
                                                                  key_bytes,
                                                                  resource);
+        impl->parent_fabric = fab_ptr;
         impl->max_error_data = info_ptr->domain_attr ? info_ptr->domain_attr->max_err_data : 0;
         impl->max_counter_value = detail::from_fi_counter_limit(
             info_ptr->domain_attr ? info_ptr->domain_attr->max_cntr_value : 0);
@@ -156,6 +158,7 @@ auto domain::create(const fabric& fab, const fabric_info& info, memory_resource*
                                                              registration_mode,
                                                              key_bytes,
                                                              default_resource);
+    impl->parent_fabric = fab_ptr;
     impl->max_error_data = info_ptr->domain_attr ? info_ptr->domain_attr->max_err_data : 0;
     impl->max_counter_value = detail::from_fi_counter_limit(
         info_ptr->domain_attr ? info_ptr->domain_attr->max_cntr_value : 0);
