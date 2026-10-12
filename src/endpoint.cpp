@@ -367,6 +367,10 @@ auto endpoint::connect(const address& peer_addr) -> void_result {
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->ep->cm, fi_ops_cm, connect)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+
     const auto native = detail::to_native_address(peer_addr, impl_->addr_format);
     if (!native) {
         return std::unexpected(native.error());
@@ -386,6 +390,10 @@ auto endpoint::accept() -> void_result {
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->ep->cm, fi_ops_cm, accept)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+
     int ret = ::fi_accept(impl_->ep, nullptr, 0);
 
     if (ret != 0) {
@@ -400,6 +408,10 @@ auto endpoint::get_local_address() const -> result<address> {
         return make_error_result<address>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->ep->cm, fi_ops_cm, getname)) {
+        return make_error_result<address>(errc::not_supported);
+    }
+
     return detail::query_address(
         [&](void* data, std::size_t* length) {
             return ::fi_getname(&impl_->ep->fid, data, length);
@@ -410,6 +422,10 @@ auto endpoint::get_local_address() const -> result<address> {
 auto endpoint::get_peer_address() const -> result<address> {
     if (!impl_ || !impl_->ep) {
         return make_error_result<address>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(impl_->ep->cm, fi_ops_cm, getpeer)) {
+        return make_error_result<address>(errc::not_supported);
     }
 
     return detail::query_address(

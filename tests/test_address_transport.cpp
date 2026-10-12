@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #if __has_include(<infiniband/ib.h>)
@@ -35,6 +36,7 @@ struct provider {
     int lookup_result{};
     int name_calls{};
     int name_result{};
+    int cm_result{};
     bool silent_truncation{};
     bool string_addresses{};
     std::vector<std::string> received_strings;
@@ -64,8 +66,11 @@ struct provider {
             [](fid_ep* ep, const void* addr, const void*, std::size_t) {
                 auto& self = *static_cast<provider*>(ep->fid.context);
                 self.capture(addr, 1);
-                return 0;
+                return self.cm_result;
             },
+        .listen = [](fid_pep* ep) { return record_cm(&ep->fid); },
+        .accept = [](fid_ep* ep, const void*, std::size_t) { return record_cm(&ep->fid); },
+        .reject = [](fid_pep* ep, fid*, const void*, std::size_t) { return record_cm(&ep->fid); },
     };
     fi_ops_av av_ops{
         .size = sizeof(fi_ops_av),
@@ -134,6 +139,12 @@ struct provider {
             },
     };
     fid_domain domain_handle{.fid = {.context = this, .ops = &ops}, .ops = &domain_ops};
+
+    static auto record_cm(fid* handle) -> int {
+        auto& self = *static_cast<provider*>(handle->context);
+        ++self.calls;
+        return self.cm_result;
+    }
 
     auto domain() -> loom::domain {
         return loom::domain{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
@@ -812,6 +823,71 @@ TEST_CASE("string addresses use native pointer arrays for AV insertion", "[addre
         CHECK(native.received_strings == std::vector{first});
         CHECK(native.contexts[0] == (contexts_requested ? contexts[0] : nullptr));
     }
+}
+
+TEST_CASE("connection management rejects unavailable native operations", "[address][invalid]") {
+    enum class operation { local_name, peer_name, connect, accept, passive_name, listen, reject };
+    enum class support { available, missing_table, missing_member, truncated, empty };
+    const auto call = GENERATE(operation::local_name,
+                               operation::peer_name,
+                               operation::connect,
+                               operation::accept,
+                               operation::passive_name,
+                               operation::listen,
+                               operation::reject);
+    const auto state = GENERATE(support::available,
+                                support::missing_table,
+                                support::missing_member,
+                                support::truncated,
+                                support::empty);
+    CAPTURE(call, state);
+    provider native;
+    native.cm_result = native.name_result = -FI_EAGAIN;
+    auto ep = native.endpoint(loom::address_format::inet);
+    auto pep = native.passive(loom::address_format::inet);
+    if (state == support::missing_table)
+        native.ep_handle.cm = native.pep_handle.cm = nullptr;
+    if (state == support::empty) {
+        ep = {};
+        pep = {};
+    }
+    const auto configure = [&](auto member, std::size_t offset) {
+        if (state == support::missing_member)
+            native.cm.*member = nullptr;
+        if (state == support::truncated)
+            native.cm.size = offset;
+    };
+    const auto result = [&]() -> loom::void_result {
+        switch (call) {
+            case operation::local_name:
+                configure(&fi_ops_cm::getname, offsetof(fi_ops_cm, getname));
+                return ep.get_local_address().transform([](auto&&) {});
+            case operation::peer_name:
+                configure(&fi_ops_cm::getpeer, offsetof(fi_ops_cm, getpeer));
+                return ep.get_peer_address().transform([](auto&&) {});
+            case operation::connect:
+                configure(&fi_ops_cm::connect, offsetof(fi_ops_cm, connect));
+                return ep.connect(loom::ipv4_address{0x7f000001U, 4321});
+            case operation::accept:
+                configure(&fi_ops_cm::accept, offsetof(fi_ops_cm, accept));
+                return ep.accept();
+            case operation::passive_name:
+                configure(&fi_ops_cm::getname, offsetof(fi_ops_cm, getname));
+                return pep.get_local_address().transform([](auto&&) {});
+            case operation::listen:
+                configure(&fi_ops_cm::listen, offsetof(fi_ops_cm, listen));
+                return pep.listen();
+            case operation::reject:
+                configure(&fi_ops_cm::reject, offsetof(fi_ops_cm, reject));
+                return pep.reject(&native.ep_handle.fid);
+        }
+        std::unreachable();
+    }();
+    REQUIRE_FALSE(result);
+    CHECK(result.error() == (state == support::available ? loom::errc::again
+                             : state == support::empty   ? loom::errc::invalid_argument
+                                                         : loom::errc::not_supported));
+    CHECK(native.calls + native.name_calls == (state == support::available ? 1 : 0));
 }
 
 TEST_CASE("address queries reject malformed and unsupported representations",

@@ -122,6 +122,10 @@ auto passive_endpoint::listen() -> void_result {
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->pep->cm, fi_ops_cm, listen)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+
     int ret = ::fi_listen(impl_->pep);
 
     if (ret != 0) {
@@ -134,6 +138,10 @@ auto passive_endpoint::listen() -> void_result {
 auto passive_endpoint::get_local_address() const -> result<address> {
     if (!impl_ || !impl_->pep) {
         return make_error_result<address>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(impl_->pep->cm, fi_ops_cm, getname)) {
+        return make_error_result<address>(errc::not_supported);
     }
 
     return detail::query_address(
@@ -150,6 +158,10 @@ auto passive_endpoint::reject(const void* handle) -> void_result {
 
     if (!handle) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(impl_->pep->cm, fi_ops_cm, reject)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     int ret = ::fi_reject(impl_->pep, static_cast<::fid_t>(const_cast<void*>(handle)), nullptr, 0);
