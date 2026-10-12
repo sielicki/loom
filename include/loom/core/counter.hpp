@@ -97,6 +97,17 @@ public:
 
     [[nodiscard]] auto read() const -> result<std::uint64_t>;
 
+    /// Number of failed completions, independent of the successful count.
+    [[nodiscard]] auto read_error_count() const -> result<std::uint64_t>;
+
+    /// Replace a stable error count after prior updates are visible and no
+    /// further updates can occur until this call completes.
+    auto set_error_count(std::uint64_t value) -> void_result;
+
+    /// Add at most max_error_value(). The caller must ensure that this addition
+    /// and concurrent errors cannot carry the total beyond the provider limit.
+    auto add_error_count(std::uint64_t value) -> void_result;
+
     /// Negotiated maximum completion count, or zero for an empty counter.
     [[nodiscard]] auto max_value() const noexcept -> std::uint64_t;
     /// Negotiated maximum error count, or zero for an empty counter.
@@ -126,6 +137,8 @@ public:
 
     [[nodiscard]] auto check_threshold() const -> bool;
 
+    /// Convenience indication: any failed completion maps to errc::io_error.
+    /// Use read_error_count() when the actual number of failures is needed.
     [[nodiscard]] auto get_error() const -> std::error_code;
 
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;

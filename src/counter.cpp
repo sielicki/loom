@@ -77,6 +77,36 @@ auto counter::read() const -> result<std::uint64_t> {
     return value;
 }
 
+auto counter::read_error_count() const -> result<std::uint64_t> {
+    if (!impl_ || !impl_->cntr)
+        return make_error_result<std::uint64_t>(errc::invalid_argument);
+    if (!FI_CHECK_OP(impl_->cntr->ops, fi_ops_cntr, readerr))
+        return make_error_result<std::uint64_t>(errc::not_supported);
+    return ::fi_cntr_readerr(impl_->cntr);
+}
+
+auto counter::set_error_count(std::uint64_t value) -> void_result {
+    if (!impl_ || !impl_->cntr || value > impl_->max_error_value)
+        return make_error_result<void>(errc::invalid_argument);
+    if (!FI_CHECK_OP(impl_->cntr->ops, fi_ops_cntr, seterr))
+        return make_error_result<void>(errc::not_supported);
+    const auto status = ::fi_cntr_seterr(impl_->cntr, value);
+    if (status != 0)
+        return make_error_result_from_fi_errno<void>(-status);
+    return make_success();
+}
+
+auto counter::add_error_count(std::uint64_t value) -> void_result {
+    if (!impl_ || !impl_->cntr || value > impl_->max_error_value)
+        return make_error_result<void>(errc::invalid_argument);
+    if (!FI_CHECK_OP(impl_->cntr->ops, fi_ops_cntr, adderr))
+        return make_error_result<void>(errc::not_supported);
+    const auto status = ::fi_cntr_adderr(impl_->cntr, value);
+    if (status != 0)
+        return make_error_result_from_fi_errno<void>(-status);
+    return make_success();
+}
+
 auto counter::max_value() const noexcept -> std::uint64_t {
     return impl_ && impl_->cntr ? impl_->max_value : 0;
 }
@@ -152,17 +182,10 @@ auto counter::check_threshold() const -> bool {
 }
 
 auto counter::get_error() const -> std::error_code {
-    if (!impl_ || !impl_->cntr) {
-        return make_error_code(errc::invalid_argument);
-    }
-
-    uint64_t err_count = ::fi_cntr_readerr(impl_->cntr);
-
-    if (err_count == 0) {
-        return std::error_code{};
-    }
-
-    return make_error_code(errc::io_error);
+    const auto count = read_error_count();
+    if (!count)
+        return count.error();
+    return *count ? make_error_code(errc::io_error) : std::error_code{};
 }
 
 auto counter::impl_internal_ptr() const noexcept -> void* {

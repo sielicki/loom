@@ -375,6 +375,18 @@ auto main() -> int {
 }
 ```
 
+Counters track successful and failed completions separately. Use `read()`
+for successes and `read_error_count()` for failures; `get_error()` remains a
+convenience indication that maps a nonzero failure count to `io_error`.
+`set_error_count()` and `add_error_count()` preserve the successful count and
+reject operands above `max_error_value()`. Native update failures propagate.
+
+Reset an error count only after all earlier updates are visible and while no
+new error completions can arrive. For addition, account for concurrent errors
+so the total stays within the negotiated limit. Counter updates may become
+visible to reads after a provider-dependent delay. A preceding read cannot
+prevent intervening completions from changing the value.
+
 ### Shared receive contexts
 
 Set `fabric_hints::shared_receive_context = true` when querying endpoints

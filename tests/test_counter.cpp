@@ -3,7 +3,11 @@
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/fabric_impl.hpp>
 
+#include <array>
+#include <chrono>
 #include <limits>
+#include <thread>
+#include <utility>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -11,6 +15,9 @@
 namespace {
 struct counter_provider {
     std::uint64_t value{};
+    std::uint64_t error_count{};
+    int read_error_calls{}, set_error_calls{}, add_error_calls{};
+    int error_update_result{};
     std::uint64_t waited_threshold{};
     int waited_timeout{};
     int wait_calls{};
@@ -32,6 +39,12 @@ struct counter_provider {
         .size = sizeof(fi_ops_cntr),
         .read =
             [](fid_cntr* cntr) { return static_cast<counter_provider*>(cntr->fid.context)->value; },
+        .readerr =
+            [](fid_cntr* cntr) {
+                auto& self = *static_cast<counter_provider*>(cntr->fid.context);
+                ++self.read_error_calls;
+                return self.error_count;
+            },
         .add =
             [](fid_cntr* cntr, std::uint64_t value) {
                 auto& self = *static_cast<counter_provider*>(cntr->fid.context);
@@ -57,6 +70,26 @@ struct counter_provider {
                 self.waited_timeout = timeout;
                 ++self.wait_calls;
                 return self.value >= threshold ? 0 : -FI_ETIMEDOUT;
+            },
+        .adderr =
+            [](fid_cntr* cntr, std::uint64_t count) {
+                auto& self = *static_cast<counter_provider*>(cntr->fid.context);
+                ++self.add_error_calls;
+                if (self.error_update_result)
+                    return self.error_update_result;
+                if (count > std::numeric_limits<std::uint64_t>::max() - self.error_count)
+                    return -FI_EOVERFLOW;
+                self.error_count += count;
+                return 0;
+            },
+        .seterr =
+            [](fid_cntr* cntr, std::uint64_t count) {
+                auto& self = *static_cast<counter_provider*>(cntr->fid.context);
+                ++self.set_error_calls;
+                if (self.error_update_result)
+                    return self.error_update_result;
+                self.error_count = count;
+                return 0;
             },
     };
     fid_cntr counter_handle{.fid = {.context = this, .ops = &resource_ops}, .ops = &counter_ops};
@@ -279,4 +312,172 @@ TEST_CASE("explicit counter targets retain wait object and timeout checks", "[co
     REQUIRE_FALSE(invalid);
     REQUIRE(invalid.error() == loom::errc::invalid_argument);
     REQUIRE(provider.wait_calls == 1);
+}
+
+TEST_CASE("counter error counts remain independent through moves and reset", "[counter][errors]") {
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    const auto count =
+        GENERATE_COPY(std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{1} << 32, maximum);
+    counter_provider provider;
+    auto created = loom::counter::create(provider.domain, {.initial = 7});
+    REQUIRE(created);
+    provider.error_count = count;
+    CHECK(created->read_error_count() == count);
+    CHECK(created->get_error() ==
+          (count ? loom::make_error_code(loom::errc::io_error) : std::error_code{}));
+    auto moved = std::move(*created);
+    CHECK(created->read_error_count().error() == loom::errc::invalid_argument);
+    CHECK(created->set_error_count(0).error() == loom::errc::invalid_argument);
+    CHECK(created->add_error_count(0).error() == loom::errc::invalid_argument);
+    CHECK(created->get_error() == loom::errc::invalid_argument);
+    CHECK(moved.read_error_count() == count);
+    CHECK(moved.read() == 7);
+    REQUIRE(moved.set_error_count(0));
+    CHECK(moved.read_error_count() == 0);
+    CHECK_FALSE(moved.get_error());
+    REQUIRE(moved.add_error_count(2));
+    CHECK(moved.read_error_count() == 2);
+    CHECK(moved.read() == 7);
+    CHECK(provider.set_calls == 1);
+    CHECK(provider.add_calls == 0);
+}
+
+TEST_CASE("counter error updates use their own negotiated bound", "[counter][errors]") {
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    const auto limit =
+        GENERATE_COPY(std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{3}, maximum - 1, maximum);
+    const auto add = GENERATE(false, true);
+    const auto status = GENERATE(0, -FI_EIO, -FI_ENOSYS);
+    counter_provider provider;
+    auto domain = provider.bounded_domain(1, limit);
+    auto counter = loom::counter::create(domain, {.initial = 1}).value();
+    const auto bound = limit ? limit : maximum;
+    provider.error_update_result = status;
+    const std::array values{
+        std::uint64_t{0}, bound - 1, bound, bound < maximum ? bound + 1 : bound};
+    for (auto count : values) {
+        CAPTURE(limit, bound, count, add, status);
+        provider.error_count = 0;
+        provider.set_error_calls = provider.add_error_calls = provider.read_error_calls = 0;
+        const auto result = add ? counter.add_error_count(count) : counter.set_error_count(count);
+        const bool valid = count <= bound;
+        CHECK(provider.set_error_calls == (valid && !add ? 1 : 0));
+        CHECK(provider.add_error_calls == (valid && add ? 1 : 0));
+        CHECK(provider.read_error_calls == 0);
+        if (!valid || status) {
+            REQUIRE_FALSE(result);
+            CHECK(result.error() == (valid ? loom::make_error_code_from_fi_errno(status)
+                                           : loom::make_error_code(loom::errc::invalid_argument)));
+            CHECK(provider.error_count == 0);
+        } else {
+            REQUIRE(result);
+            CHECK(provider.error_count == count);
+        }
+        CHECK(counter.read() == 1);
+    }
+}
+
+TEST_CASE("counter error operations reject unavailable native entries", "[counter][errors]") {
+    enum class missing { handle, table, entry, layout };
+    enum class operation { read, set, add, indication };
+    const auto absent = GENERATE(missing::handle, missing::table, missing::entry, missing::layout);
+    const auto selected =
+        GENERATE(operation::read, operation::set, operation::add, operation::indication);
+    counter_provider provider;
+    auto counter = loom::counter::create(provider.domain).value();
+    switch (absent) {
+        case missing::handle:
+            counter = {};
+            break;
+        case missing::table:
+            provider.counter_handle.ops = nullptr;
+            break;
+        case missing::entry:
+            switch (selected) {
+                case operation::read:
+                case operation::indication:
+                    provider.counter_ops.readerr = nullptr;
+                    break;
+                case operation::set:
+                    provider.counter_ops.seterr = nullptr;
+                    break;
+                case operation::add:
+                    provider.counter_ops.adderr = nullptr;
+                    break;
+            }
+            break;
+        case missing::layout:
+            switch (selected) {
+                case operation::read:
+                case operation::indication:
+                    provider.counter_ops.size = offsetof(fi_ops_cntr, readerr);
+                    break;
+                case operation::set:
+                    provider.counter_ops.size = offsetof(fi_ops_cntr, seterr);
+                    break;
+                case operation::add:
+                    provider.counter_ops.size = offsetof(fi_ops_cntr, adderr);
+                    break;
+            }
+            break;
+    }
+    const auto result = [&]() -> loom::void_result {
+        switch (selected) {
+            case operation::read:
+                return counter.read_error_count().transform([](auto) {});
+            case operation::set:
+                return counter.set_error_count(0);
+            case operation::add:
+                return counter.add_error_count(0);
+            case operation::indication: {
+                const auto error = counter.get_error();
+                return error ? loom::void_result{std::unexpected{error}} : loom::make_success();
+            }
+        }
+        std::unreachable();
+    }();
+    REQUIRE_FALSE(result);
+    CHECK(result.error() ==
+          (absent == missing::handle ? loom::errc::invalid_argument : loom::errc::not_supported));
+    CHECK(provider.read_error_calls == 0);
+    CHECK(provider.set_error_calls == 0);
+    CHECK(provider.add_error_calls == 0);
+}
+
+TEST_CASE("native counter error counts can be reconciled and reset",
+          "[counter][errors][.provider]") {
+    using namespace loom;
+    const auto provider = GENERATE("sockets", "tcp");
+    fabric_hints hints{};
+    hints.provider_name = provider;
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Provider unavailable");
+    auto fabric = fabric::create(*info).value();
+    auto domain = domain::create(fabric, *info).value();
+    auto counter = counter::create(domain).value();
+    auto await_count = [](auto read, std::uint64_t expected) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto result = read();
+            if (!result || *result == expected)
+                return result;
+            std::this_thread::yield();
+        }
+        return read();
+    };
+    REQUIRE(counter.set(3));
+    REQUIRE(await_count([&] { return counter.read(); }, 3) == 3);
+    REQUIRE(counter.set_error_count(2));
+    REQUIRE(await_count([&] { return counter.read_error_count(); }, 2) == 2);
+    REQUIRE(counter.add_error_count(1));
+    REQUIRE(await_count([&] { return counter.read_error_count(); }, 3) == 3);
+    CHECK(counter.get_error() == errc::io_error);
+    CHECK(counter.read() == 3);
+    REQUIRE(counter.set_error_count(0));
+    REQUIRE(await_count([&] { return counter.read_error_count(); }, 0) == 0);
+    CHECK_FALSE(counter.get_error());
+    CHECK(counter.read() == 3);
 }
