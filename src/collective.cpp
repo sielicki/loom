@@ -4,6 +4,8 @@
 #include <rdma/fabric.h>
 #include <rdma/fi_collective.h>
 
+#include <optional>
+
 #include "loom/core/domain.hpp"
 #include "loom/core/endpoint.hpp"
 #include "loom/core/error.hpp"
@@ -115,7 +117,7 @@ auto create_group_impl(endpoint& ep,
 namespace {
 
 /// @brief Converts loom collective operation to libfabric collective operation.
-constexpr auto to_fi_coll(operation op) noexcept -> ::fi_collective_op {
+constexpr auto to_fi_coll(operation op) noexcept -> std::optional<::fi_collective_op> {
     switch (op) {
         case operation::barrier:
             return FI_BARRIER;
@@ -136,7 +138,7 @@ constexpr auto to_fi_coll(operation op) noexcept -> ::fi_collective_op {
         case operation::gather:
             return FI_GATHER;
     }
-    return FI_BARRIER;
+    return std::nullopt;
 }
 
 }  // namespace
@@ -146,16 +148,18 @@ namespace detail {
 auto is_supported_impl(domain& dom, operation op, atomic::datatype dt, atomic::operation aop)
     -> bool {
     auto* fid_dom = static_cast<::fid_domain*>(dom.internal_ptr());
+    const auto native_collective = to_fi_coll(op);
+    const auto native_operation = to_fi_op(aop);
     const auto native_datatype = to_fi_datatype(dt);
-    if (!fid_dom || !native_datatype) {
+    if (!fid_dom || !native_collective || !native_operation || !native_datatype) {
         return false;
     }
 
     ::fi_collective_attr attr{};
-    attr.op = to_fi_op(aop);
-    attr.datatype = *native_datatype;
+    attr.op = op == operation::barrier ? FI_NOOP : *native_operation;
+    attr.datatype = op == operation::barrier ? FI_VOID : *native_datatype;
 
-    auto ret = ::fi_query_collective(fid_dom, to_fi_coll(op), &attr, 0);
+    auto ret = ::fi_query_collective(fid_dom, *native_collective, &attr, 0);
     return ret == 0;
 }
 

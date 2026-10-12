@@ -6,6 +6,7 @@
 #include <complex>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include "mock_collective.hpp"
 #include <catch2/catch_template_test_macros.hpp>
@@ -59,6 +60,7 @@ struct transfer_provider : loom::test::collective_provider {
     int calls{};
     ssize_t status{};
     operation last_operation{};
+    fi_op reduction{};
     std::size_t count{};
     fi_datatype type{};
     const void* input{};
@@ -77,11 +79,13 @@ struct transfer_provider : loom::test::collective_provider {
                        fi_addr_t address,
                        void* context,
                        void* input_descriptor = nullptr,
-                       void* output_descriptor = nullptr) -> ssize_t {
+                       void* output_descriptor = nullptr,
+                       fi_op reduction = FI_NOOP) -> ssize_t {
         auto& self =
             static_cast<transfer_provider&>(*static_cast<collective_provider*>(ep->fid.context));
         ++self.calls;
         self.last_operation = op;
+        self.reduction = reduction;
         self.input = input;
         self.output = output;
         self.input_descriptor = input_descriptor;
@@ -151,7 +155,7 @@ struct transfer_provider : loom::test::collective_provider {
                void* output_descriptor,
                fi_addr_t address,
                fi_datatype type,
-               fi_op,
+               fi_op reduction,
                std::uint64_t,
                void* context) {
                 return record(ep,
@@ -163,7 +167,8 @@ struct transfer_provider : loom::test::collective_provider {
                               address,
                               context,
                               input_descriptor,
-                              output_descriptor);
+                              output_descriptor,
+                              reduction);
             },
         .allgather =
             [](fid_ep* ep,
@@ -196,7 +201,7 @@ struct transfer_provider : loom::test::collective_provider {
                void* output_descriptor,
                fi_addr_t address,
                fi_datatype type,
-               fi_op,
+               fi_op reduction,
                std::uint64_t,
                void* context) {
                 return record(ep,
@@ -208,7 +213,8 @@ struct transfer_provider : loom::test::collective_provider {
                               address,
                               context,
                               input_descriptor,
-                              output_descriptor);
+                              output_descriptor,
+                              reduction);
             },
         .reduce =
             [](fid_ep* ep,
@@ -220,7 +226,7 @@ struct transfer_provider : loom::test::collective_provider {
                fi_addr_t address,
                fi_addr_t,
                fi_datatype type,
-               fi_op,
+               fi_op reduction,
                std::uint64_t,
                void* context) {
                 return record(ep,
@@ -232,7 +238,8 @@ struct transfer_provider : loom::test::collective_provider {
                               address,
                               context,
                               input_descriptor,
-                              output_descriptor);
+                              output_descriptor,
+                              reduction);
             },
         .scatter =
             [](fid_ep* ep,
@@ -913,6 +920,87 @@ TEST_CASE("collectives reject groups without published addresses", "[collective]
     REQUIRE_FALSE(result);
     REQUIRE(result.error() == loom::errc::invalid_argument);
     REQUIRE(provider.calls == 0);
+}
+
+TEST_CASE("collective reductions validate operation identifiers", "[collective][validation]") {
+    namespace coll = loom::collective;
+    enum class path {
+        all_reduce,
+        typed_all_reduce,
+        inplace,
+        reduce,
+        typed_reduce,
+        reduce_scatter,
+        typed_reduce_scatter
+    };
+    const auto route = GENERATE(path::all_reduce,
+                                path::typed_all_reduce,
+                                path::inplace,
+                                path::reduce,
+                                path::typed_reduce,
+                                path::reduce_scatter,
+                                path::typed_reduce_scatter);
+    const auto status = GENERATE(0, -FI_EAGAIN);
+    for (const auto& reduction : loom::test::collective_reductions) {
+        CAPTURE(route, status, reduction.operation);
+        transfer_provider provider;
+        provider.status = status;
+        auto group = provider.join();
+        std::array<std::uint64_t, 3> input{}, output{};
+        const std::span<const std::uint64_t> in{input};
+        const std::span<std::uint64_t> out{output};
+        const auto op = reduction.operation;
+        const loom::fabric_addr root{5};
+        const auto result = [&]() -> loom::result<void> {
+            switch (route) {
+                case path::all_reduce:
+                    return coll::all_reduce(provider.ep,
+                                            group,
+                                            std::as_bytes(in),
+                                            std::as_writable_bytes(out),
+                                            nullptr,
+                                            nullptr,
+                                            op,
+                                            datatype::uint64);
+                case path::typed_all_reduce:
+                    return coll::all_reduce(provider.ep, group, in, out, nullptr, nullptr, op);
+                case path::inplace:
+                    return coll::all_reduce_inplace(provider.ep, group, out, nullptr, op);
+                case path::reduce:
+                    return coll::reduce(provider.ep,
+                                        group,
+                                        std::as_bytes(in),
+                                        std::as_writable_bytes(out),
+                                        nullptr,
+                                        nullptr,
+                                        root,
+                                        op,
+                                        datatype::uint64);
+                case path::typed_reduce:
+                    return coll::reduce(provider.ep, group, in, out, nullptr, nullptr, root, op);
+                case path::reduce_scatter:
+                    return coll::reduce_scatter(provider.ep,
+                                                group,
+                                                std::as_bytes(in),
+                                                std::as_writable_bytes(out.first(1)),
+                                                nullptr,
+                                                nullptr,
+                                                op,
+                                                datatype::uint64);
+                case path::typed_reduce_scatter:
+                    return coll::reduce_scatter(
+                        provider.ep, group, in, out.first(1), nullptr, nullptr, op);
+            }
+            std::unreachable();
+        }();
+        REQUIRE(static_cast<bool>(result) == (reduction.valid && status == 0));
+        if (!result)
+            CHECK(result.error() ==
+                  (reduction.valid ? loom::errc::again : loom::errc::invalid_argument));
+        CHECK(provider.calls == (reduction.valid ? 1 : 0));
+        if (reduction.valid)
+            CHECK(provider.reduction == reduction.native);
+    }
 }
 
 TEST_CASE("collective barriers check their selected native operation", "[collective][invalid]") {

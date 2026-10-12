@@ -10,6 +10,71 @@
 
 using loom::test::collective_provider;
 
+TEST_CASE("collective queries validate operations and barrier attributes",
+          "[collective][validation]") {
+    using operation = loom::collective::operation;
+    struct query_case {
+        operation value;
+        fi_collective_op native;
+        bool valid{true};
+    };
+    constexpr std::array collectives{
+        query_case{operation::barrier, FI_BARRIER},
+        query_case{operation::broadcast, FI_BROADCAST},
+        query_case{operation::all_to_all, FI_ALLTOALL},
+        query_case{operation::all_reduce, FI_ALLREDUCE},
+        query_case{operation::all_gather, FI_ALLGATHER},
+        query_case{operation::reduce_scatter, FI_REDUCE_SCATTER},
+        query_case{operation::reduce, FI_REDUCE},
+        query_case{operation::scatter, FI_SCATTER},
+        query_case{operation::gather, FI_GATHER},
+        query_case{static_cast<operation>(-1), FI_BARRIER, false},
+        query_case{static_cast<operation>(999), FI_BARRIER, false},
+    };
+    const auto status = GENERATE(0, -FI_EOPNOTSUPP);
+    for (const auto& collective : collectives) {
+        for (const auto& reduction : loom::test::collective_reductions) {
+            CAPTURE(collective.value, reduction.operation, status);
+            struct query_record {
+                int calls{};
+                int status;
+                fi_collective_op collective{};
+                fi_collective_attr attributes{};
+            } record{.status = status};
+            fi_ops lifetime{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+            fi_ops_domain operations{
+                .size = sizeof(fi_ops_domain),
+                .query_collective =
+                    [](fid_domain* dom,
+                       fi_collective_op op,
+                       fi_collective_attr* attr,
+                       std::uint64_t flags) {
+                        auto& record = *static_cast<query_record*>(dom->fid.context);
+                        ++record.calls;
+                        record.collective = op;
+                        record.attributes = *attr;
+                        CHECK(flags == 0);
+                        return record.status;
+                    },
+            };
+            fid_domain native{.fid = {.context = &record, .ops = &lifetime}, .ops = &operations};
+            loom::domain dom{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
+                loom::get_default_resource(), &native)};
+            const auto valid = collective.valid && reduction.valid;
+            CHECK(reduction.query(dom, collective.value) == (valid && status == 0));
+            CHECK(record.calls == (valid ? 1 : 0));
+            if (valid) {
+                CHECK(record.collective == collective.native);
+                CHECK(record.attributes.op ==
+                      (collective.value == operation::barrier ? FI_NOOP : reduction.native));
+                CHECK(record.attributes.datatype ==
+                      (collective.value == operation::barrier ? FI_VOID : FI_UINT64));
+                CHECK(record.attributes.mode == 0);
+            }
+        }
+    }
+}
+
 TEST_CASE("collective queries reject invalid datatypes", "[collective][validation]") {
     int queries{};
     fi_ops lifetime{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};

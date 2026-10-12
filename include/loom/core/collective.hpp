@@ -26,6 +26,10 @@
  * accessed by the operation. Registrations for omitted non-root buffers or
  * zero-byte transfers are ignored. Buffers and registrations remain borrowed
  * through completion.
+ *
+ * Reductions accept arithmetic, logical, bitwise, and atomic read/write
+ * operations. Compare/swap operations and invalid enums are rejected before
+ * provider dispatch. Query provider support for the chosen operation and datatype.
  */
 namespace loom::collective {
 
@@ -59,9 +63,9 @@ namespace detail {
 /**
  * @brief Converts loom atomic operation to libfabric operation.
  * @param op The loom atomic operation.
- * @return The corresponding libfabric operation.
+ * @return The corresponding collective reduction operation, or no value.
  */
-constexpr auto to_fi_op(atomic::operation op) noexcept -> ::fi_op {
+constexpr auto to_fi_op(atomic::operation op) noexcept -> std::optional<::fi_op> {
     switch (op) {
         case atomic::operation::min:
             return FI_MIN;
@@ -83,8 +87,12 @@ constexpr auto to_fi_op(atomic::operation op) noexcept -> ::fi_op {
             return FI_LXOR;
         case atomic::operation::bitwise_xor:
             return FI_BXOR;
+        case atomic::operation::atomic_read:
+            return FI_ATOMIC_READ;
+        case atomic::operation::atomic_write:
+            return FI_ATOMIC_WRITE;
         default:
-            return FI_NOOP;
+            return std::nullopt;
     }
 }
 
@@ -345,6 +353,9 @@ auto all_reduce(endpoint& ep,
                 atomic::operation op,
                 atomic::datatype dt,
                 Ctx context = {}) -> result<void> {
+    const auto native_operation = detail::to_fi_op(op);
+    if (!native_operation)
+        return make_error_result<void>(errc::invalid_argument);
     const auto native = detail::checked_endpoint<FI_ALLREDUCE>(ep, grp.address());
     if (!native) {
         return std::unexpected(native.error());
@@ -369,7 +380,7 @@ auto all_reduce(endpoint& ep,
                               descriptors->output.raw(),
                               grp.address().get(),
                               transfer->datatype,
-                              detail::to_fi_op(op),
+                              *native_operation,
                               0,
                               to_raw_context(context));
 
@@ -644,6 +655,9 @@ auto reduce(endpoint& ep,
             atomic::operation op,
             atomic::datatype dt,
             Ctx context = {}) -> result<void> {
+    const auto native_operation = detail::to_fi_op(op);
+    if (!native_operation)
+        return make_error_result<void>(errc::invalid_argument);
     const auto native = detail::checked_endpoint<FI_REDUCE>(ep, grp.address());
     if (!native) {
         return std::unexpected(native.error());
@@ -669,7 +683,7 @@ auto reduce(endpoint& ep,
                            grp.address().get(),
                            root_addr.get(),
                            transfer->datatype,
-                           detail::to_fi_op(op),
+                           *native_operation,
                            0,
                            to_raw_context(context));
 
@@ -859,6 +873,9 @@ auto reduce_scatter(endpoint& ep,
                     atomic::operation op,
                     atomic::datatype dt,
                     Ctx context = {}) -> result<void> {
+    const auto native_operation = detail::to_fi_op(op);
+    if (!native_operation)
+        return make_error_result<void>(errc::invalid_argument);
     const auto native = detail::checked_endpoint<FI_REDUCE_SCATTER>(ep, grp.address());
     if (!native) {
         return std::unexpected(native.error());
@@ -883,7 +900,7 @@ auto reduce_scatter(endpoint& ep,
                                    descriptors->output.raw(),
                                    grp.address().get(),
                                    transfer->datatype,
-                                   detail::to_fi_op(op),
+                                   *native_operation,
                                    0,
                                    to_raw_context(context));
 
@@ -940,7 +957,8 @@ namespace detail {
  * @param op The collective operation type.
  * @param dt The data type.
  * @param aop The atomic operation.
- * @return True if supported.
+ * @return True if supported; false for invalid collective or reduction identifiers.
+ * Barrier queries use FI_NOOP and FI_VOID because they have no data payload.
  */
 auto is_supported_impl(domain& dom, operation op, atomic::datatype dt, atomic::operation aop)
     -> bool;
