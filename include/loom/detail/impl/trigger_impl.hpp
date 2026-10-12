@@ -331,7 +331,8 @@ auto deferred_work::create_read(domain& dom,
                                 std::uint64_t flags,
                                 memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || !trigger.cntr || !*trigger.cntr || (completion_cntr && !*completion_cntr) ||
-        (!desc.empty() && desc.size() != local_iov.size())) {
+        (!desc.empty() && desc.size() != local_iov.size()) ||
+        !rma::detail::valid_iov_ranges(local_iov, remote_iov)) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
 
@@ -395,7 +396,8 @@ auto deferred_work::create_write(domain& dom,
                                  std::uint64_t data,
                                  memory_resource* resource) -> result<deferred_work> {
     if (!dom || !ep || !trigger.cntr || !*trigger.cntr || (completion_cntr && !*completion_cntr) ||
-        (!desc.empty() && desc.size() != local_iov.size())) {
+        (!desc.empty() && desc.size() != local_iov.size()) ||
+        !rma::detail::valid_iov_ranges(local_iov, remote_iov)) {
         return make_error_result<deferred_work>(errc::invalid_argument);
     }
 

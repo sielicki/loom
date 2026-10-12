@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 
 #include <sys/uio.h>
@@ -128,6 +129,27 @@ struct rma_iov {
     [[nodiscard]] constexpr auto operator==(const rma_iov&) const noexcept -> bool = default;
 };
 
+namespace detail {
+/// Native RMA consumes complete SGLs; their totals must agree without wrapping.
+[[nodiscard]] constexpr auto valid_iov_ranges(std::span<const iovec> local,
+                                              std::span<const rma_iov> remote) noexcept -> bool {
+    constexpr auto maximum = std::numeric_limits<std::size_t>::max();
+    std::size_t local_size{}, remote_size{};
+    for (const auto& segment : local) {
+        if (segment.iov_len > maximum - local_size)
+            return false;
+        local_size += segment.iov_len;
+    }
+    for (const auto& segment : remote) {
+        if (segment.len > maximum - remote_size ||
+            !remote_memory{segment.addr, segment.key, segment.len}.contains(0, segment.len))
+            return false;
+        remote_size += segment.len;
+    }
+    return local_size == remote_size;
+}
+}  // namespace detail
+
 /**
  * @brief Reads data from remote memory into a local buffer.
  * @tparam Ctx The context type (must satisfy context_like).
@@ -174,7 +196,8 @@ auto readv_to(endpoint& ep,
               std::span<const rma_iov> remote_iov,
               op_flags flags,
               Ctx context = {}) -> result<void> {
-    if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
+    if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size()) ||
+        !detail::valid_iov_ranges(local_iov, remote_iov)) {
         return make_error_result<void>(errc::invalid_argument);
     }
 
@@ -295,7 +318,8 @@ auto writev_to(endpoint& ep,
                std::span<const rma_iov> remote_iov,
                op_flags flags,
                Ctx context = {}) -> result<void> {
-    if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size())) {
+    if (remote_iov.empty() || (!desc.empty() && desc.size() != local_iov.size()) ||
+        !detail::valid_iov_ranges(local_iov, remote_iov)) {
         return make_error_result<void>(errc::invalid_argument);
     }
 

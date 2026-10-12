@@ -134,6 +134,51 @@ struct trigger_provider {
 struct trigger_context : loom::triggered_context<trigger_context> {};
 }  // namespace
 
+TEST_CASE("deferred RMA validates vector ranges before queuing work", "[trigger][bounds]") {
+    constexpr auto maximum = std::numeric_limits<std::size_t>::max();
+    constexpr auto address_max = std::numeric_limits<std::uint64_t>::max();
+    struct transfer {
+        std::array<std::size_t, 2> local, remote;
+        std::uint64_t last_address;
+        bool valid;
+    };
+    constexpr std::array cases{
+        transfer{{3, 5}, {1, 7}, 0x1000, true},
+        transfer{{0, 0}, {0, 0}, address_max, true},
+        transfer{{3, 5}, {1, 6}, 0x1000, false},
+        transfer{{3, 5}, {1, 8}, 0x1000, false},
+        transfer{{maximum, 1}, {0, 0}, 0, false},
+        transfer{{0, 0}, {maximum, 1}, 0, false},
+        transfer{{maximum, 1}, {maximum, 1}, 0, false},
+        transfer{{3, 5}, {1, 7}, address_max - 6, false},
+    };
+    const auto write = GENERATE(false, true);
+    for (const auto& test : cases) {
+        CAPTURE(write, test.local, test.remote, test.last_address);
+        trigger_provider native;
+        std::byte storage{};
+        const std::array local{iovec{&storage, test.local[0]}, iovec{&storage, test.local[1]}};
+        const std::array remote{loom::rma::rma_iov{0, test.remote[0], 1},
+                                loom::rma::rma_iov{test.last_address, test.remote[1], 2}};
+        const loom::trigger::threshold_condition trigger{&native.counter, 7};
+        auto work = write
+                        ? loom::trigger::deferred_work::create_write(
+                              native.domain, native.endpoint, trigger, nullptr, local, {}, remote)
+                        : loom::trigger::deferred_work::create_read(
+                              native.domain, native.endpoint, trigger, nullptr, local, {}, remote);
+        REQUIRE(static_cast<bool>(work) == test.valid);
+        if (test.valid) {
+            REQUIRE(native.submissions == 1);
+            REQUIRE(work->cancel());
+        } else {
+            REQUIRE(work.error() == loom::errc::invalid_argument);
+            REQUIRE(native.submissions == 0);
+            REQUIRE(native.pending == nullptr);
+            REQUIRE(native.cancellations == 0);
+        }
+    }
+}
+
 TEST_CASE("triggered RMA enforces remote bounds before changing its context", "[trigger][bounds]") {
     const auto write = GENERATE(false, true);
     enum class remote_range { valid, short_extent, overflow };

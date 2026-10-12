@@ -178,6 +178,60 @@ TEST_CASE("RMA scalar submissions enforce remote extents", "[rma][bounds]") {
     }
 }
 
+TEST_CASE("vectored RMA rejects inconsistent and overflowing ranges", "[rma][bounds]") {
+    constexpr auto size_max = std::numeric_limits<std::size_t>::max();
+    constexpr auto address_max = std::numeric_limits<std::uint64_t>::max();
+    struct transfer {
+        std::array<std::size_t, 2> local, remote;
+        std::uint64_t last_address;
+        bool valid;
+        bool empty_local{};
+    };
+    constexpr std::array cases{
+        transfer{{3, 5}, {4, 4}, 0x1000, true},
+        transfer{{3, 5}, {0, 8}, address_max - 8, true},
+        transfer{{0, 0}, {0, 0}, address_max, true},
+        transfer{{0, 0}, {0, 0}, address_max, true, true},
+        transfer{{0, 0}, {0, 1}, 0, false, true},
+        transfer{{3, 5}, {3, 4}, 0x1000, false},
+        transfer{{3, 5}, {3, 6}, 0x1000, false},
+        transfer{{0, 8}, {0, 8}, address_max - 7, false},
+        transfer{{0, 8}, {1, 7}, address_max - 6, false},
+        transfer{{size_max, 1}, {0, 0}, 0, false},
+        transfer{{0, 0}, {size_max, 1}, 0, false},
+        transfer{{size_max, 1}, {size_max, 1}, 0, false},
+        transfer{{size_max, 0}, {size_max, 0}, address_max, true},
+    };
+    rma_provider native;
+    // Reject every native call without accessing the synthetic address ranges.
+    native.status = -FI_EAGAIN;
+    auto ep = native.endpoint();
+    std::byte storage{};
+    int context{};
+    for (const auto& test : cases) {
+        CAPTURE(test.local, test.remote, test.last_address, test.empty_local);
+        const std::array local{iovec{&storage, test.local[0]}, iovec{&storage, test.local[1]}};
+        const auto local_iov = std::span{local}.first(test.empty_local ? 0 : local.size());
+        const std::array remote{rma::rma_iov{0, test.remote[0], 1},
+                                rma::rma_iov{test.last_address, test.remote[1], 2}};
+        const fabric_addr peer{19};
+        native.calls = 0;
+        const std::array results{
+            rma::readv(ep, local_iov, {}, remote, &context),
+            rma::writev(ep, local_iov, {}, remote, &context),
+            rma::readv_to(ep, local_iov, {}, peer, remote, &context),
+            rma::writev_to(ep, local_iov, {}, peer, remote, &context),
+            rma::readv_to(ep, local_iov, {}, peer, remote, op_flag::completion, &context),
+            rma::writev_to(ep, local_iov, {}, peer, remote, op_flag::completion, &context),
+        };
+        for (const auto& result : results) {
+            REQUIRE_FALSE(result);
+            CHECK(result.error() == (test.valid ? errc::again : errc::invalid_argument));
+        }
+        CHECK(native.calls == (test.valid ? results.size() : 0));
+    }
+}
+
 TEST_CASE("registered RMA rejects buffers outside the local MR", "[rma][bounds]") {
     struct range {
         std::size_t offset, length;

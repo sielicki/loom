@@ -1179,7 +1179,10 @@ Asio provides the same registered peer path through
 that sequence use `local_mr`; callers must register the whole sequence's
 storage. Buffers and registration remain borrowed until completion.
 Core `rma::readv_to` and `rma::writev_to` also accept a separate descriptor
-for each IOV and preserve multiple remote segments.
+for each IOV and preserve multiple remote segments. Vectored and deferred RMA
+require equal local and remote byte totals. Unequal totals, overflowing sums,
+and remote address ranges that wrap return `errc::invalid_argument` before
+submission; segment boundaries may differ, and zero-byte transfers remain valid.
 
 The Asio and sender messaging and RMA paths explicitly request a CQ
 completion, including when the endpoint uses selective completion. They
