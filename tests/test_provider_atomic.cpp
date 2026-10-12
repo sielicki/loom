@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #include <loom/core/provider_atomic.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
+#include <loom/detail/impl/memory_impl.hpp>
 
 #include <rdma/fi_rma.h>
 
@@ -11,6 +12,7 @@
 
 namespace {
 struct atomic_transport {
+    fid_domain domain_handle{};
     std::uint64_t remote_value{42};
     const std::uint64_t* operand{};
     const std::uint64_t* comparison{};
@@ -125,13 +127,32 @@ struct atomic_transport {
         },
     };
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .rma = &rma, .atomic = &atomics};
+    fid_mr result_region{.fid = {.ops = &ops}, .mem_desc = &result_region};
+
+    auto register_result(std::uint64_t& value) -> loom::memory_region {
+        return loom::memory_region{loom::detail::make_pmr_unique<loom::detail::memory_region_impl>(
+            loom::get_default_resource(),
+            &result_region,
+            &value,
+            sizeof(value),
+            loom::detail::mr_key_lease{},
+            0,
+            0,
+            &domain_handle)};
+    }
 
     auto endpoint() -> loom::endpoint {
         return loom::endpoint{
             loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
                                                                        &handle,
                                                                        loom::endpoint_types::msg,
-                                                                       loom::address_format::inet)};
+                                                                       loom::address_format::inet,
+                                                                       0UZ,
+                                                                       0UZ,
+                                                                       loom::caps{},
+                                                                       0,
+                                                                       0,
+                                                                       &domain_handle)};
     }
 };
 }  // namespace
@@ -146,9 +167,9 @@ TEST_CASE("provider atomics retain provider atomicity guarantees", "[provider_at
     native.supported = supported;
     auto ep = native.endpoint();
     loom::domain domain;
-    loom::memory_region mr;
     std::array<std::byte, 64> staging{};
     std::uint64_t previous{};
+    auto mr = native.register_result(previous);
     int user_context{};
     const loom::remote_memory remote{0x1000, 1, sizeof(previous)};
     auto run = [&]<typename Provider>() {
@@ -217,11 +238,11 @@ TEST_CASE("provider atomic helpers borrow caller operand storage", "[provider_at
     auto ep = native.endpoint();
     loom::domain domain;
     loom::provider_atomic_context<loom::provider::efa_tag> context{domain};
-    loom::memory_region mr;
     const std::uint64_t operand{2};
     const std::uint64_t expected{42};
     const std::uint64_t desired{84};
     std::uint64_t previous{};
+    auto mr = native.register_result(previous);
     const loom::remote_memory remote{0x1000, 1, sizeof(previous)};
     switch (kind) {
         case 0:
