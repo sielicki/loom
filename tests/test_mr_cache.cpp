@@ -92,6 +92,220 @@ TEST_CASE("cache byte accounting rejects overflowing totals", "[mr_cache]") {
     REQUIRE(provider.registrations == 2);
 }
 
+TEST_CASE("cache limits preserve existing default construction", "[mr_cache][limits]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> direct{provider.dom, {}};
+    auto factory = make_mr_cache<provider::tcp_tag>(provider.dom, {});
+    constexpr auto unlimited = std::numeric_limits<std::size_t>::max();
+    REQUIRE(direct.limits().max_entries == unlimited);
+    REQUIRE(direct.limits().max_registered_bytes == unlimited);
+    REQUIRE(factory.limits().max_entries == unlimited);
+    const mr_cache_limits limits{.max_entries = 2, .max_registered_bytes = 8192};
+    auto bounded = make_mr_cache<provider::tcp_tag>(provider.dom, limits, get_default_resource());
+    REQUIRE(bounded.limits().max_entries == 2);
+    REQUIRE(bounded.limits().max_registered_bytes == 8192);
+}
+
+TEST_CASE("cache limits bound idle host and device registrations", "[mr_cache][limits]") {
+    using namespace loom;
+    enum class memory { host, hmem, mapped, unmapped };
+    enum class bound { count, bytes, both_count, both_bytes };
+    const auto kind = GENERATE(memory::host, memory::hmem, memory::mapped, memory::unmapped);
+    const auto policy = GENERATE(bound::count, bound::bytes, bound::both_count, bound::both_bytes);
+    const std::size_t bytes = kind == memory::host ? 4096 : 17;
+    mr_cache_limits limits;
+    if (policy != bound::bytes)
+        limits.max_entries = policy == bound::both_bytes ? 3 : 2;
+    if (policy != bound::count)
+        limits.max_registered_bytes = bytes * (policy == bound::both_count ? 3 : 2);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom, limits};
+    constexpr std::uintptr_t allocation = 0x10000000;
+    const auto lookup = [&](std::size_t index) {
+        const auto offset = index * 4096;
+        auto* address = reinterpret_cast<void*>(allocation + offset);
+        switch (kind) {
+            case memory::host:
+                return cache.lookup(address, 17, mr_access_flags::send);
+            case memory::hmem:
+                return cache.lookup_hmem(address, 17, mr_access_flags::send, hmem_device::cuda(0));
+            case memory::mapped:
+            case memory::unmapped:
+                return cache.lookup_dmabuf(
+                    kind == memory::mapped ? reinterpret_cast<void*>(allocation) : nullptr,
+                    17,
+                    mr_access_flags::send,
+                    7,
+                    offset);
+        }
+        std::unreachable();
+    };
+    std::array<std::uint64_t, 2> latest{};
+    for (std::size_t index = 0; index < 256; ++index) {
+        {
+            auto handle = lookup(index);
+            REQUIRE(handle);
+            latest[index % 2] = handle->key().value();
+        }
+        REQUIRE(provider.live_regions == std::min(index + 1, std::size_t{2}));
+        REQUIRE(cache.size() == provider.live_regions);
+        REQUIRE(cache.stats().total_registered_bytes == bytes * cache.size());
+    }
+    REQUIRE(cache.stats().evictions == 254);
+    REQUIRE(lookup(254)->key().value() == latest[0]);
+    REQUIRE(lookup(255)->key().value() == latest[1]);
+    REQUIRE(cache.stats().hits == 2);
+    cache.clear();
+    REQUIRE(provider.live_regions == 0);
+    REQUIRE(lookup(0));
+    REQUIRE(cache.stats().total_registered_bytes == bytes);
+}
+
+TEST_CASE("bounded caches evict the oldest idle registration", "[mr_cache][limits]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom, mr_cache_limits{.max_entries = 2}};
+    alignas(4096) std::array<std::byte, 12288> buffer{};
+    const auto lookup = [&](std::size_t index) {
+        return cache.lookup(buffer.data() + index * 4096, 32, mr_access_flags::send);
+    };
+    auto first = lookup(0);
+    auto second = lookup(1);
+    REQUIRE(first);
+    REQUIRE(second);
+    const auto first_key = first->key().value(), second_key = second->key().value();
+    *first = {};
+    *second = {};
+    REQUIRE(lookup(0)->key().value() == first_key);
+    // The first range just became idle again; the second is now the oldest.
+    auto third = lookup(2);
+    REQUIRE(third);
+    REQUIRE(provider.keys.contains(first_key));
+    REQUIRE_FALSE(provider.keys.contains(second_key));
+    REQUIRE(cache.stats().evictions == 1);
+    cache.invalidate(buffer.data(), 32);
+    REQUIRE(cache.size() == 1);
+    *third = {};
+    cache.clear();
+    REQUIRE(cache.size() == 0);
+    REQUIRE(lookup(1));
+    REQUIRE(lookup(2));
+    REQUIRE(cache.size() == 2);
+}
+
+TEST_CASE("cache limits never evict live handles", "[mr_cache][limits]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{
+        provider.dom, mr_cache_limits{.max_entries = 1, .max_registered_bytes = 4096}};
+    alignas(4096) std::array<std::byte, 12288> buffer{};
+    std::array<mr_handle<provider::tcp_tag>, 3> handles;
+    for (std::size_t index = 0; index < handles.size(); ++index) {
+        auto result = cache.lookup(buffer.data() + index * 4096, 32, mr_access_flags::send);
+        REQUIRE(result);
+        handles[index] = std::move(*result);
+    }
+    REQUIRE(provider.live_regions == 3);
+    REQUIRE(cache.stats().total_registered_bytes == buffer.size());
+    const auto last_key = handles[2].key().value();
+    handles[0] = {};
+    REQUIRE(provider.live_regions == 2);
+    REQUIRE(handles[1].key());
+    REQUIRE(handles[2].key());
+    handles[1] = {};
+    REQUIRE(provider.live_regions == 1);
+    handles[2] = {};
+    REQUIRE(provider.live_regions == 1);
+    REQUIRE(cache.stats().total_registered_bytes == 4096);
+    REQUIRE(cache.lookup(buffer.data() + 8192, 32, mr_access_flags::send)->key().value() ==
+            last_key);
+}
+
+TEST_CASE("failed registrations leave a bounded cache usable", "[mr_cache][limits]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom, mr_cache_limits{.max_entries = 1}};
+    alignas(4096) std::array<std::byte, 8192> buffer{};
+    REQUIRE(cache.lookup(buffer.data(), 32, mr_access_flags::send));
+    provider.registration_error = -FI_ENOMEM;
+    REQUIRE(cache.lookup(buffer.data() + 4096, 32, mr_access_flags::send).error() ==
+            errc::no_memory);
+    REQUIRE(provider.live_regions == 0);
+    REQUIRE(cache.size() == 0);
+    REQUIRE(cache.stats().evictions == 1);
+    provider.registration_error = 0;
+    REQUIRE(cache.lookup(buffer.data() + 4096, 32, mr_access_flags::send));
+    REQUIRE(cache.size() == 1);
+    REQUIRE(cache.stats().total_registered_bytes == 4096);
+}
+
+TEST_CASE("zero and undersized cache limits retain only active registrations",
+          "[mr_cache][limits]") {
+    using namespace loom;
+    enum class memory { host, hmem, dmabuf };
+    enum class bound { zero_entries, zero_bytes, undersized };
+    const auto kind = GENERATE(memory::host, memory::hmem, memory::dmabuf);
+    const auto policy = GENERATE(bound::zero_entries, bound::zero_bytes, bound::undersized);
+    const std::size_t bytes = kind == memory::host ? 4096 : 17;
+    mr_cache_limits limits;
+    if (policy == bound::zero_entries)
+        limits.max_entries = 0;
+    else
+        limits.max_registered_bytes = policy == bound::zero_bytes ? 0 : bytes - 1;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom, limits};
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    const auto lookup = [&] {
+        switch (kind) {
+            case memory::host:
+                return cache.lookup(buffer.data(), 17, mr_access_flags::send);
+            case memory::hmem:
+                return cache.lookup_hmem(
+                    buffer.data(), 17, mr_access_flags::send, hmem_device::cuda(0));
+            case memory::dmabuf:
+                return cache.lookup_dmabuf(buffer.data(), 17, mr_access_flags::send, 7);
+        }
+        std::unreachable();
+    };
+    auto first = lookup();
+    REQUIRE(first);
+    auto second = lookup();
+    REQUIRE(second);
+    REQUIRE(first->key() == second->key());
+    REQUIRE(provider.registrations == 1);
+    REQUIRE(cache.stats().total_registered_bytes == bytes);
+    *first = {};
+    REQUIRE(provider.live_regions == 1);
+    *second = {};
+    REQUIRE(provider.live_regions == 0);
+    REQUIRE(cache.size() == 0);
+    REQUIRE(cache.stats().evictions == 1);
+    REQUIRE(cache.stats().total_registered_bytes == 0);
+    REQUIRE(lookup());
+    REQUIRE(provider.registrations == 2);
+    REQUIRE(cache.size() == 0);
+}
+
+TEST_CASE("cache trimming checks prospective byte totals without wrapping", "[mr_cache][limits]") {
+    using namespace loom;
+    const bool bytes = GENERATE(false, true);
+    constexpr auto length = std::numeric_limits<std::size_t>::max() / 2 + 1;
+    test::mock_domain provider;
+    const auto limits =
+        bytes ? mr_cache_limits{.max_registered_bytes = length} : mr_cache_limits{.max_entries = 2};
+    mr_cache<provider::tcp_tag> cache{provider.dom, limits};
+    auto* address = reinterpret_cast<void*>(4096);
+    for (int device = 0; device < 3; ++device) {
+        REQUIRE(
+            cache.lookup_hmem(address, length, mr_access_flags::send, hmem_device::cuda(device)));
+        REQUIRE(provider.live_regions == 1);
+        REQUIRE(cache.stats().total_registered_bytes == length);
+    }
+    REQUIRE(provider.registrations == 3);
+    REQUIRE(cache.stats().evictions == 2);
+}
+
 TEST_CASE("concurrent cache hits retain exact statistics", "[mr_cache]") {
     using namespace loom;
     enum class memory { host, hmem, dmabuf };
@@ -132,8 +346,11 @@ TEST_CASE("concurrent cache misses publish one registration", "[mr_cache][concur
     using namespace loom;
     enum class memory { host, hmem, dmabuf };
     const auto kind = GENERATE(memory::host, memory::hmem, memory::dmabuf);
+    const auto bounded = GENERATE(false, true);
     test::mock_domain provider;
-    mr_cache<provider::tcp_tag> cache{provider.dom};
+    mr_cache<provider::tcp_tag> cache{
+        provider.dom,
+        mr_cache_limits{.max_entries = bounded ? 0 : std::numeric_limits<std::size_t>::max()}};
     alignas(4096) std::array<std::byte, 4096> buffer{};
     constexpr std::size_t count = 16;
     std::array<mr_handle<provider::tcp_tag>, count> handles;
@@ -175,6 +392,8 @@ TEST_CASE("concurrent cache misses publish one registration", "[mr_cache][concur
         REQUIRE(handle.key() == handles[0].key());
         REQUIRE(handle.refcount() == count);
     }
+    handles = {};
+    REQUIRE(cache.size() == (bounded ? 0 : 1));
 }
 
 TEST_CASE("cache reuse and release race invalidation without losing registrations",
@@ -182,8 +401,11 @@ TEST_CASE("cache reuse and release race invalidation without losing registration
     using namespace loom;
     enum class memory { host, hmem, dmabuf };
     const auto kind = GENERATE(memory::host, memory::hmem, memory::dmabuf);
+    const auto bounded = GENERATE(false, true);
     test::mock_domain provider;
-    mr_cache<provider::tcp_tag> cache{provider.dom};
+    mr_cache<provider::tcp_tag> cache{
+        provider.dom,
+        mr_cache_limits{.max_entries = bounded ? 2 : std::numeric_limits<std::size_t>::max()}};
     alignas(4096) std::array<std::byte, 32768> buffer{};
     constexpr int workers = 4, iterations = 2000;
     std::barrier ready{workers + 1};
@@ -238,6 +460,8 @@ TEST_CASE("cache reuse and release race invalidation without losing registration
     REQUIRE(stats.hits + stats.misses == workers * iterations);
     REQUIRE(stats.registrations == stats.misses);
     REQUIRE(provider.registrations == stats.registrations);
+    if (bounded)
+        REQUIRE(cache.size() <= 2);
     cache.clear();
     REQUIRE(cache.size() == 0);
     REQUIRE(provider.live_regions == 0);
@@ -920,13 +1144,17 @@ TEST_CASE("endpoint caches publish enabled host and device registrations",
     const auto kind = GENERATE(cache_memory::host, cache_memory::hmem, cache_memory::dmabuf);
     const auto mode = GENERATE(0, FI_MR_ENDPOINT, FI_MR_ENDPOINT | FI_MR_PROV_KEY);
     const auto explicit_resource = GENERATE(false, true);
+    const auto bounded = GENERATE(false, true);
     endpoint_cache_provider provider{mode};
     alignas(4096) std::array<std::byte, 4096> buffer{};
     auto endpoint = provider.endpoint(explicit_resource ? get_default_resource() : nullptr);
     REQUIRE(endpoint.belongs_to(provider.dom));
     CHECK(provider.dom.get_memory_region_mode().has(mr_mode_flags::endpoint) ==
           bool(mode & FI_MR_ENDPOINT));
-    auto cache = make_mr_cache<provider::tcp_tag>(provider.dom, endpoint);
+    auto cache = make_mr_cache<provider::tcp_tag>(
+        provider.dom,
+        endpoint,
+        mr_cache_limits{.max_entries = bounded ? 0 : std::numeric_limits<std::size_t>::max()});
     auto handle = endpoint_cache_lookup(cache, buffer, kind);
     REQUIRE(handle);
     CHECK(provider.registrations == 1);
@@ -957,7 +1185,7 @@ TEST_CASE("endpoint caches publish enabled host and device registrations",
     if (mode & FI_MR_ENDPOINT)
         CHECK(endpoint.close().error() == errc::busy);
     handle = std::unexpected(make_error_code(errc::io_error));
-    CHECK(provider.live_regions == 1);
+    CHECK(provider.live_regions == (bounded ? 0 : 1));
     cache.clear();
     CHECK(provider.live_regions == 0);
     CHECK(provider.bindings.empty());

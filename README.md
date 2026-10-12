@@ -466,17 +466,37 @@ skip earlier registrations that cannot contain the requested range, including
 on misses between disjoint allocations. Overlapping candidates still require
 permission and memory-identity checks. Invalidation removes ranges from this
 index immediately while existing handles retain their registrations.
-Cache hits and release of reusable handles share read access; misses recheck
-under exclusive access before registering. Registration, invalidation and
-eviction remain serialized. Hit counters remain exact under concurrent reuse.
+Unbounded caches share read access for hits and release of reusable handles;
+misses recheck under exclusive access before registering. Registration,
+invalidation and eviction remain serialized. Hit counters remain exact under
+concurrent reuse.
+
+Retention is unbounded by default. To cap it, pass `mr_cache_limits` to the
+constructor or factory (after the endpoint, when one is supplied):
+
+```cpp
+auto cache = make_mr_cache<provider::verbs_tag>(
+    domain, mr_cache_limits{.max_entries = 256,
+                            .max_registered_bytes = 64 * 1024 * 1024});
+```
+
+Both bounds apply across host, HMEM and DMA-BUF registrations. Host bytes include
+page rounding; device bytes use the exact registered length. The cache evicts
+the oldest idle entries before a new registration, even if that registration
+later fails. Live handles can temporarily exceed either bound. Their releases
+restore the bounds as entries become idle; zero limits disable idle retention.
+Bounded caches serialize transitions between idle and active use to maintain
+eviction order, while lookups of entries with live handles still share access.
+Keep a handle alive through every native operation and any remote use of its
+exported key. The limits are fixed at construction and available through
+`cache.limits()`; statistics include registrations retained by live handles.
 
 Keep allocations and DMA-BUF descriptors valid while their registrations are
 cached. Before freeing or remapping memory, or closing/reusing a descriptor,
 invalidate the registered range and retire all handles that still use it.
 Invalidation prevents subsequent reuse but preserves existing handles until
 release. The cache does not monitor allocator or descriptor changes; use
-`clear()` or `evict_unreferenced()` to release idle registrations. Distinct
-allocations have no automatic retention budget.
+`clear()` or `evict_unreferenced()` to release idle registrations explicitly.
 
 For raw-key registrations, use `mr.export_raw()` and exchange the returned
 `raw_remote_memory` fields through the consumer's wire protocol. Preserve

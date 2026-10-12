@@ -74,6 +74,8 @@ struct mr_cache_entry_base {
     mr_cache_entry_base* index_right{};
     std::uintptr_t index_end{};  ///< Greatest exclusive end in this subtree.
     int index_height{1};
+    mr_cache_entry_base* idle_previous{};
+    mr_cache_entry_base* idle_next{};
 
     /**
      * @brief Default constructor.
@@ -347,6 +349,14 @@ struct mr_cache_stats {
     std::size_t total_registered_bytes{0};  ///< Total bytes currently registered
 };
 
+/// Optional retention bounds, shared by host and device registrations.
+/// Live handles may exceed these bounds; only idle registrations are evicted.
+/// Zero disables idle retention. Limits are fixed when the cache is created.
+struct mr_cache_limits {
+    std::size_t max_entries{std::numeric_limits<std::size_t>::max()};
+    std::size_t max_registered_bytes{std::numeric_limits<std::size_t>::max()};
+};
+
 /**
  * @class mr_cache
  * @brief Thread-safe cache for memory region registrations.
@@ -360,7 +370,10 @@ struct mr_cache_stats {
  * Cached allocations and DMA-BUF descriptors must remain valid until their
  * registrations are evicted. Before freeing or remapping memory or reusing a
  * descriptor, invalidate overlapping entries and retire every affected handle.
- * Retention is explicit: clear() and evict_unreferenced() release idle entries.
+ * Retention is unbounded by default. Optional limits evict the oldest idle
+ * registrations first. Retain a handle throughout native operations and remote
+ * use of exported keys so automatic eviction cannot retire a registration early.
+ * clear() and evict_unreferenced() release all idle entries.
  * Registrations that would overflow the retained byte total fail with no_space.
  *
  * @tparam Provider The provider tag type.
@@ -377,15 +390,25 @@ public:
      * @param resource Optional memory resource for allocations.
      */
     explicit mr_cache(domain& dom, memory_resource* resource = nullptr) noexcept
+        : mr_cache(dom, mr_cache_limits{}, resource) {}
+
+    /// Configure automatic retention limits. Live handles are never evicted.
+    template <std::same_as<mr_cache_limits> Limits>
+    mr_cache(domain& dom, Limits limits, memory_resource* resource = nullptr) noexcept
         : domain_(&dom), domain_identity_(dom.internal_ptr()),
-          resource_(resource ? resource : get_default_resource()) {}
+          resource_(resource ? resource : get_default_resource()), limits_(limits) {}
 
     /// Scope registrations to one endpoint. FI_MR_ENDPOINT domains require
     /// this overload; each new host, HMEM, or DMA-BUF MR is bound and enabled
     /// before publication. External endpoint use still follows the negotiated
     /// provider threading rules; this cache serializes only its own accesses.
     mr_cache(domain& dom, endpoint& ep, memory_resource* resource = nullptr) noexcept
-        : mr_cache(dom, resource) {
+        : mr_cache(dom, ep, mr_cache_limits{}, resource) {}
+
+    /// Combine endpoint-bound registration with automatic retention limits.
+    template <std::same_as<mr_cache_limits> Limits>
+    mr_cache(domain& dom, endpoint& ep, Limits limits, memory_resource* resource = nullptr) noexcept
+        : mr_cache(dom, limits, resource) {
         endpoint_ = &ep;
         endpoint_identity_ = ep.internal_ptr();
     }
@@ -425,7 +448,8 @@ public:
             const std::shared_lock lock{mutex_};
             if (auto valid = validate_context(); !valid)
                 return std::unexpected(valid.error());
-            if (auto* entry = find_existing_entry(uaddr, length, access)) {
+            if (auto* entry = find_existing_entry(uaddr, length, access);
+                entry && can_pin_shared(*entry)) {
                 hits_.fetch_add(1, std::memory_order_relaxed);
                 return handle_type{this, entry};
             }
@@ -435,6 +459,7 @@ public:
             return std::unexpected(valid.error());
 
         if (auto* entry = find_existing_entry(uaddr, length, access)) {
+            idle_remove(*entry);
             hits_.fetch_add(1, std::memory_order_relaxed);
             return handle_type{this, entry};
         }
@@ -443,6 +468,7 @@ public:
 
         auto aligned_base = traits::align_down(uaddr);
         auto aligned_length = traits::aligned_length(uaddr, length);
+        trim(1, aligned_length);
         if (aligned_length >
             std::numeric_limits<std::size_t>::max() - stats_.total_registered_bytes)
             return make_error_result<handle_type>(errc::no_space);
@@ -463,7 +489,7 @@ public:
         entry->mr = std::move(*mr_result);
 
         auto* entry_ptr = entry.get();
-        entries_.emplace(aligned_base, std::move(entry));
+        entries_.emplace(entry_ptr, std::move(entry));
         index_insert(*entry_ptr);
 
         ++stats_.registrations;
@@ -513,7 +539,8 @@ public:
             const std::shared_lock lock{mutex_};
             if (auto valid = validate_context(); !valid)
                 return std::unexpected(valid.error());
-            if (auto* entry = find_existing_entry(local, length, access, identity)) {
+            if (auto* entry = find_existing_entry(local, length, access, identity);
+                entry && can_pin_shared(*entry)) {
                 hits_.fetch_add(1, std::memory_order_relaxed);
                 return handle_type{this, entry};
             }
@@ -523,11 +550,13 @@ public:
             return std::unexpected(valid.error());
 
         if (auto* entry = find_existing_entry(local, length, access, identity)) {
+            idle_remove(*entry);
             hits_.fetch_add(1, std::memory_order_relaxed);
             return handle_type{this, entry};
         }
         ++stats_.misses;
 
+        trim(1, length);
         if (length > std::numeric_limits<std::size_t>::max() - stats_.total_registered_bytes)
             return make_error_result<handle_type>(errc::no_space);
         auto entry = std::make_unique<detail::mr_cache_entry_base>(local, length, access);
@@ -547,7 +576,7 @@ public:
         entry->mr = std::move(*mr_result);
 
         auto* entry_ptr = entry.get();
-        entries_.emplace(entry_ptr->base_addr, std::move(entry));
+        entries_.emplace(entry_ptr, std::move(entry));
         index_insert(*entry_ptr);
 
         ++stats_.registrations;
@@ -580,7 +609,8 @@ public:
             const std::shared_lock lock{mutex_};
             if (auto valid = validate_context(); !valid)
                 return std::unexpected(valid.error());
-            if (auto* entry = find_existing_entry(uaddr, length, access, identity)) {
+            if (auto* entry = find_existing_entry(uaddr, length, access, identity);
+                entry && can_pin_shared(*entry)) {
                 hits_.fetch_add(1, std::memory_order_relaxed);
                 return handle_type{this, entry};
             }
@@ -590,11 +620,13 @@ public:
             return std::unexpected(valid.error());
 
         if (auto* entry = find_existing_entry(uaddr, length, access, identity)) {
+            idle_remove(*entry);
             hits_.fetch_add(1, std::memory_order_relaxed);
             return handle_type{this, entry};
         }
         ++stats_.misses;
 
+        trim(1, length);
         if (length > std::numeric_limits<std::size_t>::max() - stats_.total_registered_bytes)
             return make_error_result<handle_type>(errc::no_space);
         auto entry = std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
@@ -613,7 +645,7 @@ public:
         entry->mr = std::move(*mr_result);
 
         auto* entry_ptr = entry.get();
-        entries_.emplace(uaddr, std::move(entry));
+        entries_.emplace(entry_ptr, std::move(entry));
         index_insert(*entry_ptr);
 
         ++stats_.registrations;
@@ -644,10 +676,7 @@ public:
                     index_remove(entry);
                 entry.invalidated = true;
                 if (entry.refcount.load(std::memory_order_acquire) == 0) {
-                    stats_.total_registered_bytes -= entry.length;
-                    --stats_.current_entries;
-                    ++stats_.evictions;
-                    it = entries_.erase(it);
+                    it = erase_entry(it);
                 } else {
                     ++it;
                 }
@@ -671,17 +700,15 @@ public:
         auto it = entries_.begin();
         while (it != entries_.end()) {
             if (it->second->refcount.load(std::memory_order_acquire) == 0) {
-                if (!it->second->invalidated)
-                    index_remove(*it->second);
-                stats_.total_registered_bytes -= it->second->length;
-                --stats_.current_entries;
-                ++stats_.evictions;
-                it = entries_.erase(it);
+                it = erase_entry(it);
             } else {
                 ++it;
             }
         }
     }
+
+    /// The immutable retention policy. Statistics include temporary live excess.
+    [[nodiscard]] auto limits() const noexcept -> mr_cache_limits { return limits_; }
 
     /**
      * @brief Gets cache statistics.
@@ -717,6 +744,63 @@ public:
 private:
     friend class mr_handle<Provider>;
     using entry_type = detail::mr_cache_entry_base;
+    using entry_map = std::map<entry_type*, std::unique_ptr<entry_type>>;
+
+    auto bounded() const noexcept -> bool {
+        constexpr auto unlimited = std::numeric_limits<std::size_t>::max();
+        return limits_.max_entries != unlimited || limits_.max_registered_bytes != unlimited;
+    }
+
+    auto can_pin_shared(const entry_type& entry) const noexcept -> bool {
+        // An idle bounded entry must leave the eviction list under exclusive
+        // access before its first new handle is published.
+        return !bounded() || entry.refcount.load(std::memory_order_relaxed) != 0;
+    }
+
+    void idle_remove(entry_type& entry) noexcept {
+        if (entry.idle_previous)
+            entry.idle_previous->idle_next = entry.idle_next;
+        else if (idle_first_ == &entry)
+            idle_first_ = entry.idle_next;
+        if (entry.idle_next)
+            entry.idle_next->idle_previous = entry.idle_previous;
+        else if (idle_last_ == &entry)
+            idle_last_ = entry.idle_previous;
+        entry.idle_previous = entry.idle_next = nullptr;
+    }
+
+    void idle_append(entry_type& entry) noexcept {
+        entry.idle_previous = idle_last_;
+        if (idle_last_)
+            idle_last_->idle_next = &entry;
+        else
+            idle_first_ = &entry;
+        idle_last_ = &entry;
+    }
+
+    auto erase_entry(typename entry_map::iterator position) -> typename entry_map::iterator {
+        auto& entry = *position->second;
+        idle_remove(entry);
+        if (!entry.invalidated)
+            index_remove(entry);
+        stats_.total_registered_bytes -= entry.length;
+        --stats_.current_entries;
+        ++stats_.evictions;
+        return entries_.erase(position);
+    }
+
+    void trim(std::size_t additional_entries = 0, std::size_t additional_bytes = 0) {
+        if (!bounded())
+            return;
+        const auto fits = [](std::size_t retained, std::size_t extra, std::size_t maximum) {
+            return extra <= maximum && retained <= maximum - extra;
+        };
+        while (
+            idle_first_ &&
+            (!fits(stats_.current_entries, additional_entries, limits_.max_entries) ||
+             !fits(stats_.total_registered_bytes, additional_bytes, limits_.max_registered_bytes)))
+            erase_entry(entries_.find(idle_first_));
+    }
 
     static auto index_height(const entry_type* entry) noexcept -> int {
         return entry ? entry->index_height : 0;
@@ -900,29 +984,32 @@ private:
      */
     void release_entry(detail::mr_cache_entry_base* entry) noexcept {
         {
-            // Readers protect the entry until the decrement is finished. A
-            // reusable registration stays cached even after its last handle.
+            // Readers protect the entry until the decrement is finished.
+            // Unbounded caches retain reusable entries after their last handle.
             const std::shared_lock lock{mutex_};
-            if (!entry->invalidated) {
+            if (!entry->invalidated && !bounded()) {
                 entry->refcount.fetch_sub(1, std::memory_order_acq_rel);
                 return;
             }
+            auto references = entry->refcount.load(std::memory_order_relaxed);
+            while (references > 1) {
+                if (entry->refcount.compare_exchange_weak(references,
+                                                          references - 1,
+                                                          std::memory_order_acq_rel,
+                                                          std::memory_order_relaxed))
+                    return;
+            }
         }
         // Retain our reference while switching locks so eviction cannot destroy
-        // an invalidated entry before its final release acquires exclusive access.
+        // the entry before its final release acquires exclusive access.
         std::unique_lock lock(mutex_);
-        if (entry->refcount.fetch_sub(1, std::memory_order_acq_rel) != 1 || !entry->invalidated)
+        if (entry->refcount.fetch_sub(1, std::memory_order_acq_rel) != 1)
             return;
-
-        const auto [first, last] = entries_.equal_range(entry->base_addr);
-        for (auto it = first; it != last; ++it) {
-            if (it->second.get() == entry) {
-                stats_.total_registered_bytes -= entry->length;
-                --stats_.current_entries;
-                ++stats_.evictions;
-                entries_.erase(it);
-                return;
-            }
+        if (entry->invalidated) {
+            erase_entry(entries_.find(entry));
+        } else {
+            idle_append(*entry);
+            trim();
         }
     }
 
@@ -931,10 +1018,12 @@ private:
     endpoint* endpoint_{};             ///< Optional endpoint registration scope
     void* endpoint_identity_{};
     memory_resource* resource_;        ///< Memory resource
+    const mr_cache_limits limits_;
     mutable std::shared_mutex mutex_;  ///< Lock for thread safety
-    std::multimap<std::uintptr_t, std::unique_ptr<detail::mr_cache_entry_base>>
-        entries_;           ///< Cache entries
+    entry_map entries_;                ///< Entries owned by stable identity.
     entry_type* index_root_{};  ///< Nonowning AVL index of reusable ranges.
+    entry_type* idle_first_{};
+    entry_type* idle_last_{};
     std::atomic<std::size_t> hits_{};
     mr_cache_stats stats_;  ///< Cache statistics
 };
@@ -952,11 +1041,26 @@ template <provider_tag Provider>
     return mr_cache<Provider>(dom, resource);
 }
 
+/// Create a cache with automatic retention limits.
+template <provider_tag Provider, std::same_as<mr_cache_limits> Limits>
+[[nodiscard]] auto make_mr_cache(domain& dom, Limits limits, memory_resource* resource = nullptr)
+    -> mr_cache<Provider> {
+    return mr_cache<Provider>(dom, limits, resource);
+}
+
 /// Create a cache scoped to one endpoint in the supplied domain.
 template <provider_tag Provider>
 [[nodiscard]] auto make_mr_cache(domain& dom, endpoint& ep, memory_resource* resource = nullptr)
     -> mr_cache<Provider> {
     return mr_cache<Provider>(dom, ep, resource);
+}
+
+/// Create a bounded cache scoped to one endpoint.
+template <provider_tag Provider, std::same_as<mr_cache_limits> Limits>
+[[nodiscard]] auto
+make_mr_cache(domain& dom, endpoint& ep, Limits limits, memory_resource* resource = nullptr)
+    -> mr_cache<Provider> {
+    return mr_cache<Provider>(dom, ep, limits, resource);
 }
 
 /**
