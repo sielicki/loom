@@ -18,6 +18,7 @@ struct cancellation_provider {
     bool closed_while_pending{};
     bool fail_first_cancel{};
     bool fail_submission{};
+    bool discard_on_close{};
 
     fi_ops ops{
         .size = sizeof(fi_ops),
@@ -26,6 +27,10 @@ struct cancellation_provider {
                 auto& self = *static_cast<cancellation_provider*>(handle->context);
                 ++self.closed;
                 self.closed_while_pending = !self.pending.empty();
+                if (self.discard_on_close) {
+                    self.pending.clear();
+                    return 0;
+                }
                 return self.closed_while_pending ? -FI_EBUSY : 0;
             },
         .bind = [](fid*, fid*, std::uint64_t) { return 0; },
@@ -42,16 +47,18 @@ struct cancellation_provider {
             return self.fail_first_cancel && self.cancelled.size() == 1 ? -FI_ENOSYS : 0;
         },
     };
+    static auto submit(fid_ep* ep, const fi_msg* message, std::uint64_t) -> ssize_t {
+        auto& self = *static_cast<cancellation_provider*>(ep->fid.context);
+        if (self.fail_submission) {
+            return -FI_EIO;
+        }
+        self.pending.push_back(message->context);
+        return 0;
+    }
     fi_ops_msg messages{
         .size = sizeof(fi_ops_msg),
-        .recvmsg = [](fid_ep* ep, const fi_msg* message, std::uint64_t) -> ssize_t {
-            auto& self = *static_cast<cancellation_provider*>(ep->fid.context);
-            if (self.fail_submission) {
-                return -FI_EIO;
-            }
-            self.pending.push_back(message->context);
-            return 0;
-        },
+        .recvmsg = submit,
+        .sendmsg = submit,
     };
     fid_ep handle{.fid = {.context = this, .ops = &ops}, .ops = &endpoint_ops, .msg = &messages};
 
@@ -61,7 +68,7 @@ struct cancellation_provider {
                                                                        &handle,
                                                                        loom::endpoint_types::msg,
                                                                        loom::address_format::inet)};
-        REQUIRE(ep.bind_cq(queue, loom::cq_bind::recv));
+        REQUIRE(ep.bind_cq(queue, loom::cq_bind::recv | loom::cq_bind::transmit));
         return ep;
     }
 
@@ -80,6 +87,90 @@ struct cancellation_provider {
     }
 };
 }  // namespace
+
+TEST_CASE("Explicit Asio close retires discarded native operations", "[asio][cancellation]") {
+    cancellation_provider native;
+    native.discard_on_close = true;
+    native.fail_first_cancel = GENERATE(false, true);
+    const auto run_handlers = GENERATE(false, true);
+    std::weak_ptr<std::array<std::byte, 8>> lifetime;
+    int completions{};
+    {
+        ::asio::io_context ioc;
+        ::asio::cancellation_signal signal;
+        loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+        auto storage = std::make_shared<std::array<std::byte, 8>>();
+        lifetime = storage;
+        auto handler = [&, storage](std::error_code error, std::size_t bytes) {
+            CHECK(error == loom::errc::canceled);
+            CHECK(bytes == 0);
+            ++completions;
+        };
+        ep.async_receive(::asio::buffer(*storage), handler);
+        ep.async_send(::asio::buffer(*storage),
+                      ::asio::bind_cancellation_slot(signal.slot(), std::move(handler)));
+        storage.reset();
+        REQUIRE(native.pending.size() == 2);
+        const auto contexts = native.pending;
+        std::error_code error;
+        ep.cancel(error);
+        CHECK(static_cast<bool>(error) == native.fail_first_cancel);
+        ep.close(error);
+        CHECK_FALSE(error);
+        CHECK_FALSE(ep.is_open());
+        CHECK(native.closed == 1);
+        CHECK(native.pending.empty());
+        CHECK_FALSE(signal.slot().has_handler());
+        CHECK(completions == 0);
+        if (!native.pending.empty()) {
+            // Keep the regression failure from leaving native work alive.
+            native.complete_all();
+        }
+        for (auto* context : contexts) {
+            loom::completion_event event;
+            event.context = loom::context_ptr<void>{context};
+            CHECK_FALSE(native.queue.dispatch(event));
+        }
+        ep.close(error);
+        CHECK_FALSE(error);
+        CHECK(native.closed == 1);
+        if (run_handlers) {
+            ioc.run();
+            CHECK(completions == 2);
+        }
+    }
+    CHECK(lifetime.expired());
+    CHECK(completions == (run_handlers ? 2 : 0));
+}
+
+TEST_CASE("Failed Asio close preserves pending work for retry", "[asio][cancellation]") {
+    cancellation_provider native;
+    ::asio::io_context ioc;
+    loom::asio::endpoint ep{ioc.get_executor(), native.endpoint()};
+    std::array<std::byte, 1> storage{};
+    int completions{};
+    ep.async_receive(::asio::buffer(storage), [&](std::error_code, std::size_t) { ++completions; });
+    std::error_code error;
+    ep.close(error);
+    CHECK(error == loom::errc::busy);
+    CHECK(ep.is_open());
+    CHECK(native.closed == 1);
+    CHECK(native.pending.size() == 1);
+    CHECK(native.cancelled.empty());
+    CHECK(completions == 0);
+    CHECK_THROWS_AS(ep.close(), std::system_error);
+    CHECK(ep.is_open());
+    ep.cancel(error);
+    CHECK_FALSE(error);
+    CHECK(native.cancelled == native.pending);
+    native.complete_all();
+    ioc.run();
+    CHECK(completions == 1);
+    ep.close(error);
+    CHECK_FALSE(error);
+    CHECK_FALSE(ep.is_open());
+    CHECK(native.closed == 3);
+}
 
 TEST_CASE("Asio cancellation visits every pending operation", "[asio][cancellation]") {
     cancellation_provider native;
@@ -140,12 +231,16 @@ TEST_CASE("Asio cancellation survives moves and source destruction", "[asio][can
     REQUIRE(replaced.closed == 0);
     signal.emit(::asio::cancellation_type::terminal);
     REQUIRE(original.cancelled == original.pending);
-    destination.close();
-    REQUIRE_FALSE(destination.is_open());
-    REQUIRE(original.closed == 0);
+    std::error_code error;
+    destination.close(error);
+    REQUIRE(error == loom::errc::busy);
+    REQUIRE(destination.is_open());
+    REQUIRE(original.closed == 1);
     original.complete_all();
     replaced.complete_all();
-    REQUIRE(original.closed == 1);
+    destination.close();
+    REQUIRE_FALSE(destination.is_open());
+    REQUIRE(original.closed == 2);
     REQUIRE(replaced.closed == 1);
     REQUIRE_FALSE(original.closed_while_pending);
     REQUIRE_FALSE(replaced.closed_while_pending);

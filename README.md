@@ -903,6 +903,22 @@ Bind those queues before initiating operations and keep them alive through nativ
 completion. A manual progress loop can route events with `cq.dispatch(event)`;
 the old raw-pointer `dispatch_asio_completion` helper has been removed.
 
+Before destroying an associated executor, drain pending operations or explicitly
+close the Asio endpoint and check the result. `ep.close(ec)` calls native close;
+success releases the native operation storage and posts pending handlers with
+`errc::canceled`. Those handlers can run normally or be destroyed with their
+executor. A failed close preserves the endpoint and pending work for progress,
+cancellation, and retry. The overload without an error-code argument throws
+`std::system_error` on failure.
+
+Serialize explicit close with submissions and CQ dispatch: stop service polling
+and join external progress threads before closing. Blocking operations must
+finish first. Endpoint destruction and move assignment request cancellation and
+retain accepted work until completion; they do not replace this shutdown step.
+Keep buffers, registrations, queues, and executors alive until native work has
+completed or explicit close succeeds. Low-level completion-token initiation on
+a borrowed `loom::endpoint` requires draining its completions before shutdown.
+
 Asio retains IOVs and descriptors for up to four buffers inside the operation
 state. Larger sequences reserve each retained array once through the handler's
 associated allocator. The inline capacity does not limit the buffer count;

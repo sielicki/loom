@@ -19,6 +19,7 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <exception>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -49,6 +50,8 @@
 #include <asio/post.hpp>
 
 namespace loom::asio {
+
+class asio_context_erased;
 
 namespace detail {
 struct asio_buffers {
@@ -181,21 +184,22 @@ class endpoint_state {
 public:
     explicit endpoint_state(loom::endpoint ep = {}) : endpoint(std::move(ep)) {}
 
-    void add(void* context) {
+    void add(void* context, asio_context_erased* owner = nullptr) {
         const std::lock_guard lock{mutex_};
-        pending_.push_back(context);
+        pending_.push_back({context, owner});
     }
 
     void remove(void* context) {
         const std::lock_guard lock{mutex_};
-        std::erase(pending_, context);
+        std::erase_if(pending_,
+                      [context](const auto& pending) { return pending.context == context; });
     }
 
     [[nodiscard]] auto cancel() -> std::error_code {
         const std::lock_guard lock{mutex_};
         std::error_code error;
-        for (auto* context : pending_) {
-            const auto result = endpoint.cancel(context_ptr<void>{context});
+        for (const auto& pending : pending_) {
+            const auto result = endpoint.cancel(context_ptr<void>{pending.context});
             if (!result && !error) {
                 error = result.error();
             }
@@ -203,11 +207,19 @@ public:
         return error;
     }
 
+    // Serialize native close and context retirement with submissions and CQ
+    // dispatch. A blocking operation must finish before closing the endpoint.
+    [[nodiscard]] auto close() -> std::error_code;
+
     loom::endpoint endpoint;
 
 private:
+    struct pending_operation {
+        void* context;
+        asio_context_erased* owner;
+    };
     std::mutex mutex_;
-    std::vector<void*> pending_;
+    std::vector<pending_operation> pending_;
 };
 }  // namespace detail
 
@@ -346,7 +358,7 @@ public:
     void set_transfer_size(std::size_t bytes) noexcept { transfer_size_ = bytes; }
 
     void retain_endpoint(std::shared_ptr<detail::endpoint_state> state) {
-        state->add(as_fi_context());
+        state->add(as_fi_context(), this);
         endpoint_state_ = std::move(state);
     }
 
@@ -389,6 +401,35 @@ private:
     std::shared_ptr<detail::endpoint_state> endpoint_state_;
     completion_registration registration_;
 };
+
+inline auto detail::endpoint_state::close() -> std::error_code {
+    std::unique_lock lock{mutex_};
+    // Stack-owned blocking operations cannot be retired by this caller.
+    for (const auto& pending : pending_) {
+        if (!pending.owner)
+            return make_error_code(errc::busy);
+    }
+    const auto result = endpoint.close();
+    if (!result)
+        return result.error();
+    auto retired = std::exchange(pending_, {});
+    lock.unlock();
+
+    // Successful native close may silently discard every CQ event. Retire all
+    // contexts even if posting one of their handlers throws (e.g. allocation).
+    std::exception_ptr failure;
+    for (const auto& pending : retired) {
+        try {
+            pending.owner->fail(make_error_code(errc::canceled));
+        } catch (...) {
+            if (!failure)
+                failure = std::current_exception();
+        }
+    }
+    if (failure)
+        std::rethrow_exception(failure);
+    return {};
+}
 
 /**
  * @brief Cancellation handler that triggers fi_cancel on the endpoint.

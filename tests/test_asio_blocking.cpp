@@ -310,6 +310,10 @@ TEST_CASE("blocking Asio messages await their own completion", "[asio][blocking]
     });
     CHECK(native.await([&] { return native.posted; }));
     CHECK(result.wait_for(20ms) == std::future_status::timeout);
+    std::error_code close_error;
+    ep.close(close_error);
+    CHECK(close_error == loom::errc::busy);
+    CHECK(ep.is_open());
     native.release();
     REQUIRE(result.wait_for(2s) == std::future_status::ready);
     const auto [error, bytes] = result.get();
@@ -564,4 +568,20 @@ TEST_CASE("blocking Asio transfers a short message across native endpoints",
     REQUIRE(std::ranges::all_of(std::span{destination}.subspan(bytes),
                                 [](auto byte) { return byte == std::byte{0x63}; }));
     REQUIRE(ioc.poll() == 0);
+
+    ioc.restart();
+    bool canceled{};
+    receiver.async_receive(registered_recvs, [&](std::error_code error, std::size_t bytes) {
+        CHECK(error == loom::errc::canceled);
+        CHECK(bytes == 0);
+        canceled = true;
+    });
+    REQUIRE(ioc.poll() == 0);
+    std::error_code close_error;
+    receiver.close(close_error);
+    REQUIRE_FALSE(close_error);
+    REQUIRE_FALSE(receiver.is_open());
+    REQUIRE_FALSE(canceled);
+    ioc.run_for(1s);
+    REQUIRE(canceled);
 }

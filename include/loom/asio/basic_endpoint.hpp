@@ -114,7 +114,7 @@ public:
      */
     auto operator=(basic_endpoint&& other) noexcept -> basic_endpoint& {
         if (this != &other) {
-            close();
+            release();
             executor_ = std::move(other.executor_);
             state_ = std::move(other.state_);
             empty_endpoint_ = std::move(other.empty_endpoint_);
@@ -125,7 +125,9 @@ public:
     basic_endpoint(const basic_endpoint&) = delete;
     auto operator=(const basic_endpoint&) -> basic_endpoint& = delete;
 
-    ~basic_endpoint() { close(); }
+    // Destruction requests cancellation; accepted work retains the native
+    // endpoint until completion. Use explicit close before executor shutdown.
+    ~basic_endpoint() { release(); }
 
     /**
      * @brief Returns the associated executor.
@@ -182,15 +184,17 @@ public:
     /**
      * @brief Closes the endpoint, releasing underlying resources.
      *
-     * After closing, is_open() will return false and no further operations
-     * should be performed on this endpoint.
-     * Pending operations are offered for cancellation and retain the native
-     * endpoint until their completions are consumed. Keep progressing their
-     * completion queues and retain their buffers until the handlers run.
+     * Successful native close retires pending operations and posts their
+     * handlers with errc::canceled. Failure preserves the endpoint and pending
+     * work, and throws std::system_error. A blocking operation must finish first.
+     * Serialize close with submissions and completion dispatch, including
+     * external CQ readers. The associated executors must still be alive.
      */
     void close() {
-        std::error_code ignored;
-        close(ignored);
+        std::error_code error;
+        close(error);
+        if (error)
+            throw std::system_error{error};
     }
 
     /**
@@ -198,9 +202,17 @@ public:
      * @param ec Set to the error code if an error occurs.
      */
     void close(std::error_code& ec) {
-        cancel(ec);
-        state_.reset();
-        empty_endpoint_ = loom::endpoint{};
+        if (state_) {
+            // Hold the state throughout handler retirement, including when a
+            // different executor runs a posted handler immediately.
+            auto state = state_;
+            ec = state->close();
+            if (!ec)
+                state_.reset();
+        } else {
+            const auto result = empty_endpoint_.close();
+            ec = result ? std::error_code{} : result.error();
+        }
     }
 
     /**
@@ -603,6 +615,12 @@ public:
     }
 
 private:
+    void release() {
+        cancel();
+        state_.reset();
+        empty_endpoint_ = loom::endpoint{};
+    }
+
     executor_type executor_;
     std::shared_ptr<detail::endpoint_state> state_;
     // Keep get() usable without allocating after move or close. New operations
