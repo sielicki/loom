@@ -58,6 +58,40 @@ TEST_CASE("cache range comparisons do not wrap", "[mr_cache]") {
     REQUIRE_FALSE(entry.overlaps(maximum - 2, 1));
 }
 
+TEST_CASE("cache byte accounting rejects overflowing totals", "[mr_cache]") {
+    using namespace loom;
+    enum class memory { host, hmem, dmabuf };
+    const auto kind = GENERATE(memory::host, memory::hmem, memory::dmabuf);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom};
+    auto* address = reinterpret_cast<void*>(4096);
+    constexpr auto length = std::numeric_limits<std::size_t>::max() / 2 + 1;
+    const auto lookup = [&](mr_access access) {
+        switch (kind) {
+            case memory::host:
+                return cache.lookup(address, length, access);
+            case memory::hmem:
+                return cache.lookup_hmem(address, length, access, hmem_device::cuda(0));
+            case memory::dmabuf:
+                return cache.lookup_dmabuf(address, length, access, 7);
+        }
+        std::unreachable();
+    };
+    auto first = lookup(mr_access_flags::send);
+    REQUIRE(first);
+    const auto second = lookup(mr_access_flags::recv);
+    REQUIRE_FALSE(second);
+    REQUIRE(second.error() == errc::no_space);
+    REQUIRE(provider.registrations == 1);
+    REQUIRE(cache.stats().total_registered_bytes == length);
+    REQUIRE(cache.stats().misses == 2);
+    *first = {};
+    cache.clear();
+    REQUIRE(cache.stats().total_registered_bytes == 0);
+    REQUIRE(lookup(mr_access_flags::recv));
+    REQUIRE(provider.registrations == 2);
+}
+
 TEST_CASE("concurrent cache hits retain exact statistics", "[mr_cache]") {
     using namespace loom;
     enum class memory { host, hmem, dmabuf };

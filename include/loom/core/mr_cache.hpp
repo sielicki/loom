@@ -361,6 +361,7 @@ struct mr_cache_stats {
  * registrations are evicted. Before freeing or remapping memory or reusing a
  * descriptor, invalidate overlapping entries and retire every affected handle.
  * Retention is explicit: clear() and evict_unreferenced() release idle entries.
+ * Registrations that would overflow the retained byte total fail with no_space.
  *
  * @tparam Provider The provider tag type.
  */
@@ -442,6 +443,9 @@ public:
 
         auto aligned_base = traits::align_down(uaddr);
         auto aligned_length = traits::aligned_length(uaddr, length);
+        if (aligned_length >
+            std::numeric_limits<std::size_t>::max() - stats_.total_registered_bytes)
+            return make_error_result<handle_type>(errc::no_space);
 
         auto entry =
             std::make_unique<detail::mr_cache_entry_base>(aligned_base, aligned_length, access);
@@ -524,6 +528,8 @@ public:
         }
         ++stats_.misses;
 
+        if (length > std::numeric_limits<std::size_t>::max() - stats_.total_registered_bytes)
+            return make_error_result<handle_type>(errc::no_space);
         auto entry = std::make_unique<detail::mr_cache_entry_base>(local, length, access);
         entry->identity = identity;
 
@@ -589,6 +595,8 @@ public:
         }
         ++stats_.misses;
 
+        if (length > std::numeric_limits<std::size_t>::max() - stats_.total_registered_bytes)
+            return make_error_result<handle_type>(errc::no_space);
         auto entry = std::make_unique<detail::mr_cache_entry_base>(uaddr, length, access);
         entry->identity = identity;
 
