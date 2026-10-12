@@ -153,6 +153,23 @@ public:
 
     [[nodiscard]] auto count() const noexcept -> std::size_t;
 
+    /// @brief Returns the reserved receive-context bit width, or zero for an empty AV.
+    [[nodiscard]] auto receive_context_bits() const noexcept -> std::size_t;
+
+    /**
+     * @brief Encodes a target receive context using this AV's reserved bit width.
+     * @param peer An unmodified base handle returned by insertion into this AV.
+     * @param index The remote receive-context index, representable as a native int.
+     * @return A destination address, or invalid_argument for an empty AV,
+     * invalid handle, overlapping address bits, out-of-range index, or reserved result.
+     *
+     * With no reserved bits, only index zero is accepted and the address is unchanged.
+     * The caller must ensure that the remote receive context exists and that the
+     * provider supports named receive contexts. This AV cannot check remote state.
+     */
+    [[nodiscard]] auto receive_context_address(av_handle peer, std::size_t index) const
+        -> result<fabric_addr>;
+
     auto bind(class endpoint& ep) -> void_result;
 
     [[nodiscard]] auto impl_internal_ptr() const noexcept -> void*;

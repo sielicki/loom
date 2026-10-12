@@ -5,7 +5,10 @@
 #include <rdma/fi_domain.h>
 #include <rdma/fi_errno.h>
 
+#include <bit>
 #include <cstring>
+#include <limits>
+#include <utility>
 
 #include "loom/core/allocator.hpp"
 #include "loom/core/endpoint.hpp"
@@ -24,6 +27,8 @@ struct address_vector_impl {
     std::size_t addr_count{0};                                ///< Number of addresses inserted.
     address_format addr_format{address_format::unspecified};  ///< Address format.
 
+    std::size_t rx_ctx_bits{};  ///< Bits reserved for receive-context addresses.
+
     /// @brief Default constructor.
     address_vector_impl() = default;
 
@@ -31,8 +36,12 @@ struct address_vector_impl {
     /// @param av_ptr The libfabric address vector pointer.
     /// @param av_type The address vector type.
     /// @param fmt The address format.
-    address_vector_impl(::fid_av* av_ptr, av_type av_type, address_format fmt)
-        : av(av_ptr), type(av_type), addr_format(fmt) {}
+    /// @param context_bits The reserved receive-context bit width.
+    address_vector_impl(::fid_av* av_ptr,
+                        av_type av_type,
+                        address_format fmt,
+                        std::size_t context_bits = 0)
+        : av(av_ptr), type(av_type), addr_format(fmt), rx_ctx_bits(context_bits) {}
 
     /// @brief Destructor that closes the libfabric address vector.
     ~address_vector_impl() {
@@ -78,7 +87,7 @@ auto address_vector::impl_valid() const noexcept -> bool {
 auto address_vector::create(const domain& dom,
                             const address_vector_attr& attr,
                             memory_resource* resource) -> result<address_vector> {
-    if (!dom) {
+    if (!dom || attr.rx_ctx_bits > std::numeric_limits<::fi_addr_t>::digits) {
         return make_error_result<address_vector>(errc::invalid_argument);
     }
 
@@ -114,14 +123,14 @@ auto address_vector::create(const domain& dom,
 
     if (resource) {
         auto impl = detail::make_pmr_unique<detail::address_vector_impl>(
-            resource, av, static_cast<av_type>(av_attr.type), format);
+            resource, av, static_cast<av_type>(av_attr.type), format, attr.rx_ctx_bits);
         (void)pending.release();
         return address_vector{std::move(impl)};
     }
 
     auto* default_resource = std::pmr::get_default_resource();
     auto impl = detail::make_pmr_unique<detail::address_vector_impl>(
-        default_resource, av, static_cast<av_type>(av_attr.type), format);
+        default_resource, av, static_cast<av_type>(av_attr.type), format, attr.rx_ctx_bits);
     (void)pending.release();
     return address_vector{std::move(impl)};
 }
@@ -353,6 +362,34 @@ auto address_vector::get_type() const -> av_type {
 
 auto address_vector::count() const noexcept -> std::size_t {
     return impl_ ? impl_->addr_count : 0;
+}
+
+auto address_vector::receive_context_bits() const noexcept -> std::size_t {
+    return impl_valid() ? impl_->rx_ctx_bits : 0;
+}
+
+auto address_vector::receive_context_address(av_handle peer, std::size_t index) const
+    -> result<fabric_addr> {
+    if (!impl_valid() || !peer.valid()) {
+        return make_error_result<fabric_addr>(errc::invalid_argument);
+    }
+
+    constexpr auto address_bits = std::numeric_limits<::fi_addr_t>::digits;
+    const auto bits = impl_->rx_ctx_bits;
+    if (bits > address_bits || !std::in_range<int>(index) ||
+        std::cmp_greater(std::bit_width(index), bits) ||
+        std::cmp_greater(std::bit_width(peer.value), address_bits - bits)) {
+        return make_error_result<fabric_addr>(errc::invalid_argument);
+    }
+
+    // fi_rx_addr shifts by the full address width when no bits are reserved.
+    const auto encoded =
+        bits == 0 ? peer.value
+                  : ::fi_rx_addr(peer.value, static_cast<int>(index), static_cast<int>(bits));
+    if (encoded == FI_ADDR_NOTAVAIL) {
+        return make_error_result<fabric_addr>(errc::invalid_argument);
+    }
+    return fabric_addr{encoded};
 }
 
 auto address_vector::bind(endpoint& ep) -> void_result {

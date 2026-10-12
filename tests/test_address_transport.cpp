@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -29,6 +31,7 @@ struct provider {
     int bind_result{};
     std::uint64_t open_flags{};
     int open_calls{};
+    int open_rx_ctx_bits{};
     std::vector<std::byte> stored_address;
     std::string printable_address;
     bool report_small_buffer{};
@@ -133,6 +136,7 @@ struct provider {
                 auto& self = *static_cast<provider*>(dom->fid.context);
                 ++self.open_calls;
                 self.open_flags = attr->flags;
+                self.open_rx_ctx_bits = attr->rx_ctx_bits;
                 attr->type = FI_AV_TABLE;
                 *av = &self.av_handle;
                 return 0;
@@ -390,6 +394,113 @@ TEST_CASE("address formatting resizes and omits the terminator", "[address]") {
     REQUIRE(av.address_to_string(loom::av_handle{100}).value() == native.printable_address);
     REQUIRE(native.lookup_calls == 2);
     REQUIRE(native.straddr_calls == (native.printable_address.size() > 256 ? 2 : 1));
+}
+
+TEST_CASE("address vector creation rejects invalid receive-context widths",
+          "[address][rx_context]") {
+    const auto bits = GENERATE(0UZ,
+                               1UZ,
+                               31UZ,
+                               32UZ,
+                               63UZ,
+                               64UZ,
+                               65UZ,
+                               static_cast<std::size_t>(std::numeric_limits<int>::max()),
+                               static_cast<std::size_t>(std::numeric_limits<int>::max()) + 1,
+                               std::numeric_limits<std::size_t>::max());
+    const auto explicit_resource = GENERATE(false, true);
+    CAPTURE(bits, explicit_resource);
+    provider native;
+    auto domain = native.domain();
+    auto av = loom::address_vector::create(
+        domain, {.rx_ctx_bits = bits}, explicit_resource ? loom::get_default_resource() : nullptr);
+    if (bits <= 64) {
+        REQUIRE(av);
+        CHECK(native.open_calls == 1);
+        CHECK(native.open_rx_ctx_bits == static_cast<int>(bits));
+        CHECK(av->receive_context_bits() == bits);
+        auto moved = std::move(*av);
+        CHECK(av->receive_context_bits() == 0);
+        CHECK(av->receive_context_address(loom::av_handle{0}, 0).error() ==
+              loom::errc::invalid_argument);
+        CHECK(moved.receive_context_bits() == bits);
+        CHECK(moved.receive_context_address(loom::av_handle{0}, 0).value().get() == 0);
+    } else {
+        REQUIRE_FALSE(av);
+        CHECK(av.error() == loom::errc::invalid_argument);
+        CHECK(native.open_calls == 0);
+    }
+}
+
+TEST_CASE("receive-context addresses reject invalid encodings", "[address][rx_context]") {
+    struct encoding {
+        std::size_t bits;
+        std::uint64_t base;
+        std::size_t index;
+        std::optional<std::uint64_t> expected;
+    };
+    constexpr std::array cases{
+        encoding{0, 42, 0, 42},
+        encoding{0, 42, 1, {}},
+        encoding{0, 0xfffffffffffffffeULL, 0, 0xfffffffffffffffeULL},
+        encoding{0, FI_ADDR_NOTAVAIL, 0, {}},
+        encoding{1, 42, 0, 42},
+        encoding{1, 42, 1, 0x800000000000002aULL},
+        encoding{1, 42, 2, {}},
+        encoding{1, 0x8000000000000000ULL, 0, {}},
+        encoding{1, 0x7fffffffffffffffULL, 0, 0x7fffffffffffffffULL},
+        encoding{1, 0x7fffffffffffffffULL, 1, {}},
+        encoding{2, 42, 3, 0xc00000000000002aULL},
+        encoding{2, 42, 4, {}},
+        encoding{31, 0xffffffffULL, 0x7fffffffUZ, 0xfffffffeffffffffULL},
+        encoding{32, 0xffffffffULL, 0x7fffffffUZ, 0x7fffffffffffffffULL},
+        encoding{32, 0, 0x80000000UZ, {}},
+        encoding{32, 0x100000000ULL, 0, {}},
+        encoding{63, 1, 0x7fffffffUZ, 0xffffffffULL},
+        encoding{63, 2, 0, {}},
+        encoding{64, 0, 0, 0},
+        encoding{64, 0, 1, 1},
+        encoding{64, 0, 0x7fffffffUZ, 0x7fffffffULL},
+        encoding{64, 1, 0, {}},
+        encoding{64, 0, std::numeric_limits<std::size_t>::max(), {}},
+        encoding{65, 0, 0, {}},
+        encoding{std::numeric_limits<std::size_t>::max(), 0, 0, {}},
+    };
+    for (const auto& test : cases) {
+        CAPTURE(test.bits, test.base, test.index);
+        provider native;
+        loom::address_vector av{loom::detail::make_pmr_unique<loom::detail::address_vector_impl>(
+            loom::get_default_resource(),
+            &native.av_handle,
+            loom::av_type::table,
+            loom::address_format::inet,
+            test.bits)};
+        const auto address = av.receive_context_address(loom::av_handle{test.base}, test.index);
+        REQUIRE(address.has_value() == test.expected.has_value());
+        if (test.expected) {
+            CHECK(address->get() == *test.expected);
+            if (test.bits != 0)
+                CHECK(address->get() == fi_rx_addr(test.base,
+                                                   static_cast<int>(test.index),
+                                                   static_cast<int>(test.bits)));
+        } else {
+            CHECK(address.error() == loom::errc::invalid_argument);
+        }
+    }
+}
+
+TEST_CASE("receive-context addresses require a live address vector", "[address][rx_context]") {
+    loom::address_vector av;
+    SECTION("default constructed") {}
+    SECTION("empty native handle") {
+        auto impl = loom::detail::make_pmr_unique<loom::detail::address_vector_impl>(
+            loom::get_default_resource());
+        impl->rx_ctx_bits = 1;
+        av = loom::address_vector{std::move(impl)};
+    }
+    CHECK(av.receive_context_bits() == 0);
+    CHECK(av.receive_context_address(loom::av_handle{0}, 0).error() ==
+          loom::errc::invalid_argument);
 }
 
 TEST_CASE("address vector creation translates flags", "[address]") {

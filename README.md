@@ -387,6 +387,26 @@ so the total stays within the negotiated limit. Counter updates may become
 visible to reads after a provider-dependent delay. A preceding read cannot
 prevent intervening completions from changing the value.
 
+### Named receive-context addresses
+
+For a provider supporting `capability::named_rx_ctx`, reserve enough
+`address_vector_attr::rx_ctx_bits` to encode the remote context indices.
+`av.receive_context_bits()` returns that width. Use the base handle from
+insertion to obtain a typed destination:
+
+```cpp
+auto peer = av.insert(remote_address).value();
+auto destination = av.receive_context_address(peer, 1).value();
+send(tx_context, buffer, destination, mr.descriptor(), &context).value();
+```
+
+The helper checks the native index range, reserved bit width, overlapping
+address bits, and reserved address values. With zero reserved bits, index
+zero preserves the base address. The base handle must belong to this AV,
+and the caller must ensure the remote context exists; encoding alone cannot
+check that remote state. AV creation rejects bit widths above the address
+width before calling the provider, which may impose a smaller limit.
+
 ### Shared receive contexts
 
 Set `fabric_hints::shared_receive_context = true` when querying endpoints

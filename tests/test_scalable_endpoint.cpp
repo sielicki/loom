@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/async/completion_queue.hpp>
+#include <loom/core/address_vector.hpp>
+#include <loom/core/messaging.hpp>
 #include <loom/core/rma.hpp>
 #include <loom/core/scalable_endpoint.hpp>
 #include <loom/core/trigger.hpp>
@@ -7,7 +10,10 @@
 
 #include <rdma/fi_cm.h>
 
+#include <array>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <variant>
 
 #include <netinet/in.h>
@@ -118,4 +124,107 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     REQUIRE(std::holds_alternative<loom::ipv6_address>(*address));
     REQUIRE(std::get<loom::ipv6_address>(*address).port() == 1234);
     REQUIRE(std::get<loom::ipv6_address>(*address).is_loopback());
+}
+
+TEST_CASE("sockets delivers to the encoded receive context", "[scalable][rx_context][.provider]") {
+    using namespace loom;
+    const auto bits = GENERATE(1UZ, 2UZ);
+    CAPTURE(bits);
+    fabric_hints hints;
+    hints.provider_name = "sockets";
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg | capability::named_rx_ctx;
+    hints.addr_format = address_format::inet;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Sockets provider with named receive contexts unavailable");
+    auto* native_info = static_cast<fi_info*>(info->internal_ptr());
+    REQUIRE(native_info->domain_attr->max_ep_rx_ctx >= 2);
+    // Context-count configuration and SEP name lookup still require native access.
+    native_info->ep_attr->tx_ctx_cnt = 1;
+    native_info->ep_attr->rx_ctx_cnt = 2;
+    auto fabric = fabric::create(*info).value();
+    auto domain = domain::create(fabric, *info).value();
+    std::array<std::array<std::byte, 24>, 2> source{}, target{};
+    source[0].fill(std::byte{0x31});
+    source[1].fill(std::byte{0x72});
+    std::array<fi_context2, 2> sends{}, receives{};
+    auto av = address_vector::create(domain, {.rx_ctx_bits = bits}).value();
+    CHECK(av.receive_context_bits() == bits);
+    auto send_queue = completion_queue::create(domain).value();
+    std::array receive_queues{completion_queue::create(domain).value(),
+                              completion_queue::create(domain).value()};
+    auto sep = scalable_endpoint::create(domain, *info).value();
+    REQUIRE(sep.bind_av(av));
+    auto sender = sep.tx_context(0).value();
+    std::array receivers{sep.rx_context(0).value(), sep.rx_context(1).value()};
+    REQUIRE(sender.bind_cq(send_queue, cq_bind::transmit));
+    for (std::size_t i = 0; i < receivers.size(); ++i) {
+        REQUIRE(receivers[i].bind_cq(receive_queues[i], cq_bind::recv));
+        REQUIRE(receivers[i].enable());
+    }
+    REQUIRE(sender.enable());
+    REQUIRE(sep.enable());
+    sockaddr_in name{};
+    auto length = sizeof(name);
+    auto* native_sep = static_cast<fid_ep*>(sep.internal_ptr());
+    REQUIRE(fi_getname(&native_sep->fid, &name, &length) == 0);
+    REQUIRE(length == sizeof(name));
+    REQUIRE(name.sin_family == AF_INET);
+    const auto peer = av.insert(ipv4_address{ntohl(name.sin_addr.s_addr), ntohs(name.sin_port)});
+    REQUIRE(peer);
+    std::array destinations{av.receive_context_address(*peer, 0).value(),
+                            av.receive_context_address(*peer, 1).value()};
+    CHECK(destinations[0] != destinations[1]);
+    for (std::size_t i = 0; i < receivers.size(); ++i)
+        REQUIRE(recv(receivers[i], target[i], fabric_addrs::unspecified, {}, &receives[i]));
+
+    std::array<bool, 2> sent{}, received{};
+    auto poll = [&] {
+        if (auto event = send_queue.poll()) {
+            REQUIRE_FALSE(event->error);
+            bool matched{};
+            for (std::size_t i = 0; i < sends.size(); ++i) {
+                if (event->context.get() == &sends[i]) {
+                    CHECK_FALSE(sent[i]);
+                    sent[i] = true;
+                    matched = true;
+                }
+            }
+            REQUIRE(matched);
+        }
+        for (std::size_t i = 0; i < receive_queues.size(); ++i) {
+            if (auto event = receive_queues[i].poll()) {
+                REQUIRE_FALSE(event->error);
+                CHECK(event->context.get() == &receives[i]);
+                CHECK(event->len == source[i].size());
+                CHECK(target[i] == source[i]);
+                CHECK_FALSE(received[i]);
+                received[i] = true;
+            }
+        }
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+    // Send to context one first so a missing index cannot pass through FIFO ordering.
+    for (auto i : {1UZ, 0UZ}) {
+        void_result submitted;
+        do {
+            submitted = send(sender, source[i], destinations[i], {}, &sends[i]);
+            if (submitted || submitted.error() != errc::again)
+                break;
+            poll();
+            std::this_thread::yield();
+        } while (std::chrono::steady_clock::now() < deadline);
+        REQUIRE(submitted);
+    }
+    while ((!sent[0] || !sent[1] || !received[0] || !received[1]) &&
+           std::chrono::steady_clock::now() < deadline) {
+        poll();
+        std::this_thread::yield();
+    }
+    CHECK(sent == std::array{true, true});
+    CHECK(received == std::array{true, true});
+    REQUIRE(sender.close());
+    for (auto& receiver : receivers)
+        REQUIRE(receiver.close());
 }
