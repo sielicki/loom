@@ -897,6 +897,10 @@ waits for concurrent polling to finish, so callers must inspect its return value
 before destroying the queue. Keep registered queue wrappers at stable addresses.
 Service calls and inline completion callbacks are serialized; callbacks may
 reenter the service but must not wait for another thread to call the same service.
+Polling does not allocate a queue snapshot. Registrations added by a callback
+join the next poll, including an explicitly nested poll. Removed queues become
+inactive immediately; their internal entries are reclaimed when the outermost
+poll returns or unwinds after an exception.
 Timer progress remains scheduled when a completion callback throws. After catching
 the exception from `io_context::run()`, reenter the event loop to continue, or call
 `service.stop()` to stop polling.

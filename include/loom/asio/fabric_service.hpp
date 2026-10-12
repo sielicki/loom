@@ -155,14 +155,32 @@ private:
         options opts;
         std::optional<completion_event> unhandled;
     };
+    struct poll_scope {
+        fabric_service& owner;
+        explicit poll_scope(fabric_service& service) noexcept : owner(service) {
+            ++owner.poll_depth_;
+        }
+        ~poll_scope() {
+            if (--owner.poll_depth_ == 0 && owner.removed_queues_) {
+                std::erase_if(owner.completion_queues_,
+                              [](const auto& entry) { return entry->cq == nullptr; });
+                owner.removed_queues_ = false;
+            }
+        }
+        poll_scope(const poll_scope&) = delete;
+        auto operator=(const poll_scope&) -> poll_scope& = delete;
+    };
     auto process_completions(cq_entry& entry) -> std::size_t;
 
     ::asio::io_context& io_context_;
     std::unique_ptr<::asio::steady_timer> poll_timer_;
-    std::vector<std::shared_ptr<cq_entry>> completion_queues_;
+    std::vector<std::unique_ptr<cq_entry>> completion_queues_;
     // Native reads and dispatch share this lock with deregistration. Recursion
-    // permits an inline handler to remove queues held by the polling snapshot.
+    // permits inline handlers to mutate registration. Keep entry positions
+    // stable until every nested poll returns, including during exception unwinding.
     std::recursive_mutex mutex_;
+    std::size_t poll_depth_{};
+    bool removed_queues_{};
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdown_{false};
     std::uint64_t poll_generation_{};
@@ -209,7 +227,13 @@ inline void fabric_service::notify_fork(::asio::execution_context::fork_event ev
             // Applications should re-register CQs after fork in the child.
             {
                 std::lock_guard lock(mutex_);
-                completion_queues_.clear();
+                if (poll_depth_) {
+                    for (auto& entry : completion_queues_)
+                        entry->cq = nullptr;
+                    removed_queues_ = true;
+                } else {
+                    completion_queues_.clear();
+                }
             }
             // Recreate the timer for the child process
             poll_timer_ = std::make_unique<::asio::steady_timer>(io_context_);
@@ -223,8 +247,10 @@ inline void fabric_service::register_cq(completion_queue& cq, const options& opt
                             [&cq](const auto& entry) { return entry->cq == &cq; })) {
         return;
     }
-    completion_queues_.push_back(std::make_shared<cq_entry>(&cq, opts, std::nullopt));
-    if (running_.load(std::memory_order_acquire) && completion_queues_.size() == 1) {
+    const bool was_empty = std::ranges::none_of(
+        completion_queues_, [](const auto& entry) { return entry->cq != nullptr; });
+    completion_queues_.push_back(std::make_unique<cq_entry>(&cq, opts, std::nullopt));
+    if (running_.load(std::memory_order_acquire) && was_empty) {
         schedule_poll();
     }
 }
@@ -236,10 +262,14 @@ inline auto fabric_service::deregister_cq(completion_queue& cq) -> std::optional
     if (found == completion_queues_.end()) {
         return std::nullopt;
     }
-    auto entry = *found;
-    entry->cq = nullptr;
-    completion_queues_.erase(found);
-    return std::exchange(entry->unhandled, std::nullopt);
+    (*found)->cq = nullptr;
+    auto unhandled = std::exchange((*found)->unhandled, std::nullopt);
+    if (poll_depth_) {
+        removed_queues_ = true;
+    } else {
+        completion_queues_.erase(found);
+    }
+    return unhandled;
 }
 
 inline auto fabric_service::take_unhandled(completion_queue& cq)
@@ -275,10 +305,13 @@ inline auto fabric_service::is_running() const noexcept -> bool {
 
 inline auto fabric_service::poll_once() -> std::size_t {
     const std::lock_guard lock{mutex_};
-    const auto queues = completion_queues_;
+    const poll_scope polling{*this};
+    // New registrations wait for a subsequent poll. Callbacks may grow the
+    // vector, but existing entry objects and their positions remain stable.
+    const auto count = completion_queues_.size();
     std::size_t total{};
-    for (const auto& entry : queues) {
-        total += process_completions(*entry);
+    for (std::size_t i = 0; i < count; ++i) {
+        total += process_completions(*completion_queues_[i]);
     }
     return total;
 }
@@ -290,8 +323,10 @@ inline void fabric_service::schedule_poll() {
     }
 
     std::chrono::microseconds interval{100};
-    if (!completion_queues_.empty()) {
-        interval = completion_queues_.front()->opts.poll_interval;
+    const auto first = std::ranges::find_if(completion_queues_,
+                                            [](const auto& entry) { return entry->cq != nullptr; });
+    if (first != completion_queues_.end()) {
+        interval = (*first)->opts.poll_interval;
     }
 
     const auto generation = ++poll_generation_;

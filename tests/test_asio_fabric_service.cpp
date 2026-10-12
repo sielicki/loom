@@ -513,6 +513,149 @@ TEST_CASE("Asio deregistration waits for an in-flight queue read", "[asio][fabri
     REQUIRE(service.poll_once() == 0);
 }
 
+TEST_CASE("nested Asio polling preserves entries while registration grows",
+          "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    service_queue first, removed, remaining;
+    std::array<service_queue, 64> added;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    auto callback = [&] {
+        REQUIRE_FALSE(service.deregister_cq(first.queue));
+        REQUIRE_FALSE(service.deregister_cq(removed.queue));
+        for (auto& native : added)
+            service.register_cq(native.queue);
+        REQUIRE(service.poll_once() == 0);
+    };
+    fi_context2 context{};
+    loom::completion_registration registration;
+    REQUIRE(registration.bind(first.queue,
+                              loom::context_ptr<void>{&context},
+                              &callback,
+                              [](void* object, const loom::completion_event&) {
+                                  (*static_cast<decltype(callback)*>(object))();
+                              }));
+    first.pending.push_back({.op_context = &context});
+    for (auto* native : {&first, &removed, &remaining})
+        service.register_cq(native->queue);
+    REQUIRE(service.poll_once() == 1);
+    REQUIRE(first.reads == 1);
+    REQUIRE(removed.reads == 0);
+    REQUIRE(remaining.reads == 2);
+    for (const auto& native : added)
+        REQUIRE(native.reads == 1);
+    REQUIRE(service.poll_once() == 0);
+    REQUIRE(remaining.reads == 3);
+    for (auto& native : added) {
+        REQUIRE(native.reads == 2);
+        REQUIRE_FALSE(service.deregister_cq(native.queue));
+    }
+    REQUIRE_FALSE(service.deregister_cq(remaining.queue));
+}
+
+TEST_CASE("Asio registration changes survive a throwing completion callback",
+          "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    service_queue first, removed;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    struct handler_error {};
+    auto callback = [&] {
+        REQUIRE_FALSE(service.deregister_cq(first.queue));
+        REQUIRE_FALSE(service.deregister_cq(removed.queue));
+        service.register_cq(first.queue);
+        throw handler_error{};
+    };
+    fi_context2 context{};
+    loom::completion_registration registration;
+    REQUIRE(registration.bind(first.queue,
+                              loom::context_ptr<void>{&context},
+                              &callback,
+                              [](void* object, const loom::completion_event&) {
+                                  (*static_cast<decltype(callback)*>(object))();
+                              }));
+    first.pending.push_back({.op_context = &context});
+    first.pending.push_back({.data = 42});
+    service.register_cq(first.queue);
+    service.register_cq(removed.queue);
+    REQUIRE_THROWS_AS(service.poll_once(), handler_error);
+    REQUIRE(first.reads == 1);
+    REQUIRE(removed.reads == 0);
+    REQUIRE(service.poll_once() == 0);
+    const auto unhandled = service.deregister_cq(first.queue);
+    REQUIRE(unhandled);
+    REQUIRE(unhandled->data == 42);
+    REQUIRE(service.poll_once() == 0);
+    REQUIRE(first.reads == 2);
+    REQUIRE(removed.reads == 0);
+}
+
+TEST_CASE("Asio fork notification invalidates queues in an active poll", "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    service_queue first, removed, added;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    auto callback = [&] {
+        ioc.notify_fork(::asio::execution_context::fork_prepare);
+        ioc.notify_fork(::asio::execution_context::fork_child);
+        service.register_cq(added.queue);
+    };
+    fi_context2 context{};
+    loom::completion_registration registration;
+    REQUIRE(registration.bind(first.queue,
+                              loom::context_ptr<void>{&context},
+                              &callback,
+                              [](void* object, const loom::completion_event&) {
+                                  (*static_cast<decltype(callback)*>(object))();
+                              }));
+    first.pending.push_back({.op_context = &context});
+    service.register_cq(first.queue);
+    service.register_cq(removed.queue);
+    REQUIRE(service.poll_once() == 1);
+    REQUIRE(first.reads == 1);
+    REQUIRE(removed.reads == 0);
+    REQUIRE(added.reads == 0);
+    REQUIRE(service.poll_once() == 0);
+    REQUIRE(added.reads == 1);
+    REQUIRE_FALSE(service.deregister_cq(added.queue));
+}
+
+TEST_CASE("Asio callback replacement of every queue reschedules the timer",
+          "[asio][fabric_service]") {
+    ::asio::io_context ioc;
+    service_queue first, added;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    bool completed{};
+    auto replace = [&] {
+        REQUIRE_FALSE(service.deregister_cq(first.queue));
+        service.register_cq(added.queue, {.poll_interval = 0us, .use_fd_polling = false});
+    };
+    auto complete = [&] {
+        completed = true;
+        service.stop();
+    };
+    std::array<fi_context2, 2> contexts{};
+    std::array<loom::completion_registration, 2> registrations;
+    REQUIRE(registrations[0].bind(first.queue,
+                                  loom::context_ptr<void>{&contexts[0]},
+                                  &replace,
+                                  [](void* object, const loom::completion_event&) {
+                                      (*static_cast<decltype(replace)*>(object))();
+                                  }));
+    REQUIRE(registrations[1].bind(added.queue,
+                                  loom::context_ptr<void>{&contexts[1]},
+                                  &complete,
+                                  [](void* object, const loom::completion_event&) {
+                                      (*static_cast<decltype(complete)*>(object))();
+                                  }));
+    first.pending.push_back({.op_context = &contexts[0]});
+    added.pending.push_back({.op_context = &contexts[1]});
+    service.register_cq(first.queue, {.poll_interval = 1h, .use_fd_polling = false});
+    service.start();
+    REQUIRE(service.poll_once() == 1);
+    ioc.run_for(100ms);
+    service.stop();
+    REQUIRE(completed);
+    REQUIRE_FALSE(service.deregister_cq(added.queue));
+}
+
 TEST_CASE("reentrant Asio progress cannot overwrite an unclaimed event", "[asio][fabric_service]") {
     ::asio::io_context ioc;
     service_queue native;
