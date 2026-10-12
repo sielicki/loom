@@ -134,6 +134,60 @@ struct trigger_provider {
 struct trigger_context : loom::triggered_context<trigger_context> {};
 }  // namespace
 
+TEST_CASE("deferred work rejects unavailable native control", "[trigger]") {
+    const auto missing = GENERATE(0, 1, 2);
+    const auto operation = GENERATE(0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+    CAPTURE(missing, operation);
+    trigger_provider native;
+    const auto saved = native.ops;
+    if (missing == 0)
+        native.domain_handle.fid.ops = nullptr;
+    else if (missing == 1)
+        native.ops.control = nullptr;
+    else
+        native.ops.size = offsetof(fi_ops, control);
+    const auto result = [&]() -> loom::void_result {
+        if (operation == 8)
+            return loom::trigger::flush_work(native.domain);
+        if (operation == 9)
+            return loom::trigger::flush_work(native.domain, native.counter);
+        return native.queue(operation, &native.counter, nullptr).transform([](auto&&) {});
+    }();
+    native.ops = saved;
+    native.domain_handle.fid.ops = &native.ops;
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == loom::errc::not_supported);
+    REQUIRE(native.submissions == 0);
+    REQUIRE(native.pending == nullptr);
+}
+
+TEST_CASE("unavailable native cancellation retains deferred work", "[trigger]") {
+    const auto missing = GENERATE(0, 1, 2);
+    trigger_provider native;
+    auto work = native.queue(6, &native.counter, nullptr);
+    REQUIRE(work);
+    auto* pending = native.pending;
+    const auto saved = native.ops;
+    if (missing == 0)
+        native.domain_handle.fid.ops = nullptr;
+    else if (missing == 1)
+        native.ops.control = nullptr;
+    else
+        native.ops.size = offsetof(fi_ops, control);
+    const auto result = work->cancel();
+    native.ops = saved;
+    native.domain_handle.fid.ops = &native.ops;
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() == loom::errc::not_supported);
+    REQUIRE(work->is_pending());
+    REQUIRE(native.pending == pending);
+    REQUIRE(native.cancellations == 0);
+    REQUIRE(work->cancel());
+    REQUIRE_FALSE(work->is_pending());
+    REQUIRE(native.pending == nullptr);
+    REQUIRE(native.cancellations == 1);
+}
+
 TEST_CASE("deferred RMA validates vector ranges before queuing work", "[trigger][bounds]") {
     constexpr auto maximum = std::numeric_limits<std::size_t>::max();
     constexpr auto address_max = std::numeric_limits<std::uint64_t>::max();
@@ -240,6 +294,7 @@ TEST_CASE("deferred messages preserve explicit operation contexts", "[trigger]")
 }
 
 TEST_CASE("pending work cannot be freed after cancellation fails", "[trigger]") {
+    const auto missing_control = GENERATE(false, true);
     const auto child = ::fork();
     REQUIRE(child >= 0);
     if (child == 0) {
@@ -251,6 +306,8 @@ TEST_CASE("pending work cannot be freed after cancellation fails", "[trigger]") 
             if (!work) {
                 std::_Exit(72);
             }
+            if (missing_control)
+                native.ops.control = nullptr;
         }
         std::_Exit(0);
     }

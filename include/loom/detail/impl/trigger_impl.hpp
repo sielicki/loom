@@ -22,6 +22,13 @@
 
 namespace loom::trigger::detail {
 
+/// The native inline dispatcher assumes that the control member exists.
+inline auto control_work(::fid_domain& domain, int command, void* argument) -> int {
+    if (!FI_CHECK_OP(domain.fid.ops, fi_ops, control))
+        return -FI_EOPNOTSUPP;
+    return ::fi_control(&domain.fid, command, argument);
+}
+
 /// @brief Internal implementation of deferred work for triggered operations.
 struct deferred_work_impl {
     ::fid_domain* domain{nullptr};  ///< Domain for queuing deferred work.
@@ -48,7 +55,7 @@ struct deferred_work_impl {
     /// @brief Destructor that cancels queued work if necessary.
     ~deferred_work_impl() {
         if (queued && domain != nullptr) {
-            if (::fi_control(&domain->fid, FI_CANCEL_WORK, &work) != 0) {
+            if (control_work(*domain, FI_CANCEL_WORK, &work) != 0) {
                 // The provider can still reference work and its operation storage.
                 std::terminate();
             }
@@ -107,7 +114,7 @@ auto deferred_work::cancel() -> void_result {
         return make_error_result<void>(errc::invalid_argument);
     }
 
-    int ret = ::fi_control(&impl_->domain->fid, FI_CANCEL_WORK, &impl_->work);
+    int ret = detail::control_work(*impl_->domain, FI_CANCEL_WORK, &impl_->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(-ret);
     }
@@ -157,7 +164,7 @@ auto deferred_work::create_send(domain& dom,
     impl->work.op_type = FI_OP_SEND;
     impl->work.op.msg = &impl->op_msg;
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_QUEUE_WORK, &impl->work);
+    int ret = detail::control_work(*domain_ptr, FI_QUEUE_WORK, &impl->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<deferred_work>(-ret);
     }
@@ -207,7 +214,7 @@ auto deferred_work::create_recv(domain& dom,
     impl->work.op_type = FI_OP_RECV;
     impl->work.op.msg = &impl->op_msg;
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_QUEUE_WORK, &impl->work);
+    int ret = detail::control_work(*domain_ptr, FI_QUEUE_WORK, &impl->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<deferred_work>(-ret);
     }
@@ -259,7 +266,7 @@ auto deferred_work::create_tagged_send(domain& dom,
     impl->work.op_type = FI_OP_TSEND;
     impl->work.op.tagged = &impl->op_tagged;
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_QUEUE_WORK, &impl->work);
+    int ret = detail::control_work(*domain_ptr, FI_QUEUE_WORK, &impl->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<deferred_work>(-ret);
     }
@@ -311,7 +318,7 @@ auto deferred_work::create_tagged_recv(domain& dom,
     impl->work.op_type = FI_OP_TRECV;
     impl->work.op.tagged = &impl->op_tagged;
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_QUEUE_WORK, &impl->work);
+    int ret = detail::control_work(*domain_ptr, FI_QUEUE_WORK, &impl->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<deferred_work>(-ret);
     }
@@ -375,7 +382,7 @@ auto deferred_work::create_read(domain& dom,
     impl->work.op_type = FI_OP_READ;
     impl->work.op.rma = &impl->op_rma;
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_QUEUE_WORK, &impl->work);
+    int ret = detail::control_work(*domain_ptr, FI_QUEUE_WORK, &impl->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<deferred_work>(-ret);
     }
@@ -440,7 +447,7 @@ auto deferred_work::create_write(domain& dom,
     impl->work.op_type = FI_OP_WRITE;
     impl->work.op.rma = &impl->op_rma;
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_QUEUE_WORK, &impl->work);
+    int ret = detail::control_work(*domain_ptr, FI_QUEUE_WORK, &impl->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<deferred_work>(-ret);
     }
@@ -473,7 +480,7 @@ auto deferred_work::create_counter_set(domain& dom,
     impl->work.op_type = FI_OP_CNTR_SET;
     impl->work.op.cntr = &impl->op_cntr;
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_QUEUE_WORK, &impl->work);
+    int ret = detail::control_work(*domain_ptr, FI_QUEUE_WORK, &impl->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<deferred_work>(-ret);
     }
@@ -506,7 +513,7 @@ auto deferred_work::create_counter_add(domain& dom,
     impl->work.op_type = FI_OP_CNTR_ADD;
     impl->work.op.cntr = &impl->op_cntr;
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_QUEUE_WORK, &impl->work);
+    int ret = detail::control_work(*domain_ptr, FI_QUEUE_WORK, &impl->work);
     if (ret != 0) {
         return make_error_result_from_fi_errno<deferred_work>(-ret);
     }
@@ -522,7 +529,7 @@ auto flush_work(domain& dom) -> void_result {
 
     auto* domain_ptr = static_cast<::fid_domain*>(dom.internal_ptr());
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_FLUSH_WORK, nullptr);
+    int ret = detail::control_work(*domain_ptr, FI_FLUSH_WORK, nullptr);
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(-ret);
     }
@@ -538,7 +545,7 @@ auto flush_work(domain& dom, counter& triggering_cntr) -> void_result {
     auto* domain_ptr = static_cast<::fid_domain*>(dom.internal_ptr());
     auto* cntr_ptr = static_cast<::fid_cntr*>(triggering_cntr.impl_internal_ptr());
 
-    int ret = ::fi_control(&domain_ptr->fid, FI_FLUSH_WORK, cntr_ptr);
+    int ret = detail::control_work(*domain_ptr, FI_FLUSH_WORK, cntr_ptr);
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(-ret);
     }
