@@ -13,6 +13,7 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <variant>
 
@@ -135,14 +136,13 @@ TEST_CASE("sockets delivers to the encoded receive context", "[scalable][rx_cont
     hints.ep_type = endpoint_types::rdm;
     hints.capabilities = capability::msg | capability::named_rx_ctx;
     hints.addr_format = address_format::inet;
+    hints.tx_context_count = queue_size{1UZ};
+    hints.rx_context_count = queue_size{2UZ};
     auto info = query_fabric(hints);
     if (!info)
         SKIP("Sockets provider with named receive contexts unavailable");
-    auto* native_info = static_cast<fi_info*>(info->internal_ptr());
-    REQUIRE(native_info->domain_attr->max_ep_rx_ctx >= 2);
-    // Context-count configuration and SEP name lookup still require native access.
-    native_info->ep_attr->tx_ctx_cnt = 1;
-    native_info->ep_attr->rx_ctx_cnt = 2;
+    REQUIRE(info->get_endpoint_attr()->tx_ctx_cnt == hints.tx_context_count);
+    REQUIRE(info->get_endpoint_attr()->rx_ctx_cnt == hints.rx_context_count);
     auto fabric = fabric::create(*info).value();
     auto domain = domain::create(fabric, *info).value();
     std::array<std::array<std::byte, 24>, 2> source{}, target{};
@@ -165,6 +165,7 @@ TEST_CASE("sockets delivers to the encoded receive context", "[scalable][rx_cont
     }
     REQUIRE(sender.enable());
     REQUIRE(sep.enable());
+    // SEP name lookup still requires native access.
     sockaddr_in name{};
     auto length = sizeof(name);
     auto* native_sep = static_cast<fid_ep*>(sep.internal_ptr());
@@ -227,4 +228,91 @@ TEST_CASE("sockets delivers to the encoded receive context", "[scalable][rx_cont
     REQUIRE(sender.close());
     for (auto& receiver : receivers)
         REQUIRE(receiver.close());
+}
+
+TEST_CASE("context-count hints reject shared-context ambiguity", "[scalable][fabric_query]") {
+    using namespace loom;
+    const auto explicit_resource = GENERATE(false, true);
+    fabric_hints hints;
+    hints.provider_name = "loom_nonexistent_provider";
+    SECTION("transmit sentinel") {
+        hints.tx_context_count = queue_size{FI_SHARED_CONTEXT};
+    }
+    SECTION("receive sentinel") {
+        hints.rx_context_count = queue_size{FI_SHARED_CONTEXT};
+    }
+    SECTION("receive sentinel with shared mode") {
+        hints.shared_receive_context = true;
+        hints.rx_context_count = queue_size{FI_SHARED_CONTEXT};
+    }
+    SECTION("receive count with shared mode") {
+        hints.shared_receive_context = true;
+        hints.rx_context_count = queue_size{1UZ};
+    }
+    const auto info = query_fabric(hints, explicit_resource ? get_default_resource() : nullptr);
+    REQUIRE_FALSE(info);
+    CHECK(info.error() == errc::invalid_argument);
+}
+
+TEST_CASE("sockets negotiates scalable endpoint context counts",
+          "[scalable][fabric_query][.provider]") {
+    using namespace loom;
+    const auto transmit = GENERATE(0UZ, 1UZ, 2UZ);
+    const auto receive = GENERATE(0UZ, 1UZ, 3UZ);
+    const auto explicit_resource = GENERATE(false, true);
+    CAPTURE(transmit, receive, explicit_resource);
+    fabric_hints hints;
+    hints.provider_name = "sockets";
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg;
+    const auto available = query_fabric(hints);
+    if (!available)
+        SKIP("Sockets provider unavailable");
+    hints.tx_context_count = queue_size{transmit};
+    hints.rx_context_count = queue_size{receive};
+    auto info = query_fabric(hints, explicit_resource ? get_default_resource() : nullptr);
+    REQUIRE(info);
+    const auto attributes = info->get_endpoint_attr();
+    REQUIRE(attributes);
+    REQUIRE(attributes->tx_ctx_cnt.get() > 0);
+    REQUIRE(attributes->rx_ctx_cnt.get() > 0);
+    if (transmit)
+        CHECK(attributes->tx_ctx_cnt == hints.tx_context_count);
+    if (receive)
+        CHECK(attributes->rx_ctx_cnt == hints.rx_context_count);
+    CHECK_FALSE(attributes->shared_receive_context);
+    auto fabric = fabric::create(*info).value();
+    auto domain = domain::create(fabric, *info).value();
+    auto sep = scalable_endpoint::create(domain, *info).value();
+    CHECK(sep.tx_context_count() == attributes->tx_ctx_cnt.get());
+    CHECK(sep.rx_context_count() == attributes->rx_ctx_cnt.get());
+    auto sender = sep.tx_context(sep.tx_context_count() - 1);
+    auto receiver = sep.rx_context(sep.rx_context_count() - 1);
+    REQUIRE(sender);
+    REQUIRE(receiver);
+    CHECK(sep.tx_context(sep.tx_context_count()).error() == errc::invalid_argument);
+    CHECK(sep.rx_context(sep.rx_context_count()).error() == errc::invalid_argument);
+    REQUIRE(sender->close());
+    REQUIRE(receiver->close());
+}
+
+TEST_CASE("discovery rejects context counts exceeding provider limits",
+          "[scalable][fabric_query][.provider]") {
+    using namespace loom;
+    const auto receive = GENERATE(false, true);
+    fabric_hints hints;
+    hints.provider_name = "sockets";
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg;
+    const auto available = query_fabric(hints);
+    if (!available)
+        SKIP("Sockets provider unavailable");
+    const auto attributes = available->get_domain_attr();
+    REQUIRE(attributes);
+    const auto maximum = receive ? attributes->max_ep_rx_ctx : attributes->max_ep_tx_ctx;
+    REQUIRE(maximum < std::numeric_limits<std::size_t>::max() - 1);
+    (receive ? hints.rx_context_count : hints.tx_context_count) = queue_size{maximum + 1};
+    const auto info = query_fabric(hints);
+    REQUIRE_FALSE(info);
+    CHECK(info.error() == errc::no_data);
 }

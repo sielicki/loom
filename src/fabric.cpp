@@ -230,6 +230,12 @@ auto fabric::impl_internal_ptr() const noexcept -> void* {
 }
 
 auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> result<fabric_info> {
+    const auto tx_context_count = hints.tx_context_count.get();
+    const auto rx_context_count = hints.rx_context_count.get();
+    if (tx_context_count == FI_SHARED_CONTEXT || rx_context_count == FI_SHARED_CONTEXT ||
+        (hints.shared_receive_context && rx_context_count != 0)) {
+        return make_error_result<fabric_info>(errc::invalid_argument);
+    }
     if (hints.memory_region_mode) {
         const auto mode = *hints.memory_region_mode;
         if ((mode.has(mr_mode_flags::basic) && mode != mr_mode_flags::basic) ||
@@ -253,8 +259,9 @@ auto query_fabric(const fabric_hints& hints, memory_resource* resource) -> resul
     info_hints->addr_format = native_format;
     info_hints->ep_attr->type =
         hints.ep_type ? detail::to_fi_ep_type(*hints.ep_type) : FI_EP_UNSPEC;
-    if (hints.shared_receive_context)
-        info_hints->ep_attr->rx_ctx_cnt = FI_SHARED_CONTEXT;
+    info_hints->ep_attr->tx_ctx_cnt = tx_context_count;
+    info_hints->ep_attr->rx_ctx_cnt =
+        hints.shared_receive_context ? FI_SHARED_CONTEXT : rx_context_count;
 
     // fi_freeinfo owns these strings; copy bounded views into C allocations.
     const auto copy_name = [](std::optional<std::string_view> name, char*& output) {

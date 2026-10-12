@@ -387,7 +387,18 @@ so the total stays within the negotiated limit. Counter updates may become
 visible to reads after a provider-dependent delay. A preceding read cannot
 prevent intervening completions from changing the value.
 
-### Named receive-context addresses
+### Scalable endpoints and named receive contexts
+
+Set `fabric_hints::tx_context_count` and `rx_context_count` to `queue_size`
+values when querying providers for a scalable endpoint. Zero lets discovery
+select the count. The returned endpoint attributes and the created scalable
+endpoint expose the selected counts. Providers reject requests exceeding
+their limits; Loom does not silently reduce them.
+
+A nonzero receive count cannot be combined with `shared_receive_context`.
+The count fields reject libfabric's shared-context sentinel; use the shared
+receive flag to request an SRX. Close all child contexts before destroying
+their scalable endpoint.
 
 For a provider supporting `capability::named_rx_ctx`, reserve enough
 `address_vector_attr::rx_ctx_bits` to encode the remote context indices.
