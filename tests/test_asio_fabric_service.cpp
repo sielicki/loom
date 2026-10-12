@@ -70,6 +70,7 @@ struct service_queue {
         },
     };
     fid_cq handle{.fid = {.context = this, .ops = &ops}, .ops = &completions};
+    loom::detail::completion_queue_impl* implementation{};
     loom::completion_queue queue{[this] {
         auto impl = loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
             loom::get_default_resource(),
@@ -80,9 +81,70 @@ struct service_queue {
             64,
             true);
         impl->max_error_data = 64;
+        implementation = impl.get();
         return impl;
     }()};
 };
+
+#if defined(ASIO_HAS_POSIX_STREAM_DESCRIPTOR)
+struct fd_service_queue : service_queue {
+    std::array<int, 2> descriptors{-1, -1};
+    fi_wait_obj wait_object{FI_WAIT_FD};
+    int wait_calls{};
+    bool valid_wait_arguments{true};
+    int wait_status{};
+    int descriptor_queries{};
+    std::function<void()> before_wait;
+    fi_ops_fabric fabric_ops{
+        .size = sizeof(fi_ops_fabric),
+        .trywait =
+            [](fid_fabric* fabric, fid** queues, int count) {
+                auto& self = *static_cast<fd_service_queue*>(fabric->fid.context);
+                self.valid_wait_arguments &= count == 1 && queues[0] == &self.handle.fid;
+                ++self.wait_calls;
+                if (self.before_wait)
+                    self.before_wait();
+                char byte;
+                while (::read(self.descriptors[0], &byte, 1) == 1) {}
+                if (self.wait_status)
+                    return self.wait_status;
+                return self.pending.empty() && !self.error ? 0 : -FI_EAGAIN;
+            },
+    };
+    fid_fabric fabric{.fid = {.context = this}, .ops = &fabric_ops};
+
+    fd_service_queue() {
+        REQUIRE(::pipe(descriptors.data()) == 0);
+        for (const auto fd : descriptors) {
+            REQUIRE(::fcntl(fd, F_SETFL, O_NONBLOCK) == 0);
+            REQUIRE(::fcntl(fd, F_SETFD, FD_CLOEXEC) == 0);
+        }
+        ops.control = [](fid* queue, int command, void* output) {
+            auto& self =
+                *static_cast<fd_service_queue*>(static_cast<service_queue*>(queue->context));
+            if (command == FI_GETWAITOBJ) {
+                *static_cast<fi_wait_obj*>(output) = self.wait_object;
+                return 0;
+            }
+            if (command == FI_GETWAIT) {
+                ++self.descriptor_queries;
+                *static_cast<int*>(output) = self.descriptors[0];
+                return 0;
+            }
+            return -FI_ENOSYS;
+        };
+        implementation->parent_fabric = &fabric;
+    }
+    ~fd_service_queue() {
+        for (const auto fd : descriptors)
+            ::close(fd);
+    }
+    void signal() {
+        constexpr char byte{1};
+        REQUIRE(::write(descriptors[1], &byte, 1) == 1);
+    }
+};
+#endif
 }  // namespace
 
 TEST_CASE("poll_once reports dispatched completions and honors the limit",
@@ -818,3 +880,433 @@ TEST_CASE("Asio polling stays stopped after concurrent timer restarts", "[asio][
     REQUIRE_FALSE(service.is_running());
     REQUIRE_FALSE(service.deregister_cq(native.queue));
 }
+
+#if defined(ASIO_HAS_POSIX_STREAM_DESCRIPTOR)
+TEST_CASE("Asio FD progress sleeps until readiness and rearms after manual reads",
+          "[asio][fabric_service][fd]") {
+    ::asio::io_context ioc;
+    fd_service_queue native;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    service.register_cq(native.queue, {.poll_interval = 0us});
+    service.start();
+    ioc.run_for(5ms);
+    REQUIRE(native.reads == 0);
+    REQUIRE(native.wait_calls == 1);
+    REQUIRE(service.poll_once() == 0);
+    REQUIRE(native.reads == 1);
+    REQUIRE(native.wait_calls == 2);
+    ioc.run_for(5ms);
+    REQUIRE(native.reads == 1);
+    int completed{};
+    auto callback = [&] {
+        if (++completed == 2)
+            service.stop();
+    };
+    fi_context2 context{};
+    loom::completion_registration registration;
+    REQUIRE(registration.bind(native.queue,
+                              loom::context_ptr<void>{&context},
+                              &callback,
+                              [](void* object, const loom::completion_event&) {
+                                  (*static_cast<decltype(callback)*>(object))();
+                              }));
+    native.pending.push_back({.op_context = &context});
+    native.signal();
+    ioc.run_for(5ms);
+    REQUIRE(completed == 1);
+    REQUIRE(native.wait_calls == 3);
+    REQUIRE(registration.bind(native.queue,
+                              loom::context_ptr<void>{&context},
+                              &callback,
+                              [](void* object, const loom::completion_event&) {
+                                  (*static_cast<decltype(callback)*>(object))();
+                              }));
+    native.pending.push_back({.op_context = &context});
+    native.signal();
+    ioc.run_for(100ms);
+    service.stop();
+    REQUIRE(completed == 2);
+    REQUIRE(native.descriptor_queries == 1);
+    REQUIRE(native.valid_wait_arguments);
+    REQUIRE_FALSE(service.deregister_cq(native.queue));
+    REQUIRE(::fcntl(native.descriptors[0], F_GETFD) >= 0);
+}
+
+TEST_CASE("Asio FD preparation drains work without waiting for a signal",
+          "[asio][fabric_service][fd]") {
+    const bool throw_first = GENERATE(false, true);
+    ::asio::io_context ioc;
+    fd_service_queue native;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    struct handler_error {};
+    int callbacks{};
+    auto callback = [&] {
+        ++callbacks;
+        if (throw_first && callbacks == 1)
+            throw handler_error{};
+        if (callbacks == 3)
+            service.stop();
+    };
+    std::array<fi_context2, 3> contexts{};
+    std::array<loom::completion_registration, 3> registrations;
+    for (std::size_t i = 0; i < contexts.size(); ++i)
+        REQUIRE(registrations[i].bind(native.queue,
+                                      loom::context_ptr<void>{&contexts[i]},
+                                      &callback,
+                                      [](void* object, const loom::completion_event&) {
+                                          (*static_cast<decltype(callback)*>(object))();
+                                      }));
+    // Work appears during preparation and never signals the descriptor. The
+    // provider returns EAGAIN until each bounded progress pass has drained it.
+    native.before_wait = [&] {
+        if (native.wait_calls == 1)
+            for (auto& context : contexts)
+                native.pending.push_back({.op_context = &context});
+    };
+    service.register_cq(native.queue, {.poll_interval = 1h, .max_completions_per_poll = 1});
+    service.start();
+    if (throw_first) {
+        REQUIRE_THROWS_AS(ioc.run_one(), handler_error);
+        REQUIRE(callbacks == 1);
+    }
+    ioc.run_for(100ms);
+    service.stop();
+    REQUIRE(callbacks == 3);
+    REQUIRE(native.reads == 3);
+    REQUIRE(native.wait_calls >= 2);
+    REQUIRE_FALSE(service.deregister_cq(native.queue));
+}
+
+TEST_CASE("Asio FD readiness survives a throwing completion callback",
+          "[asio][fabric_service][fd]") {
+    ::asio::io_context ioc;
+    fd_service_queue native;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    struct handler_error {};
+    int callbacks{};
+    auto callback = [&] {
+        if (++callbacks == 1)
+            throw handler_error{};
+        service.stop();
+    };
+    std::array<fi_context2, 2> contexts{};
+    std::array<loom::completion_registration, 2> registrations;
+    for (std::size_t i = 0; i < contexts.size(); ++i)
+        REQUIRE(registrations[i].bind(native.queue,
+                                      loom::context_ptr<void>{&contexts[i]},
+                                      &callback,
+                                      [](void* object, const loom::completion_event&) {
+                                          (*static_cast<decltype(callback)*>(object))();
+                                      }));
+    service.register_cq(native.queue, {.poll_interval = 1h, .max_completions_per_poll = 1});
+    service.start();
+    for (auto& context : contexts)
+        native.pending.push_back({.op_context = &context});
+    native.signal();
+    REQUIRE_THROWS_AS(ioc.run_one(), handler_error);
+    ioc.run_for(100ms);
+    service.stop();
+    REQUIRE(callbacks == 2);
+    REQUIRE_FALSE(service.deregister_cq(native.queue));
+}
+
+TEST_CASE("Asio FD queues pause on unclaimed events and resume when consumed",
+          "[asio][fabric_service][fd]") {
+    ::asio::io_context ioc;
+    fd_service_queue native;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    service.register_cq(native.queue, {.poll_interval = 1h});
+    service.start();
+    native.pending.push_back({.data = 7});
+    native.pending.push_back({.data = 11});
+    native.signal();
+    ioc.run_for(5ms);
+    REQUIRE(native.reads == 1);
+    const auto first = service.take_unhandled(native.queue);
+    REQUIRE(first);
+    REQUIRE(first->data == 7);
+    ioc.restart();
+    ioc.run_for(5ms);
+    REQUIRE(native.reads == 2);
+    const auto second = service.take_unhandled(native.queue);
+    REQUIRE(second);
+    REQUIRE(second->data == 11);
+    ioc.restart();
+    ioc.run_for(5ms);
+    REQUIRE(native.reads == 2);
+    service.stop();
+    REQUIRE_FALSE(service.deregister_cq(native.queue));
+}
+
+TEST_CASE("Asio stale FD callbacks cannot read a replacement queue", "[asio][fabric_service][fd]") {
+    ::asio::io_context ioc;
+    auto original = std::make_unique<fd_service_queue>();
+    fd_service_queue replacement;
+    auto queue = std::move(original->queue);
+    auto& service = loom::asio::fabric_service::use(ioc);
+    service.register_cq(queue, {.poll_interval = 1h});
+    service.start();
+    original->signal();
+    service.stop();
+    service.start();
+    REQUIRE_FALSE(service.deregister_cq(queue));
+    queue = {};
+    original.reset();
+    queue = std::move(replacement.queue);
+    service.register_cq(queue, {.poll_interval = 1h});
+    ioc.run_for(5ms);
+    REQUIRE(replacement.reads == 0);
+    replacement.pending.push_back({.data = 17});
+    replacement.signal();
+    ioc.run_for(5ms);
+    service.stop();
+    REQUIRE(replacement.reads == 1);
+    const auto event = service.deregister_cq(queue);
+    REQUIRE(event);
+    REQUIRE(event->data == 17);
+}
+
+TEST_CASE("Asio falls back to timer progress when FD waits are unavailable",
+          "[asio][fabric_service][fd]") {
+    enum class fallback { disabled, wait_type, control, parent, trywait, wait_error, descriptor };
+    const auto reason = GENERATE(fallback::disabled,
+                                 fallback::wait_type,
+                                 fallback::control,
+                                 fallback::parent,
+                                 fallback::trywait,
+                                 fallback::wait_error,
+                                 fallback::descriptor);
+    ::asio::io_context ioc;
+    fd_service_queue native;
+    switch (reason) {
+        case fallback::disabled:
+            break;
+        case fallback::wait_type:
+            native.wait_object = FI_WAIT_MUTEX_COND;
+            break;
+        case fallback::control:
+            native.ops.control = nullptr;
+            break;
+        case fallback::parent:
+            native.implementation->parent_fabric = nullptr;
+            break;
+        case fallback::trywait:
+            native.fabric_ops.trywait = nullptr;
+            break;
+        case fallback::wait_error:
+            native.wait_status = -FI_EIO;
+            break;
+        case fallback::descriptor:
+            ::close(std::exchange(native.descriptors[0], -1));
+            break;
+    }
+    auto& service = loom::asio::fabric_service::use(ioc);
+    service.register_cq(native.queue,
+                        {.poll_interval = 0us, .use_fd_polling = reason != fallback::disabled});
+    native.pending.push_back({.data = 23});
+    service.start();
+    ioc.run_for(5ms);
+    service.stop();
+    REQUIRE(native.reads == 1);
+    const auto event = service.deregister_cq(native.queue);
+    REQUIRE(event);
+    REQUIRE(event->data == 23);
+    if (reason == fallback::disabled)
+        REQUIRE(native.descriptor_queries == 0);
+}
+
+TEST_CASE("Asio timer progress leaves armed FD queues asleep", "[asio][fabric_service][fd]") {
+    const bool fast_timer = GENERATE(false, true);
+    ::asio::io_context ioc;
+    fd_service_queue waiting;
+    service_queue timer;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    service.register_cq(waiting.queue, {.poll_interval = 0us});
+    service.register_cq(timer.queue, {.poll_interval = fast_timer ? 0us : 1h});
+    timer.before_read = [&] {
+        service.stop();
+    };
+    service.start();
+    ioc.run_for(5ms);
+    service.stop();
+    REQUIRE(timer.reads == (fast_timer ? 1 : 0));
+    REQUIRE(waiting.reads == 0);
+    REQUIRE_FALSE(service.deregister_cq(waiting.queue));
+    REQUIRE_FALSE(service.deregister_cq(timer.queue));
+}
+
+TEST_CASE("Asio FD callbacks can retire their queue during nested progress",
+          "[asio][fabric_service][fd]") {
+    const bool fork_child = GENERATE(false, true);
+    ::asio::io_context ioc;
+    auto original = std::make_unique<fd_service_queue>();
+    fd_service_queue added;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    bool completed{};
+    auto complete = [&] {
+        completed = true;
+        service.stop();
+    };
+    auto replace = [&] {
+        if (fork_child) {
+            ioc.notify_fork(::asio::execution_context::fork_prepare);
+            ioc.notify_fork(::asio::execution_context::fork_child);
+        } else {
+            REQUIRE_FALSE(service.deregister_cq(original->queue));
+        }
+        original.reset();
+        service.register_cq(added.queue, {.poll_interval = 1h});
+        service.start();
+        REQUIRE(service.poll_once() == 1);
+    };
+    std::array<fi_context2, 2> contexts{};
+    std::array<loom::completion_registration, 2> registrations;
+    REQUIRE(registrations[0].bind(original->queue,
+                                  loom::context_ptr<void>{&contexts[0]},
+                                  &replace,
+                                  [](void* object, const loom::completion_event&) {
+                                      (*static_cast<decltype(replace)*>(object))();
+                                  }));
+    REQUIRE(registrations[1].bind(added.queue,
+                                  loom::context_ptr<void>{&contexts[1]},
+                                  &complete,
+                                  [](void* object, const loom::completion_event&) {
+                                      (*static_cast<decltype(complete)*>(object))();
+                                  }));
+    added.pending.push_back({.op_context = &contexts[1]});
+    service.register_cq(original->queue, {.poll_interval = 1h});
+    service.start();
+    original->pending.push_back({.op_context = &contexts[0]});
+    original->signal();
+    ioc.run_for(100ms);
+    service.stop();
+    REQUIRE(completed);
+    REQUIRE_FALSE(service.deregister_cq(added.queue));
+}
+
+TEST_CASE("Asio native wait strategies complete RDM transfers",
+          "[asio][fabric_service][.provider]") {
+    using namespace loom;
+    const auto provider = GENERATE("sockets", "tcp;ofi_rxm");
+    INFO(provider);
+    fabric_hints hints{};
+    hints.provider_name = provider;
+    hints.ep_type = endpoint_types::rdm;
+    hints.capabilities = capability::msg;
+    auto info = query_fabric(hints);
+    if (!info)
+        SKIP("Requested RDM provider unavailable");
+    auto fab = fabric::create(*info).value();
+    auto dom = domain::create(fab, *info).value();
+    auto cq = completion_queue::create(dom, {.wait_obj = true}).value();
+    const bool has_descriptor = cq.get_wait_fd().has_value();
+    CAPTURE(has_descriptor);
+    auto av = address_vector::create(dom).value();
+    std::array<endpoint, 2> endpoints;
+    std::array<fabric_addr, 2> peers;
+    for (std::size_t i = 0; i < endpoints.size(); ++i) {
+        auto ep = endpoint::create(dom, *info).value();
+        REQUIRE(ep.bind_cq(cq, cq_bind::transmit | cq_bind::recv | cq_bind::selective_completion));
+        REQUIRE(ep.bind_av(av));
+        REQUIRE(ep.enable());
+        peers[i] = fabric_addr{av.insert(ep.get_local_address().value()).value().value};
+        endpoints[i] = std::move(ep);
+    }
+    ::asio::io_context ioc;
+    loom::asio::endpoint sender{ioc.get_executor(), std::move(endpoints[0])};
+    loom::asio::endpoint receiver{ioc.get_executor(), std::move(endpoints[1])};
+    auto& service = loom::asio::fabric_service::use(ioc);
+    service.register_cq(cq, {.poll_interval = has_descriptor ? 1h : 100us});
+    service.start();
+    std::array<std::byte, 7> outgoing;
+    outgoing.fill(std::byte{0x5a});
+    std::array<std::byte, 16> incoming{};
+    std::array<int, 2> calls{};
+    std::array<std::error_code, 2> errors{};
+    std::array<std::size_t, 2> sizes{};
+    const auto handler = [&](std::size_t index) {
+        return [&, index](std::error_code error, std::size_t bytes) {
+            ++calls[index];
+            errors[index] = error;
+            sizes[index] = bytes;
+            if (calls[0] && calls[1])
+                service.stop();
+        };
+    };
+    receiver.async_receive(::asio::buffer(incoming), handler(1));
+    ::asio::steady_timer retry{ioc};
+    std::function<void()> submit_send = [&] {
+        sender.async_send_to(
+            ::asio::buffer(outgoing), peers[1], [&](std::error_code error, std::size_t bytes) {
+                if (error == errc::again) {
+                    retry.expires_after(1ms);
+                    retry.async_wait([&](std::error_code error) {
+                        if (!error)
+                            submit_send();
+                    });
+                    return;
+                }
+                handler(0)(error, bytes);
+            });
+    };
+    submit_send();
+    ioc.run_for(5s);
+    service.stop();
+    const bool completed = calls[0] && calls[1];
+    if (!completed) {
+        retry.cancel();
+        std::error_code ignored;
+        sender.cancel(ignored);
+        receiver.cancel(ignored);
+        const auto deadline = std::chrono::steady_clock::now() + 1s;
+        while (std::chrono::steady_clock::now() < deadline) {
+            service.poll_once();
+            ioc.restart();
+            ioc.poll();
+            if (calls[0] && calls[1])
+                break;
+        }
+        REQUIRE(sender.native_handle()->close());
+        REQUIRE(receiver.native_handle()->close());
+    }
+    REQUIRE_FALSE(service.deregister_cq(cq));
+    REQUIRE(completed);
+    REQUIRE(calls == std::array{1, 1});
+    REQUIRE_FALSE(errors[0]);
+    REQUIRE_FALSE(errors[1]);
+    REQUIRE(sizes == std::array{outgoing.size(), outgoing.size()});
+    REQUIRE(std::ranges::equal(outgoing, std::span{incoming}.first(outgoing.size())));
+}
+
+TEST_CASE("Asio FD polling stays stopped across concurrent restarts",
+          "[asio][fabric_service][fd]") {
+    ::asio::io_context ioc;
+    fd_service_queue native;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    std::atomic<int> polls{};
+    native.before_read = [&] {
+        ++polls;
+    };
+    service.register_cq(native.queue, {.poll_interval = 1h});
+    auto work = ::asio::make_work_guard(ioc);
+    std::jthread runner{[&] { ioc.run(); }};
+    bool stayed_stopped = true;
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        service.start();
+        native.signal();
+        std::this_thread::yield();
+        service.stop();
+        const auto stopped_at = polls.load();
+        std::promise<void> drained;
+        auto ready = drained.get_future();
+        ::asio::post(ioc, [drained = std::move(drained)]() mutable { drained.set_value(); });
+        ready.wait();
+        stayed_stopped &= polls.load() == stopped_at;
+    }
+    work.reset();
+    runner.join();
+    REQUIRE(stayed_stopped);
+    REQUIRE(native.valid_wait_arguments);
+    REQUIRE_FALSE(service.deregister_cq(native.queue));
+}
+#endif

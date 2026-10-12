@@ -906,7 +906,20 @@ Polling does not allocate a queue snapshot. Registrations added by a callback
 join the next poll, including an explicitly nested poll. Removed queues become
 inactive immediately; their internal entries are reclaimed when the outermost
 poll returns or unwinds after an exception.
-Timer progress remains scheduled when a completion callback throws. After catching
+With `use_fd_polling=true`, the service uses a POSIX readiness wait when the CQ
+exposes `FI_WAIT_FD` and its parent fabric supports native wait preparation.
+Create the CQ with `.wait_obj = true` to request wait support. The service owns
+a duplicate descriptor and calls `fi_trywait` before each arm. Pending progress
+is drained in bounded passes without waiting for a signal. Unsupported waits,
+including imported queues without a recorded parent, use the polling timer;
+`use_fd_polling=false` selects that timer explicitly. Its period is the shortest
+interval among queues needing timer progress. Idle queues with armed descriptors
+do not incur periodic reads. A paused queue resumes when its event is consumed.
+While FD polling is active, read registered queues through the service, including
+`poll_once()`, so every read is followed by fresh wait preparation. Keep each CQ's
+native parent fabric alive until the queue is destroyed.
+
+Progress remains scheduled when a completion callback throws. After catching
 the exception from `io_context::run()`, reenter the event loop to continue, or call
 `service.stop()` to stop polling.
 

@@ -29,6 +29,13 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
+#if defined(ASIO_HAS_POSIX_STREAM_DESCRIPTOR)
+#    include <fcntl.h>
+#    include <unistd.h>
+
+#    include <asio/posix/stream_descriptor.hpp>
+#endif
+
 namespace loom::asio {
 
 /**
@@ -44,10 +51,12 @@ namespace loom::asio {
  * Service calls and completion dispatch are serialized. Inline callbacks may reenter
  * the service, but must not wait for another thread to call this same service.
  * External submissions and progress must still obey the provider's threading rules.
+ * While FD polling is active, route reads through this service so each native
+ * wait is prepared again after progress. The CQ and its fabric must stay alive.
  */
 /**
  * @brief Configuration options for the fabric service.
- * The shared polling timer uses the shortest registered queue interval.
+ * The shared polling timer uses the shortest interval among queues needing it.
  */
 struct fabric_service_options {
     std::chrono::microseconds poll_interval{100};  ///< Timer-based poll interval
@@ -151,10 +160,22 @@ private:
 
     void schedule_poll();
     void do_poll();
+    struct cq_entry;
+    struct fd_watch {
+        cq_entry* entry{};
+        std::uint64_t generation{};
+        bool armed{};
+#if defined(ASIO_HAS_POSIX_STREAM_DESCRIPTOR)
+        ::asio::posix::stream_descriptor descriptor;
+        explicit fd_watch(::asio::io_context& context) : descriptor(context) {}
+#endif
+    };
     struct cq_entry {
         completion_queue* cq;
         options opts;
         std::optional<completion_event> unhandled;
+        std::shared_ptr<fd_watch> wait;
+        bool retry_wait{};
     };
     struct poll_scope {
         fabric_service& owner;
@@ -171,6 +192,12 @@ private:
         poll_scope(const poll_scope&) = delete;
         auto operator=(const poll_scope&) -> poll_scope& = delete;
     };
+    void create_wait(cq_entry& entry);
+    void cancel_wait(cq_entry& entry, bool release = false);
+    void arm_wait(cq_entry& entry);
+    static auto needs_timer(const cq_entry& entry) noexcept -> bool;
+    auto poll_queues(bool timers_only) -> std::size_t;
+    auto poll_entry(cq_entry& entry) -> std::size_t;
     auto process_completions(cq_entry& entry) -> std::size_t;
 
     ::asio::io_context& io_context_;
@@ -185,6 +212,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdown_{false};
     std::uint64_t poll_generation_{};
+    std::optional<std::chrono::microseconds> timer_interval_;
     bool resume_after_fork_{};
 };
 
@@ -228,6 +256,9 @@ inline void fabric_service::notify_fork(::asio::execution_context::fork_event ev
             // Applications should re-register CQs after fork in the child.
             {
                 std::lock_guard lock(mutex_);
+                stop();
+                for (auto& entry : completion_queues_)
+                    cancel_wait(*entry, true);
                 if (poll_depth_) {
                     for (auto& entry : completion_queues_)
                         entry->cq = nullptr;
@@ -248,13 +279,11 @@ inline void fabric_service::register_cq(completion_queue& cq, const options& opt
                             [&cq](const auto& entry) { return entry->cq == &cq; })) {
         return;
     }
-    const bool faster = std::ranges::none_of(completion_queues_, [&](const auto& entry) {
-        return entry->cq && entry->opts.poll_interval <= opts.poll_interval;
-    });
-    completion_queues_.push_back(std::make_unique<cq_entry>(&cq, opts, std::nullopt));
-    if (running_.load(std::memory_order_acquire) && faster) {
-        schedule_poll();
-    }
+    auto entry = std::make_unique<cq_entry>(&cq, opts, std::nullopt);
+    create_wait(*entry);
+    completion_queues_.push_back(std::move(entry));
+    arm_wait(*completion_queues_.back());
+    schedule_poll();
 }
 
 inline auto fabric_service::deregister_cq(completion_queue& cq) -> std::optional<completion_event> {
@@ -264,6 +293,7 @@ inline auto fabric_service::deregister_cq(completion_queue& cq) -> std::optional
     if (found == completion_queues_.end()) {
         return std::nullopt;
     }
+    cancel_wait(**found, true);
     (*found)->cq = nullptr;
     auto unhandled = std::exchange((*found)->unhandled, std::nullopt);
     if (poll_depth_) {
@@ -271,6 +301,7 @@ inline auto fabric_service::deregister_cq(completion_queue& cq) -> std::optional
     } else {
         completion_queues_.erase(found);
     }
+    schedule_poll();
     return unhandled;
 }
 
@@ -279,16 +310,22 @@ inline auto fabric_service::take_unhandled(completion_queue& cq)
     const std::lock_guard lock{mutex_};
     auto found = std::ranges::find_if(completion_queues_,
                                       [&cq](const auto& entry) { return entry->cq == &cq; });
-    return found == completion_queues_.end() ? std::nullopt
-                                             : std::exchange((*found)->unhandled, std::nullopt);
+    if (found == completion_queues_.end())
+        return std::nullopt;
+    auto event = std::exchange((*found)->unhandled, std::nullopt);
+    arm_wait(**found);
+    schedule_poll();
+    return event;
 }
 
 inline void fabric_service::start() {
     const std::lock_guard lock{mutex_};
-    if (running_.exchange(true, std::memory_order_acq_rel)) {
+    if (shutdown_.load(std::memory_order_acquire) ||
+        running_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-
+    for (auto& entry : completion_queues_)
+        arm_wait(*entry);
     schedule_poll();
 }
 
@@ -296,9 +333,12 @@ inline void fabric_service::stop() {
     const std::lock_guard lock{mutex_};
     running_.store(false, std::memory_order_release);
     ++poll_generation_;
+    timer_interval_.reset();
     if (poll_timer_) {
         poll_timer_->cancel();
     }
+    for (auto& entry : completion_queues_)
+        cancel_wait(*entry);
 }
 
 inline auto fabric_service::is_running() const noexcept -> bool {
@@ -306,6 +346,10 @@ inline auto fabric_service::is_running() const noexcept -> bool {
 }
 
 inline auto fabric_service::poll_once() -> std::size_t {
+    return poll_queues(false);
+}
+
+inline auto fabric_service::poll_queues(bool timers_only) -> std::size_t {
     const std::lock_guard lock{mutex_};
     const poll_scope polling{*this};
     // New registrations wait for a subsequent poll. Callbacks may grow the
@@ -313,9 +357,16 @@ inline auto fabric_service::poll_once() -> std::size_t {
     const auto count = completion_queues_.size();
     std::size_t total{};
     for (std::size_t i = 0; i < count; ++i) {
-        total += process_completions(*completion_queues_[i]);
+        auto& entry = *completion_queues_[i];
+        if (!timers_only || needs_timer(entry))
+            total += poll_entry(entry);
     }
+    schedule_poll();
     return total;
+}
+
+inline auto fabric_service::needs_timer(const cq_entry& entry) noexcept -> bool {
+    return entry.cq && !entry.unhandled && (!entry.wait || entry.retry_wait);
 }
 
 inline void fabric_service::schedule_poll() {
@@ -326,13 +377,27 @@ inline void fabric_service::schedule_poll() {
 
     std::optional<std::chrono::microseconds> interval;
     for (const auto& entry : completion_queues_) {
-        if (entry->cq && (!interval || entry->opts.poll_interval < *interval))
-            interval = entry->opts.poll_interval;
+        if (needs_timer(*entry)) {
+            const auto delay =
+                entry->retry_wait ? std::chrono::microseconds::zero() : entry->opts.poll_interval;
+            if (!interval || delay < *interval)
+                interval = delay;
+        }
     }
+    if (!interval) {
+        if (timer_interval_) {
+            ++poll_generation_;
+            timer_interval_.reset();
+            poll_timer_->cancel();
+        }
+        return;
+    }
+    if (timer_interval_ && *timer_interval_ <= *interval)
+        return;
 
     const auto generation = ++poll_generation_;
     try {
-        poll_timer_->expires_after(interval.value_or(std::chrono::microseconds{100}));
+        poll_timer_->expires_after(*interval);
         poll_timer_->async_wait([this, generation](const std::error_code& ec) {
             const std::lock_guard lock{mutex_};
             if (ec || !running_.load(std::memory_order_acquire) || generation != poll_generation_) {
@@ -340,17 +405,121 @@ inline void fabric_service::schedule_poll() {
             }
             // Keep progress scheduled if a registered callback throws. Stop or
             // restart from that callback can invalidate this pending wait.
+            timer_interval_.reset();
             schedule_poll();
             do_poll();
         });
+        timer_interval_ = interval;
     } catch (...) {
-        running_.store(false, std::memory_order_release);
+        stop();
         throw;
     }
 }
 
 inline void fabric_service::do_poll() {
-    poll_once();
+    poll_queues(true);
+}
+
+inline void fabric_service::create_wait([[maybe_unused]] cq_entry& entry) {
+#if defined(ASIO_HAS_POSIX_STREAM_DESCRIPTOR)
+    if (!entry.opts.use_fd_polling)
+        return;
+    const auto fd = entry.cq->get_wait_fd();
+    if (!fd)
+        return;
+    auto wait = std::make_shared<fd_watch>(io_context_);
+    const auto duplicate = ::fcntl(*fd, F_DUPFD_CLOEXEC, 0);
+    if (duplicate < 0)
+        return;
+    std::error_code error;
+    try {
+        wait->descriptor.assign(duplicate, error);
+    } catch (...) {
+        ::close(duplicate);
+        throw;
+    }
+    if (error) {
+        ::close(duplicate);
+        return;
+    }
+    wait->entry = &entry;
+    entry.wait = std::move(wait);
+#endif
+}
+
+inline void fabric_service::cancel_wait([[maybe_unused]] cq_entry& entry,
+                                        [[maybe_unused]] bool release) {
+#if defined(ASIO_HAS_POSIX_STREAM_DESCRIPTOR)
+    if (entry.wait) {
+        auto& wait = *entry.wait;
+        ++wait.generation;
+        wait.armed = false;
+        std::error_code ignored;
+        wait.descriptor.cancel(ignored);
+        if (release) {
+            wait.entry = nullptr;
+            wait.descriptor.close(ignored);
+            entry.wait.reset();
+            entry.retry_wait = false;
+        }
+    }
+#endif
+}
+
+inline void fabric_service::arm_wait([[maybe_unused]] cq_entry& entry) {
+#if defined(ASIO_HAS_POSIX_STREAM_DESCRIPTOR)
+    if (!entry.cq || entry.unhandled || !entry.wait || entry.wait->armed ||
+        !running_.load(std::memory_order_acquire) || shutdown_.load(std::memory_order_acquire))
+        return;
+    entry.retry_wait = true;
+    const auto ready = entry.cq->try_wait();
+    if (!ready) {
+        cancel_wait(entry, true);
+        return;
+    }
+    if (!*ready)
+        return;
+    const auto generation = ++entry.wait->generation;
+    try {
+        entry.wait->descriptor.async_wait(
+            ::asio::posix::stream_descriptor::wait_read,
+            [this, wait = entry.wait, generation](const std::error_code& error) {
+                const std::lock_guard lock{mutex_};
+                if (!wait->entry || generation != wait->generation ||
+                    !running_.load(std::memory_order_acquire))
+                    return;
+                auto& entry = *wait->entry;
+                wait->armed = false;
+                entry.retry_wait = true;
+                if (error)
+                    cancel_wait(entry, true);
+                const poll_scope polling{*this};
+                schedule_poll();
+                poll_entry(entry);
+                schedule_poll();
+            });
+        entry.wait->armed = true;
+        entry.retry_wait = false;
+    } catch (...) {
+        stop();
+        throw;
+    }
+#endif
+}
+
+inline auto fabric_service::poll_entry(cq_entry& entry) -> std::size_t {
+    if (!entry.cq || entry.unhandled)
+        return 0;
+    if (entry.wait) {
+        cancel_wait(entry);
+        entry.retry_wait = true;
+        // Retain a progress source if an inline receiver throws before rearming.
+        if (!timer_interval_ || *timer_interval_ > std::chrono::microseconds::zero())
+            schedule_poll();
+    }
+    const auto count = process_completions(entry);
+    arm_wait(entry);
+    return count;
 }
 
 inline auto fabric_service::process_completions(cq_entry& entry) -> std::size_t {
