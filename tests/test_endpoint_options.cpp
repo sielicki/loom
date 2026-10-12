@@ -4,10 +4,78 @@
 
 #include <rdma/fi_ext.h>
 
+#include <array>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
 namespace {
+template <typename Level, typename Option>
+concept loom_option_arguments =
+    requires(loom::endpoint& ep, Level level, Option option, void* value, std::size_t length) {
+        loom::get_endpoint_option(ep, level, option, value, &length);
+        loom::set_endpoint_option(ep, level, option, value, length);
+    };
+
+template <typename Level, typename Option>
+concept native_option_arguments =
+    requires(loom::endpoint& ep, Level level, Option option, void* value, std::size_t length) {
+        loom::get_native_endpoint_option(ep, level, option, value, &length);
+        loom::set_native_endpoint_option(ep, level, option, value, length);
+    };
+
+static_assert(loom_option_arguments<loom::ep_opt::level, loom::ep_opt::option>);
+static_assert(!loom_option_arguments<int, int>);
+static_assert(!loom_option_arguments<decltype(FI_OPT_ENDPOINT), decltype(FI_OPT_CM_DATA_SIZE)>);
+static_assert(!loom_option_arguments<loom::ep_opt::level, int>);
+static_assert(!loom_option_arguments<int, loom::ep_opt::option>);
+static_assert(!loom_option_arguments<loom::ep_opt::option, loom::ep_opt::level>);
+static_assert(native_option_arguments<int, int>);
+static_assert(!native_option_arguments<loom::ep_opt::level, loom::ep_opt::option>);
+static_assert(!native_option_arguments<loom::ep_opt::level, int>);
+static_assert(!native_option_arguments<int, loom::ep_opt::option>);
+
+struct option_probe {
+    int level{};
+    int option{};
+    int calls{};
+    int status{};
+    const void* value{};
+    std::size_t length{};
+    fi_ops ops{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_ep ep_ops{
+        .size = sizeof(fi_ops_ep),
+        .getopt =
+            [](fid* ep, int level, int option, void* value, std::size_t* length) {
+                return static_cast<option_probe*>(ep->context)
+                    ->record(level, option, value, *length);
+            },
+        .setopt =
+            [](fid* ep, int level, int option, const void* value, std::size_t length) {
+                return static_cast<option_probe*>(ep->context)
+                    ->record(level, option, value, length);
+            },
+    };
+    fid_ep handle{.fid = {.context = this, .ops = &ops}, .ops = &ep_ops};
+
+    auto record(int level, int option, const void* value, std::size_t length) -> int {
+        ++calls;
+        this->level = level;
+        this->option = option;
+        this->value = value;
+        this->length = length;
+        return status;
+    }
+
+    auto endpoint() -> loom::endpoint {
+        return loom::endpoint{
+            loom::detail::make_pmr_unique<loom::detail::endpoint_impl>(loom::get_default_resource(),
+                                                                       &handle,
+                                                                       loom::endpoint_types::rdm,
+                                                                       loom::address_format::inet)};
+    }
+};
+
 struct option_provider {
     int expected_option{};
     bool value{};
@@ -49,6 +117,106 @@ struct option_provider {
     }
 };
 }  // namespace
+
+TEST_CASE("typed endpoint options preserve every native mapping", "[endpoint][options]") {
+    struct mapping {
+        loom::ep_opt::option option;
+        int native;
+        std::size_t width;
+    };
+    using enum loom::ep_opt::option;
+    constexpr std::array mappings{
+        mapping{min_multi_recv, FI_OPT_MIN_MULTI_RECV, sizeof(std::size_t)},
+        mapping{cm_data_size, FI_OPT_CM_DATA_SIZE, sizeof(std::size_t)},
+        mapping{buffered_min, FI_OPT_BUFFERED_MIN, sizeof(std::size_t)},
+        mapping{buffered_limit, FI_OPT_BUFFERED_LIMIT, sizeof(std::size_t)},
+        mapping{shared_memory_permitted, FI_OPT_SHARED_MEMORY_PERMITTED, sizeof(bool)},
+        mapping{cuda_api_permitted, FI_OPT_CUDA_API_PERMITTED, sizeof(bool)},
+        mapping{efa_emulated_read, FI_OPT_EFA_EMULATED_READ, sizeof(bool)},
+        mapping{efa_emulated_write, FI_OPT_EFA_EMULATED_WRITE, sizeof(bool)},
+        mapping{efa_write_in_order_aligned_128_bytes,
+                FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES,
+                sizeof(bool)},
+    };
+    const auto setting = GENERATE(false, true);
+    for (const auto& mapped : mappings) {
+        CAPTURE(mapped.option, setting);
+        option_probe native;
+        auto ep = native.endpoint();
+        bool boolean{};
+        std::size_t extent{};
+        void* value = mapped.width == sizeof(bool) ? static_cast<void*>(&boolean) : &extent;
+        auto length = mapped.width;
+        const auto result =
+            setting ? loom::set_endpoint_option(
+                          ep, loom::ep_opt::level_endpoint, mapped.option, value, length)
+                    : loom::get_endpoint_option(
+                          ep, loom::ep_opt::level_endpoint, mapped.option, value, &length);
+        REQUIRE(result);
+        CHECK(native.calls == 1);
+        CHECK(native.level == FI_OPT_ENDPOINT);
+        CHECK(native.option == mapped.native);
+        CHECK(native.value == value);
+        CHECK(native.length == mapped.width);
+    }
+}
+
+TEST_CASE("native endpoint options bypass Loom identifier translation", "[endpoint][options]") {
+    const auto level = GENERATE(static_cast<int>(FI_OPT_ENDPOINT), 91);
+    const auto status = GENERATE(0, -FI_EIO);
+    const auto setting = GENERATE(false, true);
+    constexpr std::array<int, 9> options{FI_OPT_CM_DATA_SIZE,
+                                         FI_OPT_BUFFERED_MIN,
+                                         FI_OPT_BUFFERED_LIMIT,
+                                         FI_OPT_SEND_BUF_SIZE,
+                                         64,
+                                         65,
+                                         128,
+                                         129,
+                                         130};
+    for (const auto option : options) {
+        CAPTURE(level, option, status, setting);
+        option_probe native;
+        native.status = status;
+        auto ep = native.endpoint();
+        std::size_t value{}, length{sizeof(value)};
+        const auto result =
+            setting ? loom::set_native_endpoint_option(ep, level, option, &value, length)
+                    : loom::get_native_endpoint_option(ep, level, option, &value, &length);
+        REQUIRE(static_cast<bool>(result) == (status == 0));
+        if (!result)
+            CHECK(result.error() == loom::errc::io_error);
+        CHECK(native.calls == 1);
+        CHECK(native.level == level);
+        CHECK(native.option == option);
+        CHECK(native.value == &value);
+        CHECK(native.length == sizeof(value));
+    }
+}
+
+TEST_CASE("typed endpoint options reject unknown identifiers", "[endpoint][options]") {
+    const auto level = GENERATE(loom::ep_opt::level_endpoint,
+                                static_cast<loom::ep_opt::level>(-1),
+                                static_cast<loom::ep_opt::level>(1));
+    const auto option = GENERATE(loom::ep_opt::cuda_api_permitted,
+                                 static_cast<loom::ep_opt::option>(-1),
+                                 static_cast<loom::ep_opt::option>(0),
+                                 static_cast<loom::ep_opt::option>(999));
+    const auto setting = GENERATE(false, true);
+    CAPTURE(level, option, setting);
+    option_probe native;
+    auto ep = native.endpoint();
+    bool value{};
+    auto length = sizeof(value);
+    const auto result = setting ? loom::set_endpoint_option(ep, level, option, &value, length)
+                                : loom::get_endpoint_option(ep, level, option, &value, &length);
+    const auto valid =
+        level == loom::ep_opt::level_endpoint && option == loom::ep_opt::cuda_api_permitted;
+    REQUIRE(static_cast<bool>(result) == valid);
+    if (!result)
+        CHECK(result.error() == loom::errc::invalid_argument);
+    CHECK(native.calls == (valid ? 1 : 0));
+}
 
 TEST_CASE("boolean endpoint options use native identifiers and widths", "[endpoint]") {
     option_provider native;

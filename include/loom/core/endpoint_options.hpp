@@ -19,19 +19,22 @@ namespace loom {
  */
 namespace ep_opt {
 
-inline constexpr int level_endpoint = 0;  ///< Endpoint-level option
+enum class level { endpoint };
+inline constexpr auto level_endpoint = level::endpoint;  ///< Endpoint-level option
 
-inline constexpr int min_multi_recv = 1;  ///< Minimum multi-receive buffer size
-inline constexpr int cm_data_size = 2;    ///< Connection manager data size
-inline constexpr int buffered_min = 3;    ///< Minimum buffered receive size
-inline constexpr int buffered_limit = 4;  ///< Maximum buffered receive limit
-
-inline constexpr int shared_memory_permitted = 64;  ///< Allow shared memory optimization
-inline constexpr int cuda_api_permitted = 65;       ///< Allow CUDA API usage
-
-inline constexpr int efa_emulated_read = 128;                     ///< EFA emulated read status
-inline constexpr int efa_emulated_write = 129;                    ///< EFA emulated write status
-inline constexpr int efa_write_in_order_aligned_128_bytes = 130;  ///< EFA 128-byte aligned ordering
+/// Loom identifiers are distinct from native FI_OPT_* integer constants.
+enum class option {
+    min_multi_recv = 1,                          ///< Minimum multi-receive buffer size
+    cm_data_size = 2,                            ///< Connection manager data size
+    buffered_min = 3,                            ///< Minimum buffered receive size
+    buffered_limit = 4,                          ///< Maximum buffered receive limit
+    shared_memory_permitted = 64,                ///< Allow shared memory optimization
+    cuda_api_permitted = 65,                     ///< Allow CUDA API usage
+    efa_emulated_read = 128,                     ///< EFA emulated read status
+    efa_emulated_write = 129,                    ///< EFA emulated write status
+    efa_write_in_order_aligned_128_bytes = 130,  ///< EFA 128-byte aligned ordering
+};
+using enum option;
 
 }  // namespace ep_opt
 
@@ -39,27 +42,41 @@ inline constexpr int efa_write_in_order_aligned_128_bytes = 130;  ///< EFA 128-b
  * @brief Sets an endpoint option.
  * @param ep The endpoint to configure.
  * @param level The option level (use ep_opt::level_endpoint).
- * @param optname The option name constant.
+ * @param optname A Loom ep_opt option identifier.
  * @param optval Pointer to the option value.
  * @param optlen Size of the option value.
  * @return Success or error result.
  */
-[[nodiscard]] auto
-set_endpoint_option(endpoint& ep, int level, int optname, const void* optval, std::size_t optlen)
-    -> result<void>;
+[[nodiscard]] auto set_endpoint_option(endpoint& ep,
+                                       ep_opt::level level,
+                                       ep_opt::option optname,
+                                       const void* optval,
+                                       std::size_t optlen) -> result<void>;
 
 /**
  * @brief Gets an endpoint option.
  * @param ep The endpoint to query.
  * @param level The option level (use ep_opt::level_endpoint).
- * @param optname The option name constant.
+ * @param optname A Loom ep_opt option identifier.
  * @param optval Pointer to receive the option value.
  * @param optlen Pointer to the value size (updated on return).
  * @return Success or error result.
  */
-[[nodiscard]] auto
-get_endpoint_option(const endpoint& ep, int level, int optname, void* optval, std::size_t* optlen)
-    -> result<void>;
+[[nodiscard]] auto get_endpoint_option(const endpoint& ep,
+                                       ep_opt::level level,
+                                       ep_opt::option optname,
+                                       void* optval,
+                                       std::size_t* optlen) -> result<void>;
+
+/// Set a native option, forwarding its level and name without translation.
+/// Use libfabric FI_OPT_* constants or native provider extension identifiers.
+[[nodiscard]] auto set_native_endpoint_option(
+    endpoint& ep, int level, int optname, const void* optval, std::size_t optlen) -> result<void>;
+
+/// Query a native option, forwarding its level, name, and value-size output.
+/// Use libfabric FI_OPT_* constants or native provider extension identifiers.
+[[nodiscard]] auto get_native_endpoint_option(
+    const endpoint& ep, int level, int optname, void* optval, std::size_t* optlen) -> result<void>;
 
 /**
  * @brief Sets the minimum multi-receive buffer size.

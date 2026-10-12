@@ -192,6 +192,24 @@ handle `opaque_address`, and consumers must rebuild for the changed variant.
 `get_address_data` still points to the C++ object; use `opaque_address::bytes()`
 to access the native representation.
 
+### Endpoint options
+
+`get_endpoint_option` and `set_endpoint_option` take scoped `ep_opt::level`
+and `ep_opt::option` identifiers:
+
+```cpp
+std::size_t bytes{}, length{sizeof(bytes)};
+auto queried = loom::get_endpoint_option(
+    ep, loom::ep_opt::level_endpoint, loom::ep_opt::cm_data_size, &bytes, &length);
+```
+
+Use `get_native_endpoint_option` and `set_native_endpoint_option` for libfabric
+`FI_OPT_*` constants or provider extension identifiers. These functions forward
+native level and option numbers unchanged. Migrate calls using native constants
+to these functions, and use `ep_opt::level` and `ep_opt::option` for variables
+holding Loom identifiers. The scoped API rejects mixed identifier types at
+compile time and unknown enum values with `invalid_argument` before dispatch.
+
 ### Tagged message reservations
 
 `msg::tagged_claim` keeps one native context stable from a matched probe
