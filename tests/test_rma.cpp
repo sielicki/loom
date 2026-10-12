@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/core/passive_endpoint.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 #include <loom/loom.hpp>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <limits>
+#include <optional>
+#include <thread>
 #include <vector>
 
 #include "mock_domain.hpp"
@@ -440,48 +444,151 @@ TEST_CASE("rma size queries", "[rma][.provider]") {
     REQUIRE(static_cast<bool>(ep_result));
 
     auto& ep = *ep_result;
-    auto enable_result = ep.enable();
-    REQUIRE(static_cast<bool>(enable_result));
-
+    // Limits are queryable before activation; RDM activation may require
+    // queues and an address vector. Injection is optional for RMA providers.
     auto max_size = rma::get_max_rma_size(ep);
     REQUIRE(max_size > 0);
 
     auto inject_size = rma::get_inject_size(ep);
-    REQUIRE(inject_size > 0);
+    REQUIRE(inject_size <= max_size);
 }
 
-TEST_CASE("inject write small data", "[rma][.provider]") {
-    fabric_hints hints{};
-    hints.ep_type = endpoint_types::rdm;
-    hints.capabilities = capability::rma;
+TEST_CASE("injected RMA reaches a connected registered peer", "[rma][.provider]") {
+    using namespace std::chrono_literals;
+    const auto provider = GENERATE("sockets", "tcp");
+    const auto immediate = GENERATE(false, true);
+    CAPTURE(provider, immediate);
+    const auto checked = [](auto result) {
+        if (!result)
+            FAIL(result.error().message());
+        return std::move(result).value();
+    };
+    fabric_hints hints;
+    hints.provider_name = provider;
+    hints.domain_name = "lo";
+    hints.ep_type = endpoint_types::msg;
+    hints.addr_format = address_format::inet;
+    hints.capabilities = capability::rma | capability::read | capability::write |
+                         capability::remote_read | capability::remote_write;
+    hints.mode_bits = mode_bits::context | mode_bits::context2;
+    auto info = checked(query_fabric(hints));
+    REQUIRE(info.get_endpoint_attr()->msg_ordering.has(ordering::raw));
+    auto fab = checked(fabric::create(info));
+    auto dom = checked(domain::create(fab, info));
+    // Endpoints close before their borrowed registrations, buffers and context,
+    // including when a deadline or native error fails this test.
+    std::array<std::byte, 64> source{}, readback{};
+    std::array<std::byte, 128> target;
+    fi_context2 context{};
+    auto target_mr = checked(memory_region::register_memory(
+        dom, target, mr_access_flags::remote_read | mr_access_flags::remote_write));
+    auto local_mr = checked(memory_region::register_memory(dom, readback, mr_access_flags::read));
+    auto server_eq = checked(event_queue::create(fab));
+    auto client_eq = checked(event_queue::create(fab));
+    auto server_cq = checked(completion_queue::create(dom));
+    auto client_cq = checked(completion_queue::create(dom));
+    auto listener = checked(passive_endpoint::create(fab, info));
+    REQUIRE(listener.bind_eq(server_eq));
+    REQUIRE(listener.listen());
+    auto client = checked(endpoint::create(dom, info));
+    REQUIRE(client.bind_eq(client_eq));
+    REQUIRE(client.bind_cq(client_cq,
+                           cq_bind::transmit | cq_bind::recv | cq_bind::selective_completion));
+    REQUIRE(client.enable());
+    REQUIRE(client.connect(checked(listener.get_local_address())));
+    std::optional<fabric_event> request;
+    bool client_connected{}, server_connected{};
+    const auto progress = [&] {
+        REQUIRE(client_cq.progress());
+        REQUIRE(server_cq.progress());
+        if (auto event = client_eq.poll()) {
+            REQUIRE_FALSE(event->error);
+            REQUIRE(event->type == event_type::connected);
+            client_connected = true;
+        }
+        if (auto event = server_eq.poll()) {
+            REQUIRE_FALSE(event->error);
+            if (event->type == event_type::connreq)
+                request = std::move(*event);
+            else {
+                REQUIRE(event->type == event_type::connected);
+                server_connected = true;
+            }
+        }
+    };
+    const auto until = [&](auto&& ready) {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (!ready()) {
+            REQUIRE(std::chrono::steady_clock::now() < deadline);
+            progress();
+            std::this_thread::yield();
+        }
+    };
+    until([&] { return request.has_value(); });
+    REQUIRE(request->connection_info);
+    auto server = checked(endpoint::create(dom, *request->connection_info));
+    REQUIRE(server.bind_eq(server_eq));
+    REQUIRE(server.bind_cq(server_cq, cq_bind::transmit | cq_bind::recv));
+    REQUIRE(server.enable());
+    REQUIRE(server.accept());
+    until([&] { return client_connected && server_connected; });
 
-    auto info_result = query_fabric(hints);
-    if (!info_result) {
-        SKIP("No RMA providers found");
+    target.fill(std::byte{0x5a});
+    for (std::size_t i = 0; i < source.size(); ++i)
+        source[i] = static_cast<std::byte>(i + 1);
+    const auto expected = source;
+    const auto count = std::min(source.size(), rma::get_inject_size(client));
+    REQUIRE(count > 0);
+    auto remote = checked(checked(remote_memory::from_mr(target_mr)).subregion(11, count));
+    const auto submit = [&](auto&& operation) {
+        until([&] {
+            auto result = operation();
+            if (result)
+                return true;
+            REQUIRE(result.error() == errc::again);
+            return false;
+        });
+    };
+    submit([&] {
+        const auto data = std::span{source}.first(count);
+        return immediate ? rma::inject_write_data(client, data, remote, 73)
+                         : rma::inject_write(client, data, remote);
+    });
+    // Successful injection permits immediate source reuse. An ordered readback
+    // proves delivery without racing the provider's writes to the target.
+    source.fill(std::byte{});
+    submit([&] {
+        return rma::read_to(client,
+                            std::span{readback}.first(count),
+                            local_mr,
+                            fabric_addrs::unspecified,
+                            remote,
+                            op_flag::completion,
+                            &context);
+    });
+    until([&] {
+        const auto event = client_cq.poll();
+        if (!event)
+            return false;
+        REQUIRE_FALSE(event->error);
+        REQUIRE(event->context.get() == &context);
+        REQUIRE((event->flags & FI_READ) != 0);
+        return true;
+    });
+    REQUIRE(std::ranges::equal(std::span{readback}.first(count), std::span{expected}.first(count)));
+    for (std::size_t i = 0; i < target.size(); ++i)
+        REQUIRE(target[i] == (i >= 11 && i < 11 + count ? expected[i - 11] : std::byte{0x5a}));
+    if (immediate) {
+        until([&] {
+            const auto event = server_cq.poll();
+            if (!event)
+                return false;
+            REQUIRE_FALSE(event->error);
+            REQUIRE(event->has_immediate_data());
+            REQUIRE(event->data == 73);
+            return true;
+        });
     }
-
-    auto& info = *info_result;
-    auto fab_result = fabric::create(info);
-    REQUIRE(static_cast<bool>(fab_result));
-
-    auto dom_result = domain::create(*fab_result, info);
-    REQUIRE(static_cast<bool>(dom_result));
-
-    auto ep_result = endpoint::create(*dom_result, info);
-    REQUIRE(static_cast<bool>(ep_result));
-
-    auto& ep = *ep_result;
-    auto enable_result = ep.enable();
-    REQUIRE(static_cast<bool>(enable_result));
-
-    std::array<std::byte, 64> data{};
-    for (std::size_t i = 0; i < data.size(); ++i) {
-        data[i] = static_cast<std::byte>(i);
-    }
-
-    remote_memory remote{0x1000, 0xABCD, data.size()};
-
-    [[maybe_unused]] auto result = rma::inject_write(ep, std::span{data}, remote);
 }
 
 TEST_CASE("RMA flags preserve explicit overrides and inherited defaults", "[rma][flags]") {
