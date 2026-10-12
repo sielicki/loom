@@ -29,10 +29,10 @@ nix build .#nixl-loom
 ./result/bin/nixl-loom-workload 'tcp;ofi_rxm' --processes
 ```
 
-The build runs all four workloads, two plugin ABI contract checks, and an
-injected CUDA driver policy test. The installed executable sets
-`NIXL_PLUGIN_DIR` to its packaged `libplugin_LOOM.so`; transfers explicitly
-select the LOOM backend. To develop with the same dependencies:
+The build runs all four workloads, two plugin ABI contract checks, two native
+shutdown checks, and an injected CUDA driver policy test. The installed
+executable sets `NIXL_PLUGIN_DIR` to its packaged `libplugin_LOOM.so`; transfers
+explicitly select the LOOM backend. To develop with the same dependencies:
 
 ```sh
 nix develop .#nixl-loom
@@ -83,8 +83,14 @@ does not drain notifications.
 
 Release stops unsubmitted segments and drains accepted DMA before returning.
 Destruction also retires posted receives before deregistering their storage
-and closing the endpoint. Draining and close can block when a provider or
-peer fails to retire work; bounded failure recovery is still open.
+and closing the endpoint. If receive cancellation fails, destruction closes the
+native endpoint to retire receives without waiting for CQ events. A failed
+close preserves their contexts and registrations while progress and retries
+continue. Draining and close can block when a provider or peer fails to retire
+work; bounded failure recovery is still open.
+
+The shutdown checks inject unsupported cancellation, partial cancellation, and
+a retriable close failure around real Sockets and TCP/RxM receive operations.
 
 The workloads check registered reads and writes to distinct peers,
 discontiguous subranges and untouched guard bytes, prepared-request reuse,

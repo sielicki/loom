@@ -23,6 +23,12 @@ target_compile_features(nixl-contract-check PRIVATE cxx_std_26)
 target_compile_options(nixl-contract-check PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_link_libraries(nixl-contract-check PRIVATE PkgConfig::NIXL Threads::Threads ${CMAKE_DL_LIBS})
 
+add_executable(nixl-shutdown-check test-shutdown.cpp)
+target_compile_features(nixl-shutdown-check PRIVATE cxx_std_26)
+target_compile_options(nixl-shutdown-check PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(nixl-shutdown-check PRIVATE ../hmem "${CUDA_DRIVER_INCLUDE_DIR}")
+target_link_libraries(nixl-shutdown-check PRIVATE loom::loom PkgConfig::NIXL Threads::Threads ${CMAKE_DL_LIBS})
+
 add_executable(nixl-cuda-policy-check ../hmem/test-cuda.cpp)
 target_compile_features(nixl-cuda-policy-check PRIVATE cxx_std_26)
 target_compile_options(nixl-cuda-policy-check PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -48,6 +54,8 @@ foreach(provider IN ITEMS sockets "tcp;ofi_rxm")
     add_test(NAME nixl_contract_${profile}
              COMMAND nixl-contract-check $<TARGET_FILE:nixl_loom> "${provider}")
     set_tests_properties(nixl_contract_${profile} PROPERTIES TIMEOUT 30)
+    add_test(NAME nixl_shutdown_${profile} COMMAND nixl-shutdown-check "${provider}")
+    set_tests_properties(nixl_shutdown_${profile} PROPERTIES TIMEOUT 15)
     add_test(NAME nixl_${profile}
              COMMAND nixl-loom-workload "${provider}")
     add_test(NAME nixl_process_${profile}

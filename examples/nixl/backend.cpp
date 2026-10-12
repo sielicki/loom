@@ -782,7 +782,10 @@ class engine final : public nixlBackendEngine {
 
 public:
     explicit engine(const nixlBackendInitParams* params)
-        : nixlBackendEngine(params), fabric_(std::make_shared<resources>(*params)) {
+        : engine(params, std::make_shared<resources>(*params)) {}
+
+    engine(const nixlBackendInitParams* params, std::shared_ptr<resources> fabric)
+        : nixlBackendEngine(params), fabric_(std::move(fabric)) {
         for (const auto kind :
              {channel::notification, channel::visibility_request, channel::visibility_reply})
             for (unsigned i = 0; i < 8; ++i) {
@@ -826,15 +829,25 @@ public:
                 return true;
             });
             stop_receives_ = true;
-            for (const auto& slot : fabric_->receives)
-                if (slot->phase == message_phase::accepted)
-                    (void)fabric_->endpoint.cancel(
-                        loom::context_ptr<void>{slot->context.context_ptr()});
-            changed_.wait(lock, [this] {
-                return std::ranges::none_of(fabric_->receives, [](const auto& slot) {
-                    return slot->phase == message_phase::accepted;
+            bool cancellation_failed{};
+            for (const auto& slot : fabric_->receives) {
+                if (slot->phase == message_phase::accepted &&
+                    !fabric_->endpoint.cancel(loom::context_ptr<void>{slot->context.context_ptr()}))
+                    cancellation_failed = true;
+            }
+            if (cancellation_failed) {
+                // Cancellation is optional. Successful native close also
+                // retires receives, even when it discards their CQ events.
+                // Retain the resource graph and keep progressing on failure.
+                while (!fabric_->endpoint.close())
+                    changed_.wait_for(lock, 1ms);
+            } else {
+                changed_.wait(lock, [this] {
+                    return std::ranges::none_of(fabric_->receives, [](const auto& slot) {
+                        return slot->phase == message_phase::accepted;
+                    });
                 });
-            });
+            }
             requests_.clear();
             outgoing_.clear();
             replies_.clear();
