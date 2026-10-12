@@ -623,13 +623,21 @@ install(TARGETS loom loom_compile_options loom_sanitizers
 # Install optional libraries if they exist
 if(TARGET loom_execution)
     install(TARGETS loom_execution
-        EXPORT loomTargets
+        EXPORT loomExecutionTargets
+    )
+    install(EXPORT loomExecutionTargets
+        NAMESPACE loom::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom
     )
 endif()
 
 if(TARGET loom_asio)
     install(TARGETS loom_asio
-        EXPORT loomTargets
+        EXPORT loomAsioTargets
+    )
+    install(EXPORT loomAsioTargets
+        NAMESPACE loom::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/loom
     )
 endif()
 

@@ -1,7 +1,36 @@
 cmake_minimum_required(VERSION 3.30)
 project(loom_installed_consumer LANGUAGES CXX)
 
-find_package(loom CONFIG REQUIRED)
+set(CHECK_COMPONENTS "" CACHE STRING "Required Loom components")
+set(CHECK_OPTIONAL_COMPONENTS "" CACHE STRING "Optional Loom components")
+option(CHECK_REPEAT_FIND "Find the core before and after the requested components" OFF)
+if(CHECK_REPEAT_FIND)
+    find_package(loom CONFIG REQUIRED COMPONENTS core)
+endif()
+if(CHECK_COMPONENTS OR CHECK_OPTIONAL_COMPONENTS)
+    find_package(loom CONFIG REQUIRED
+        COMPONENTS ${CHECK_COMPONENTS}
+        OPTIONAL_COMPONENTS ${CHECK_OPTIONAL_COMPONENTS})
+else()
+    find_package(loom CONFIG REQUIRED)
+endif()
+if(CHECK_REPEAT_FIND)
+    find_package(loom CONFIG REQUIRED COMPONENTS core)
+endif()
+
+foreach(component IN ITEMS execution asio)
+    set(has_${component} OFF)
+    if(TARGET loom::${component})
+        set(has_${component} ON)
+    endif()
+    if(DEFINED CHECK_EXPECT_${component} AND
+       NOT has_${component} STREQUAL CHECK_EXPECT_${component})
+        message(FATAL_ERROR "Unexpected availability of loom::${component}")
+    endif()
+endforeach()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/components.cmake"
+    "set(has_execution ${has_execution})\nset(has_asio ${has_asio})\n")
+
 add_executable(installed-consumer main.cpp)
 target_compile_features(installed-consumer PRIVATE cxx_std_26)
 target_link_libraries(installed-consumer PRIVATE loom::loom)

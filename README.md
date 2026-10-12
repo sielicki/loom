@@ -42,6 +42,21 @@ The default Nix dependency disables OPX: its GPU support requires vendor
 HFI1 kernel headers not present in the pinned dependency set. Re-enabling
 OPX requires supplying compatible headers and the corresponding driver.
 
+Installed CMake packages provide `core`, `execution`, and `asio` components.
+Request the components used by your target:
+
+```cmake
+find_package(loom CONFIG REQUIRED COMPONENTS core)
+target_link_libraries(app PRIVATE loom::loom)
+```
+
+Use `COMPONENTS execution` with `loom::execution`, or `COMPONENTS asio` with
+`loom::asio`. These components require the corresponding frontend to have been
+enabled when Loom was built and its dependency to be available to the consumer.
+The `core` component requires neither frontend dependency. Without a component
+list, `find_package(loom)` also discovers any available installed frontends;
+missing optional dependencies do not prevent using the core library.
+
 ### Libfabric release audit
 
 Reviewed every stable release after 1.22.0 through 2.7.0, including the
