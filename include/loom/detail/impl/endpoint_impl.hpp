@@ -4,6 +4,7 @@
 #include <rdma/fabric.h>
 #include <rdma/fi_cm.h>
 #include <rdma/fi_endpoint.h>
+#include <rdma/fi_ext.h>
 #include <rdma/fi_rma.h>
 #include <rdma/fi_tagged.h>
 
@@ -761,26 +762,16 @@ auto translate_optname(int optname) -> int {
             return FI_OPT_BUFFERED_MIN;
         case ep_opt::buffered_limit:
             return FI_OPT_BUFFERED_LIMIT;
-#    ifdef FI_OPT_SHARED_MEMORY_PERMITTED
         case ep_opt::shared_memory_permitted:
             return FI_OPT_SHARED_MEMORY_PERMITTED;
-#    endif
-#    ifdef FI_OPT_CUDA_API_PERMITTED
         case ep_opt::cuda_api_permitted:
             return FI_OPT_CUDA_API_PERMITTED;
-#    endif
-#    ifdef FI_OPT_EFA_EMULATED_READ
         case ep_opt::efa_emulated_read:
             return FI_OPT_EFA_EMULATED_READ;
-#    endif
-#    ifdef FI_OPT_EFA_EMULATED_WRITE
         case ep_opt::efa_emulated_write:
             return FI_OPT_EFA_EMULATED_WRITE;
-#    endif
-#    ifdef FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES
         case ep_opt::efa_write_in_order_aligned_128_bytes:
             return FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES;
-#    endif
         default:
             return optname;
     }
@@ -797,6 +788,10 @@ auto set_endpoint_option(
     auto* ep_ptr = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (ep_ptr == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(ep_ptr->ops, fi_ops_ep, setopt)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     int fi_level = (level == ep_opt::level_endpoint) ? FI_OPT_ENDPOINT : level;
@@ -819,6 +814,10 @@ auto get_endpoint_option(
     auto* ep_ptr = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (ep_ptr == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(ep_ptr->ops, fi_ops_ep, getopt)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     int fi_level = (level == ep_opt::level_endpoint) ? FI_OPT_ENDPOINT : level;

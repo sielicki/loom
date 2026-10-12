@@ -49,6 +49,10 @@ auto set_endpoint_option(
         return make_error_result<void>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(ep_ptr->ops, fi_ops_ep, setopt)) {
+        return make_error_result<void>(errc::not_supported);
+    }
+
     int fi_level = (level == ep_opt::level_endpoint) ? FI_OPT_ENDPOINT : level;
     int fi_optname = translate_optname(optname);
 
@@ -69,6 +73,10 @@ auto get_endpoint_option(
     auto* ep_ptr = static_cast<::fid_ep*>(ep.impl_internal_ptr());
     if (ep_ptr == nullptr) {
         return make_error_result<void>(errc::invalid_argument);
+    }
+
+    if (!FI_CHECK_OP(ep_ptr->ops, fi_ops_ep, getopt)) {
+        return make_error_result<void>(errc::not_supported);
     }
 
     int fi_level = (level == ep_opt::level_endpoint) ? FI_OPT_ENDPOINT : level;

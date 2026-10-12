@@ -5,6 +5,7 @@
 #include <rdma/fi_ext.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace {
 struct option_provider {
@@ -88,4 +89,45 @@ TEST_CASE("boolean endpoint options use native identifiers and widths", "[endpoi
         REQUIRE_FALSE(loom::efa::get_write_in_order_aligned_128_bytes(ep).value());
     }
     REQUIRE(native.calls >= 2);
+}
+
+TEST_CASE("endpoint options reject unavailable native operations", "[endpoint]") {
+    enum class support { available, missing_table, missing_member, truncated, empty };
+    const auto state = GENERATE(support::available,
+                                support::missing_table,
+                                support::missing_member,
+                                support::truncated,
+                                support::empty);
+    const auto setting = GENERATE(false, true);
+    CAPTURE(state, setting);
+    option_provider native;
+    native.expected_option = FI_OPT_CUDA_API_PERMITTED;
+    auto ep = native.endpoint();
+    switch (state) {
+        case support::available:
+            break;
+        case support::missing_table:
+            native.handle.ops = nullptr;
+            break;
+        case support::missing_member:
+            if (setting)
+                native.ep_ops.setopt = nullptr;
+            else
+                native.ep_ops.getopt = nullptr;
+            break;
+        case support::truncated:
+            native.ep_ops.size =
+                setting ? offsetof(fi_ops_ep, setopt) : offsetof(fi_ops_ep, getopt);
+            break;
+        case support::empty:
+            ep = {};
+            break;
+    }
+    const auto result = setting ? loom::set_cuda_api_permitted(ep, true)
+                                : loom::get_cuda_api_permitted(ep).transform([](bool) {});
+    REQUIRE(static_cast<bool>(result) == (state == support::available));
+    if (!result)
+        REQUIRE(result.error() == (state == support::empty ? loom::errc::invalid_argument
+                                                           : loom::errc::not_supported));
+    REQUIRE(native.calls == (state == support::available ? 1 : 0));
 }

@@ -136,6 +136,7 @@ add_executable(test_implementation
     test_counter.cpp
     test_scalable_endpoint.cpp
     test_endpoint_limits.cpp
+    test_endpoint_options.cpp
     test_endpoint_close.cpp
     test_endpoint_submissions.cpp
     test_provider_contract.cpp
