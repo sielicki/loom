@@ -5,6 +5,7 @@
 #include <memory>
 #include <memory_resource>
 
+#include "loom/core/address.hpp"
 #include "loom/core/allocator.hpp"
 #include "loom/core/crtp/fabric_object_base.hpp"
 #include "loom/core/endpoint.hpp"
@@ -94,6 +95,10 @@ public:
     [[nodiscard]] auto bind_av(address_vector& av, std::uint64_t flags = 0) -> void_result;
 
     [[nodiscard]] auto enable() -> void_result;
+
+    /// Returns the parent's address for peer exchange, preserving its native format.
+    /// The provider may require binding and enabling the endpoint first.
+    [[nodiscard]] auto get_local_address() const -> result<address>;
 
     [[nodiscard]] auto tx_context(std::size_t index) -> result<endpoint>;
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <rdma/fabric.h>
+#include <rdma/fi_cm.h>
 #include <rdma/fi_endpoint.h>
 
 #include "loom/core/address_vector.hpp"
@@ -12,6 +13,7 @@
 #include "loom/core/fabric.hpp"
 #include "loom/core/scalable_endpoint.hpp"
 #include "loom/detail/impl/endpoint_impl.hpp"
+#include "loom/detail/native_address.hpp"
 #include "loom/detail/unique_fid.hpp"
 
 namespace loom::detail {
@@ -199,6 +201,21 @@ auto scalable_endpoint::enable() -> void_result {
     }
 
     return make_success();
+}
+
+auto scalable_endpoint::get_local_address() const -> result<address> {
+    if (!impl_valid()) {
+        return make_error_result<address>(errc::invalid_argument);
+    }
+    if (!FI_CHECK_OP(impl_->sep->cm, fi_ops_cm, getname)) {
+        return make_error_result<address>(errc::not_supported);
+    }
+
+    return detail::query_address(
+        [&](void* data, std::size_t* length) {
+            return ::fi_getname(&impl_->sep->fid, data, length);
+        },
+        impl_->addr_format);
 }
 
 auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {

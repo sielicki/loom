@@ -400,6 +400,10 @@ The count fields reject libfabric's shared-context sentinel; use the shared
 receive flag to request an SRX. Close all child contexts before destroying
 their scalable endpoint.
 
+Use `sep.get_local_address()` to obtain the parent's typed address for
+peer exchange after any provider-required binding and enablement. It
+preserves socket and opaque provider formats and propagates native errors.
+
 For a provider supporting `capability::named_rx_ctx`, reserve enough
 `address_vector_attr::rx_ctx_bits` to encode the remote context indices.
 `av.receive_context_bits()` returns that width. Use the base handle from

@@ -57,7 +57,7 @@ struct scalable_provider {
                 return 0;
             },
     };
-    fid_ep sep{.fid = {.context = this, .ops = &ops}, .ops = &endpoint_ops};
+    fid_ep sep{.fid = {.context = this, .ops = &ops}, .ops = &endpoint_ops, .cm = &cm};
     fi_ops_domain domain_ops{
         .size = sizeof(fi_ops_domain),
         .scalable_ep =
@@ -96,6 +96,11 @@ TEST_CASE("scalable endpoint contexts preserve parent metadata", "[endpoint][sca
     auto sep = loom::scalable_endpoint::create(
         domain, info, explicit_resource ? loom::get_default_resource() : nullptr);
     REQUIRE(sep);
+    const auto local_address = sep->get_local_address();
+    REQUIRE(local_address);
+    REQUIRE(std::holds_alternative<loom::ipv6_address>(*local_address));
+    CHECK(std::get<loom::ipv6_address>(*local_address).is_loopback());
+    CHECK(std::get<loom::ipv6_address>(*local_address).port() == 1234);
     raw_info->tx_attr->iov_limit = 9;
     raw_info->rx_attr->iov_limit = 9;
     raw_info->tx_attr->rma_iov_limit = 9;
@@ -165,14 +170,10 @@ TEST_CASE("sockets delivers to the encoded receive context", "[scalable][rx_cont
     }
     REQUIRE(sender.enable());
     REQUIRE(sep.enable());
-    // SEP name lookup still requires native access.
-    sockaddr_in name{};
-    auto length = sizeof(name);
-    auto* native_sep = static_cast<fid_ep*>(sep.internal_ptr());
-    REQUIRE(fi_getname(&native_sep->fid, &name, &length) == 0);
-    REQUIRE(length == sizeof(name));
-    REQUIRE(name.sin_family == AF_INET);
-    const auto peer = av.insert(ipv4_address{ntohl(name.sin_addr.s_addr), ntohs(name.sin_port)});
+    const auto local_address = sep.get_local_address();
+    REQUIRE(local_address);
+    REQUIRE(get_address_format(*local_address) == address_format::inet);
+    const auto peer = av.insert(*local_address);
     REQUIRE(peer);
     std::array destinations{av.receive_context_address(*peer, 0).value(),
                             av.receive_context_address(*peer, 1).value()};
