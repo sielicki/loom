@@ -4,6 +4,7 @@
 #include <rdma/fi_atomic.h>
 
 #include <concepts>
+#include <optional>
 #include <span>
 #include <type_traits>
 
@@ -24,6 +25,8 @@
  * passing a temporary does not extend its lifetime. Injection releases only
  * its input on return. Query operation/type/count support before submission.
  * Element counts must fit the remote byte extent without address overflow.
+ * Invalid enums and operations from another atomic family are rejected before
+ * provider dispatch. Valid operation/datatype support remains provider-specific.
  */
 namespace loom::atomic {
 
@@ -203,12 +206,31 @@ contains_elements(remote_memory remote, datatype type, std::size_t count) noexce
            region->contains(address, count * size);
 }
 
-/**
- * @brief Converts a loom operation to a libfabric fi_op.
- * @param op The loom atomic operation.
- * @return The corresponding fi_op value.
- */
-[[nodiscard]] constexpr auto to_fi_op(operation op) noexcept -> ::fi_op {
+enum class operation_family { base, fetch, compare };
+
+/// Convert only operations defined for the selected native atomic family.
+template <operation_family Family>
+[[nodiscard]] constexpr auto to_fi_op(operation op) noexcept -> std::optional<::fi_op> {
+    if constexpr (Family == operation_family::compare) {
+        switch (op) {
+            case operation::compare_swap:
+                return FI_CSWAP;
+            case operation::compare_swap_ne:
+                return FI_CSWAP_NE;
+            case operation::compare_swap_le:
+                return FI_CSWAP_LE;
+            case operation::compare_swap_lt:
+                return FI_CSWAP_LT;
+            case operation::compare_swap_ge:
+                return FI_CSWAP_GE;
+            case operation::compare_swap_gt:
+                return FI_CSWAP_GT;
+            case operation::masked_swap:
+                return FI_MSWAP;
+            default:
+                return std::nullopt;
+        }
+    }
     switch (op) {
         case operation::min:
             return FI_MIN;
@@ -231,33 +253,22 @@ contains_elements(remote_memory remote, datatype type, std::size_t count) noexce
         case operation::bitwise_xor:
             return FI_BXOR;
         case operation::atomic_read:
-            return FI_ATOMIC_READ;
+            if constexpr (Family == operation_family::fetch)
+                return FI_ATOMIC_READ;
+            return std::nullopt;
         case operation::atomic_write:
             return FI_ATOMIC_WRITE;
-        case operation::compare_swap:
-            return FI_CSWAP;
-        case operation::compare_swap_ne:
-            return FI_CSWAP_NE;
-        case operation::compare_swap_le:
-            return FI_CSWAP_LE;
-        case operation::compare_swap_lt:
-            return FI_CSWAP_LT;
-        case operation::compare_swap_ge:
-            return FI_CSWAP_GE;
-        case operation::compare_swap_gt:
-            return FI_CSWAP_GT;
-        case operation::masked_swap:
-            return FI_MSWAP;
+        default:
+            return std::nullopt;
     }
-    return FI_MIN;
 }
 
 /**
  * @brief Converts a loom datatype to a libfabric fi_datatype.
  * @param dt The loom datatype.
- * @return The corresponding fi_datatype value.
+ * @return The corresponding fi_datatype value, or no value for an invalid enum.
  */
-[[nodiscard]] constexpr auto to_fi_datatype(datatype dt) noexcept -> ::fi_datatype {
+[[nodiscard]] constexpr auto to_fi_datatype(datatype dt) noexcept -> std::optional<::fi_datatype> {
     switch (dt) {
         case datatype::int8:
             return FI_INT8;
@@ -292,7 +303,7 @@ contains_elements(remote_memory remote, datatype type, std::size_t count) noexce
         case datatype::uint128:
             return FI_UINT128;
     }
-    return FI_INT8;
+    return std::nullopt;
 }
 
 }  // namespace detail
@@ -324,8 +335,11 @@ auto execute_to(endpoint& ep,
                 remote_memory remote,
                 op_flags flags,
                 Ctx context = {}) -> loom::result<void> {
+    const auto native_datatype = detail::to_fi_datatype(dt);
+    const auto native_operation = detail::to_fi_op<detail::operation_family::base>(op);
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+    if (!fid_ep || !native_datatype || !native_operation ||
+        !detail::contains_elements(remote, dt, count) ||
         !detail::registered_elements(ep, mr, buf, dt, count))
         return make_error_result<void>(errc::invalid_argument);
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, writemsg))
@@ -340,8 +354,8 @@ auto execute_to(endpoint& ep,
         .addr = dest_addr.get(),
         .rma_iov = &target,
         .rma_iov_count = 1,
-        .datatype = detail::to_fi_datatype(dt),
-        .op = detail::to_fi_op(op),
+        .datatype = *native_datatype,
+        .op = *native_operation,
         .context = to_raw_context(context),
     };
     const auto native_flags = loom::detail::operation_flags<Defaults>(
@@ -362,8 +376,11 @@ auto execute_to(endpoint& ep,
                 fabric_addr dest_addr,
                 remote_memory remote,
                 Ctx context = {}) -> loom::result<void> {
+    const auto native_datatype = detail::to_fi_datatype(dt);
+    const auto native_operation = detail::to_fi_op<detail::operation_family::base>(op);
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+    if (!fid_ep || !native_datatype || !native_operation ||
+        !detail::contains_elements(remote, dt, count) ||
         !detail::registered_elements(ep, mr, buf, dt, count)) {
         return make_error_result<void>(errc::invalid_argument);
     }
@@ -379,8 +396,8 @@ auto execute_to(endpoint& ep,
                            dest_addr.get(),
                            remote.addr,
                            remote.key,
-                           detail::to_fi_datatype(dt),
-                           detail::to_fi_op(op),
+                           *native_datatype,
+                           *native_operation,
                            to_raw_context(context));
 
     if (ret != 0) {
@@ -460,8 +477,11 @@ auto fetch_to(endpoint& ep,
               remote_memory remote,
               op_flags flags,
               Ctx context = {}) -> loom::result<void> {
+    const auto native_datatype = detail::to_fi_datatype(dt);
+    const auto native_operation = detail::to_fi_op<detail::operation_family::fetch>(op);
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+    if (!fid_ep || !native_datatype || !native_operation ||
+        !detail::contains_elements(remote, dt, count) ||
         (op != operation::atomic_read &&
          !detail::registered_elements(ep, mr_buf, buf, dt, count)) ||
         !detail::registered_elements(ep, mr_result, result, dt, count))
@@ -480,8 +500,8 @@ auto fetch_to(endpoint& ep,
         .addr = dest_addr.get(),
         .rma_iov = &target,
         .rma_iov_count = 1,
-        .datatype = detail::to_fi_datatype(dt),
-        .op = detail::to_fi_op(op),
+        .datatype = *native_datatype,
+        .op = *native_operation,
         .context = to_raw_context(context),
     };
     const auto native_flags = loom::detail::operation_flags<Defaults>(
@@ -505,8 +525,11 @@ auto fetch_to(endpoint& ep,
               fabric_addr dest_addr,
               remote_memory remote,
               Ctx context = {}) -> loom::result<void> {
+    const auto native_datatype = detail::to_fi_datatype(dt);
+    const auto native_operation = detail::to_fi_op<detail::operation_family::fetch>(op);
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+    if (!fid_ep || !native_datatype || !native_operation ||
+        !detail::contains_elements(remote, dt, count) ||
         (op != operation::atomic_read &&
          !detail::registered_elements(ep, mr_buf, buf, dt, count)) ||
         !detail::registered_elements(ep, mr_result, result, dt, count)) {
@@ -527,8 +550,8 @@ auto fetch_to(endpoint& ep,
                                  dest_addr.get(),
                                  remote.addr,
                                  remote.key,
-                                 detail::to_fi_datatype(dt),
-                                 detail::to_fi_op(op),
+                                 *native_datatype,
+                                 *native_operation,
                                  to_raw_context(context));
 
     if (ret != 0) {
@@ -596,8 +619,9 @@ auto compare_swap_to(endpoint& ep,
                      remote_memory remote,
                      op_flags flags,
                      Ctx context = {}) -> loom::result<void> {
+    const auto native_datatype = detail::to_fi_datatype(dt);
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+    if (!fid_ep || !native_datatype || !detail::contains_elements(remote, dt, count) ||
         !detail::registered_elements(ep, mr_compare, compare, dt, count) ||
         !detail::registered_elements(ep, mr_swap, swap, dt, count) ||
         !detail::registered_elements(ep, mr_result, result, dt, count))
@@ -618,7 +642,7 @@ auto compare_swap_to(endpoint& ep,
         .addr = dest_addr.get(),
         .rma_iov = &target,
         .rma_iov_count = 1,
-        .datatype = detail::to_fi_datatype(dt),
+        .datatype = *native_datatype,
         .op = FI_CSWAP,
         .context = to_raw_context(context),
     };
@@ -651,8 +675,9 @@ auto compare_swap_to(endpoint& ep,
                      fabric_addr dest_addr,
                      remote_memory remote,
                      Ctx context = {}) -> loom::result<void> {
+    const auto native_datatype = detail::to_fi_datatype(dt);
     auto* fid_ep = static_cast<::fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count) ||
+    if (!fid_ep || !native_datatype || !detail::contains_elements(remote, dt, count) ||
         !detail::registered_elements(ep, mr_compare, compare, dt, count) ||
         !detail::registered_elements(ep, mr_swap, swap, dt, count) ||
         !detail::registered_elements(ep, mr_result, result, dt, count)) {
@@ -676,7 +701,7 @@ auto compare_swap_to(endpoint& ep,
                                    dest_addr.get(),
                                    remote.addr,
                                    remote.key,
-                                   detail::to_fi_datatype(dt),
+                                   *native_datatype,
                                    FI_CSWAP,
                                    to_raw_context(context));
 

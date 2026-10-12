@@ -239,6 +239,13 @@ does not extend its lifetime. `inject_to` releases its input on return and
 generates no success completion. Provider operation/type/count and inject
 limits still apply.
 
+Invalid operation/datatype enums and operations from another atomic family
+are rejected before calling the provider. In particular, atomic reads require
+the fetch interface, and compare operations require the compare interface.
+Submission rejects these requests with `invalid_argument`; capability queries
+return `false` without changing the supplied count. Valid combinations still
+require provider support.
+
 `execute_to`, `fetch_to`, and `compare_swap_to` accept `op_flags` before
 the context. These overloads replace endpoint defaults unless called with
 `<operation_defaults::inherit>`, which preserves the transmit creation

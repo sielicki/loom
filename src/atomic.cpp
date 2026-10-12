@@ -27,7 +27,10 @@ auto inject_to(endpoint& ep,
                fabric_addr dest_addr,
                remote_memory remote) -> result<void> {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !detail::contains_elements(remote, dt, count)) {
+    const auto native_datatype = detail::to_fi_datatype(dt);
+    const auto native_operation = detail::to_fi_op<detail::operation_family::base>(op);
+    if (!fid_ep || !native_datatype || !native_operation ||
+        !detail::contains_elements(remote, dt, count)) {
         return make_error_result<void>(errc::invalid_argument);
     }
     if (!FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, inject)) {
@@ -40,8 +43,8 @@ auto inject_to(endpoint& ep,
                                 dest_addr.get(),
                                 remote.addr,
                                 remote.key,
-                                detail::to_fi_datatype(dt),
-                                detail::to_fi_op(op));
+                                *native_datatype,
+                                *native_operation);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<void>(static_cast<int>(-ret));
@@ -52,7 +55,10 @@ auto inject_to(endpoint& ep,
 
 auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->writevalid) {
+    const auto native_datatype = detail::to_fi_datatype(dt);
+    const auto native_operation = detail::to_fi_op<detail::operation_family::base>(op);
+    if (!fid_ep || !native_datatype || !native_operation ||
+        !FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, writevalid)) {
         return false;
     }
     std::size_t ignored_count{};
@@ -60,14 +66,17 @@ auto is_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -
         count_out = &ignored_count;
     }
 
-    auto ret = fi_atomicvalid(fid_ep, detail::to_fi_datatype(dt), detail::to_fi_op(op), count_out);
+    auto ret = fi_atomicvalid(fid_ep, *native_datatype, *native_operation, count_out);
 
     return ret == 0;
 }
 
 auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->readwritevalid) {
+    const auto native_datatype = detail::to_fi_datatype(dt);
+    const auto native_operation = detail::to_fi_op<detail::operation_family::fetch>(op);
+    if (!fid_ep || !native_datatype || !native_operation ||
+        !FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, readwritevalid)) {
         return false;
     }
     std::size_t ignored_count{};
@@ -75,15 +84,17 @@ auto is_fetch_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_
         count_out = &ignored_count;
     }
 
-    auto ret =
-        fi_fetch_atomicvalid(fid_ep, detail::to_fi_datatype(dt), detail::to_fi_op(op), count_out);
+    auto ret = fi_fetch_atomicvalid(fid_ep, *native_datatype, *native_operation, count_out);
 
     return ret == 0;
 }
 
 auto is_compare_valid(endpoint& ep, operation op, datatype dt, std::size_t* count_out) -> bool {
     auto* fid_ep = static_cast<struct fid_ep*>(ep.internal_ptr());
-    if (!fid_ep || !fid_ep->atomic || !fid_ep->atomic->compwritevalid) {
+    const auto native_datatype = detail::to_fi_datatype(dt);
+    const auto native_operation = detail::to_fi_op<detail::operation_family::compare>(op);
+    if (!fid_ep || !native_datatype || !native_operation ||
+        !FI_CHECK_OP(fid_ep->atomic, fi_ops_atomic, compwritevalid)) {
         return false;
     }
     std::size_t ignored_count{};
@@ -91,8 +102,7 @@ auto is_compare_valid(endpoint& ep, operation op, datatype dt, std::size_t* coun
         count_out = &ignored_count;
     }
 
-    auto ret =
-        fi_compare_atomicvalid(fid_ep, detail::to_fi_datatype(dt), detail::to_fi_op(op), count_out);
+    auto ret = fi_compare_atomicvalid(fid_ep, *native_datatype, *native_operation, count_out);
 
     return ret == 0;
 }

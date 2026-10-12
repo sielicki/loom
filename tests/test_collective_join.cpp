@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
+#include <loom/detail/impl/domain_impl.hpp>
+
 #include <array>
 #include <vector>
 
@@ -7,6 +9,38 @@
 #include <catch2/generators/catch_generators.hpp>
 
 using loom::test::collective_provider;
+
+TEST_CASE("collective queries reject invalid datatypes", "[collective][validation]") {
+    int queries{};
+    fi_ops lifetime{.size = sizeof(fi_ops), .close = [](fid*) { return 0; }};
+    fi_ops_domain operations{
+        .size = sizeof(fi_ops_domain),
+        .query_collective =
+            [](fid_domain* dom,
+               fi_collective_op op,
+               fi_collective_attr* attr,
+               std::uint64_t flags) {
+                ++*static_cast<int*>(dom->fid.context);
+                CHECK(op == FI_ALLREDUCE);
+                CHECK(attr->datatype == FI_UINT64);
+                CHECK(attr->op == FI_SUM);
+                CHECK(flags == 0);
+                return 0;
+            },
+    };
+    fid_domain native{.fid = {.context = &queries, .ops = &lifetime}, .ops = &operations};
+    loom::domain dom{loom::detail::make_pmr_unique<loom::detail::domain_impl>(
+        loom::get_default_resource(), &native)};
+    using enum loom::atomic::operation;
+    CHECK_FALSE((loom::collective::is_supported<static_cast<loom::atomic::datatype>(-1), sum>(
+        dom, loom::collective::operation::all_reduce)));
+    CHECK_FALSE((loom::collective::is_supported<static_cast<loom::atomic::datatype>(999), sum>(
+        dom, loom::collective::operation::all_reduce)));
+    CHECK(queries == 0);
+    CHECK((loom::collective::is_supported<std::uint64_t, sum>(
+        dom, loom::collective::operation::all_reduce)));
+    CHECK(queries == 1);
+}
 
 TEST_CASE("collective joins provide membership and report the joined address",
           "[collective][join]") {

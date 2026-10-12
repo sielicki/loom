@@ -146,13 +146,14 @@ namespace detail {
 auto is_supported_impl(domain& dom, operation op, atomic::datatype dt, atomic::operation aop)
     -> bool {
     auto* fid_dom = static_cast<::fid_domain*>(dom.internal_ptr());
-    if (fid_dom == nullptr) {
+    const auto native_datatype = to_fi_datatype(dt);
+    if (!fid_dom || !native_datatype) {
         return false;
     }
 
     ::fi_collective_attr attr{};
     attr.op = to_fi_op(aop);
-    attr.datatype = to_fi_datatype(dt);
+    attr.datatype = *native_datatype;
 
     auto ret = ::fi_query_collective(fid_dom, to_fi_coll(op), &attr, 0);
     return ret == 0;

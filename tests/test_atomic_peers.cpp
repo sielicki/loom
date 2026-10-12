@@ -8,6 +8,7 @@
 #include <chrono>
 #include <limits>
 #include <thread>
+#include <utility>
 
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -31,6 +32,16 @@ struct atomic_peer_provider {
     std::uint64_t address{24};
     fi_op operation{};
     fi_datatype datatype{FI_UINT64};
+    fi_datatype queried_datatype{};
+
+    static auto query(fid_ep* ep, fi_datatype type, fi_op op, std::size_t* count) -> int {
+        auto& self = *static_cast<atomic_peer_provider*>(ep->fid.context);
+        ++self.calls;
+        self.queried_datatype = type;
+        self.operation = op;
+        *count = 16;
+        return 0;
+    }
 
     static auto record(fid_ep* ep,
                        const void* input,
@@ -207,6 +218,9 @@ struct atomic_peer_provider {
                 return record_message(
                     ep, message, compare, compare_desc, output, output_desc, flags);
             },
+        .writevalid = query,
+        .readwritevalid = query,
+        .compwritevalid = query,
     };
     fid_ep handle{.fid = {.context = this, .ops = &lifetime}, .atomic = &operations};
     loom::endpoint ep{
@@ -221,7 +235,155 @@ struct atomic_peer_provider {
                                                                    0,
                                                                    &domain_handle)};
 };
+
+struct atomic_operation_case {
+    loom::atomic::operation value;
+    fi_op native;
+    bool base;
+    bool fetch;
+    bool compare;
+};
+
+using enum loom::atomic::operation;
+constexpr std::array atomic_operations{
+    atomic_operation_case{min, FI_MIN, true, true, false},
+    atomic_operation_case{max, FI_MAX, true, true, false},
+    atomic_operation_case{sum, FI_SUM, true, true, false},
+    atomic_operation_case{prod, FI_PROD, true, true, false},
+    atomic_operation_case{logical_or, FI_LOR, true, true, false},
+    atomic_operation_case{logical_and, FI_LAND, true, true, false},
+    atomic_operation_case{bitwise_or, FI_BOR, true, true, false},
+    atomic_operation_case{bitwise_and, FI_BAND, true, true, false},
+    atomic_operation_case{logical_xor, FI_LXOR, true, true, false},
+    atomic_operation_case{bitwise_xor, FI_BXOR, true, true, false},
+    atomic_operation_case{atomic_read, FI_ATOMIC_READ, false, true, false},
+    atomic_operation_case{atomic_write, FI_ATOMIC_WRITE, true, true, false},
+    atomic_operation_case{compare_swap, FI_CSWAP, false, false, true},
+    atomic_operation_case{compare_swap_ne, FI_CSWAP_NE, false, false, true},
+    atomic_operation_case{compare_swap_le, FI_CSWAP_LE, false, false, true},
+    atomic_operation_case{compare_swap_lt, FI_CSWAP_LT, false, false, true},
+    atomic_operation_case{compare_swap_ge, FI_CSWAP_GE, false, false, true},
+    atomic_operation_case{compare_swap_gt, FI_CSWAP_GT, false, false, true},
+    atomic_operation_case{masked_swap, FI_MSWAP, false, false, true},
+    atomic_operation_case{static_cast<loom::atomic::operation>(-1), FI_MIN, false, false, false},
+    atomic_operation_case{static_cast<loom::atomic::operation>(999), FI_MIN, false, false, false},
+};
 }  // namespace
+
+TEST_CASE("atomic submissions reject invalid operation families", "[atomic][validation]") {
+    using namespace loom;
+    enum class submission { base, base_message, injected, fetch, fetch_message };
+    const auto path = GENERATE(submission::base,
+                               submission::base_message,
+                               submission::injected,
+                               submission::fetch,
+                               submission::fetch_message);
+    for (const auto& op : atomic_operations) {
+        CAPTURE(path, op.value);
+        atomic_peer_provider provider;
+        provider.status = -FI_EAGAIN;
+        const std::uint64_t input{42};
+        std::uint64_t output{};
+        const fabric_addr peer{7};
+        const remote_memory remote{24, 0x123456789abcdef0ULL, sizeof(input)};
+        const auto result = [&]() -> loom::result<void> {
+            switch (path) {
+                case submission::base:
+                    return atomic::execute_to(provider.ep,
+                                              op.value,
+                                              atomic::datatype::uint64,
+                                              &input,
+                                              1,
+                                              nullptr,
+                                              peer,
+                                              remote);
+                case submission::base_message:
+                    return atomic::execute_to(provider.ep,
+                                              op.value,
+                                              atomic::datatype::uint64,
+                                              &input,
+                                              1,
+                                              nullptr,
+                                              peer,
+                                              remote,
+                                              op_flag::completion);
+                case submission::injected:
+                    return atomic::inject_to(
+                        provider.ep, op.value, atomic::datatype::uint64, &input, 1, peer, remote);
+                case submission::fetch:
+                    return atomic::fetch_to(provider.ep,
+                                            op.value,
+                                            atomic::datatype::uint64,
+                                            &input,
+                                            &output,
+                                            1,
+                                            nullptr,
+                                            nullptr,
+                                            peer,
+                                            remote);
+                case submission::fetch_message:
+                    return atomic::fetch_to(provider.ep,
+                                            op.value,
+                                            atomic::datatype::uint64,
+                                            &input,
+                                            &output,
+                                            1,
+                                            nullptr,
+                                            nullptr,
+                                            peer,
+                                            remote,
+                                            op_flag::completion);
+            }
+            std::unreachable();
+        }();
+        const auto accepted =
+            path == submission::fetch || path == submission::fetch_message ? op.fetch : op.base;
+        REQUIRE_FALSE(result);
+        CHECK(result.error() == (accepted ? errc::again : errc::invalid_argument));
+        CHECK(provider.calls == (accepted ? 1 : 0));
+        if (accepted)
+            CHECK(provider.operation == op.native);
+    }
+}
+
+TEST_CASE("atomic queries reject invalid enums and operation families", "[atomic][validation]") {
+    using namespace loom;
+    const auto family = GENERATE(0UZ, 1UZ, 2UZ);
+    const auto datatype = GENERATE(atomic::datatype::uint64,
+                                   static_cast<atomic::datatype>(-1),
+                                   static_cast<atomic::datatype>(999));
+    constexpr std::array queries{
+        &atomic::is_valid, &atomic::is_fetch_valid, &atomic::is_compare_valid};
+    for (const auto& op : atomic_operations) {
+        CAPTURE(family, datatype, op.value);
+        atomic_peer_provider provider;
+        const std::array families{op.base, op.fetch, op.compare};
+        const auto accepted = datatype == atomic::datatype::uint64 && families[family];
+        std::size_t count{99};
+        CHECK(queries[family](provider.ep, op.value, datatype, &count) == accepted);
+        CHECK(provider.calls == (accepted ? 1 : 0));
+        CHECK(count == (accepted ? 16 : 99));
+        if (accepted) {
+            CHECK(provider.operation == op.native);
+            CHECK(provider.queried_datatype == FI_UINT64);
+        }
+    }
+}
+
+TEST_CASE("atomic queries respect native operation table size", "[atomic][validation]") {
+    using namespace loom;
+    atomic_peer_provider provider;
+    provider.operations.size = offsetof(fi_ops_atomic, writevalid);
+    std::size_t count{99};
+    CHECK_FALSE(
+        atomic::is_valid(provider.ep, atomic::operation::sum, atomic::datatype::uint64, &count));
+    CHECK_FALSE(atomic::is_fetch_valid(
+        provider.ep, atomic::operation::sum, atomic::datatype::uint64, &count));
+    CHECK_FALSE(atomic::is_compare_valid(
+        provider.ep, atomic::operation::compare_swap, atomic::datatype::uint64, &count));
+    CHECK(provider.calls == 0);
+    CHECK(count == 99);
+}
 
 TEST_CASE("atomics reject incompatible or out-of-range registrations", "[atomic][registration]") {
     enum class defect { none, foreign, unknown, disabled, wrong_endpoint, short_range, unrelated };

@@ -21,7 +21,7 @@ template <typename T, atomic::datatype Datatype>
 struct element_description {
     using value_type = T;
     static constexpr auto datatype = Datatype;
-    static constexpr auto native_datatype = atomic::detail::to_fi_datatype(Datatype);
+    static constexpr auto native_datatype = atomic::detail::to_fi_datatype(Datatype).value();
     static constexpr auto size = sizeof(T);
     static constexpr element_layout layout{native_datatype, size};
 };
