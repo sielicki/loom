@@ -16,8 +16,10 @@
 
 #include <rdma/fabric.h>
 
+#include <array>
 #include <concepts>
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -67,6 +69,7 @@ struct asio_buffers {
 
 template <typename Allocator = std::allocator<std::byte>>
 class asio_buffer_storage {
+    static constexpr std::size_t inline_capacity = 4;
     using iov_allocator = typename std::allocator_traits<Allocator>::template rebind_alloc<iovec>;
     using descriptor_allocator =
         typename std::allocator_traits<Allocator>::template rebind_alloc<mr_descriptor>;
@@ -76,8 +79,22 @@ public:
         : buffer_iov_(iov_allocator{allocator}),
           buffer_descriptors_(descriptor_allocator{allocator}) {}
 
+    asio_buffer_storage(const asio_buffer_storage&) = delete;
+    auto operator=(const asio_buffer_storage&) -> asio_buffer_storage& = delete;
+    asio_buffer_storage(asio_buffer_storage&&) = delete;
+    auto operator=(asio_buffer_storage&&) -> asio_buffer_storage& = delete;
+
     [[nodiscard]] auto buffers() const noexcept -> asio_buffers {
-        return {buffer_iov_, buffer_descriptors_, buffer_bytes_, registrations_valid_};
+        const auto iov = buffer_iov_.empty() ? std::span<const iovec>{inline_iov_}
+                                             : std::span<const iovec>{buffer_iov_};
+        const auto descriptors = buffer_descriptors_.empty()
+                                     ? std::span<const mr_descriptor>{inline_descriptors_}
+                                     : std::span<const mr_descriptor>{buffer_descriptors_};
+        return {iov.first(buffer_count_),
+                has_descriptors_ ? descriptors.first(buffer_count_)
+                                 : std::span<const mr_descriptor>{},
+                buffer_bytes_,
+                registrations_valid_};
     }
 
     template <bool Mutable, typename BufferSequence>
@@ -86,14 +103,38 @@ public:
                          const endpoint* ep = nullptr) {
         using buffer_type =
             std::conditional_t<Mutable, ::asio::mutable_buffer, ::asio::const_buffer>;
+        const auto begin = ::asio::buffer_sequence_begin(buffers);
         const auto end = ::asio::buffer_sequence_end(buffers);
-        for (auto it = ::asio::buffer_sequence_begin(buffers); it != end; ++it) {
+        // BufferSequence iterators are bidirectional. Count first so larger
+        // sequences allocate each metadata array once instead of growing it.
+        const auto added = static_cast<std::size_t>(std::distance(begin, end));
+        if (added > std::numeric_limits<std::size_t>::max() - buffer_count_)
+            throw std::length_error("Asio buffer sequence count overflows size_t");
+        const auto count = buffer_count_ + added;
+        const bool overflow = count > inline_capacity || !buffer_iov_.empty();
+        if (overflow) {
+            buffer_iov_.reserve(count);
+            if (buffer_iov_.empty())
+                buffer_iov_.assign(inline_iov_.begin(), inline_iov_.begin() + buffer_count_);
+            if (has_descriptors_) {
+                buffer_descriptors_.reserve(count);
+                if (buffer_descriptors_.empty())
+                    buffer_descriptors_.assign(inline_descriptors_.begin(),
+                                               inline_descriptors_.begin() + buffer_count_);
+            }
+        }
+        for (auto it = begin; it != end; ++it) {
             const buffer_type buffer{*it};
             if (buffer.size() > std::numeric_limits<std::size_t>::max() - buffer_bytes_) {
                 throw std::length_error("Asio buffer sequence size overflows size_t");
             }
-            buffer_iov_.push_back(
-                {const_cast<void*>(static_cast<const void*>(buffer.data())), buffer.size()});
+            const iovec native{const_cast<void*>(static_cast<const void*>(buffer.data())),
+                               buffer.size()};
+            if (overflow)
+                buffer_iov_.push_back(native);
+            else
+                inline_iov_[buffer_count_] = native;
+            ++buffer_count_;
             auto local_descriptor = descriptor.value_or(mr_descriptor{});
             using element_type = std::remove_cvref_t<decltype(*it)>;
             if constexpr (std::same_as<element_type, mutable_registered_buffer> ||
@@ -106,20 +147,31 @@ public:
                     local_descriptor = (*it).descriptor();
                 }
             }
-            if (local_descriptor || !buffer_descriptors_.empty()) {
+            if (local_descriptor || has_descriptors_) {
                 // Keep one descriptor per IOV, including unregistered elements
                 // before the first registration and between registered ranges.
-                buffer_descriptors_.resize(buffer_iov_.size() - 1);
-                buffer_descriptors_.push_back(local_descriptor);
+                if (overflow) {
+                    if (!has_descriptors_)
+                        buffer_descriptors_.reserve(count);
+                    buffer_descriptors_.resize(buffer_count_ - 1);
+                    buffer_descriptors_.push_back(local_descriptor);
+                } else {
+                    inline_descriptors_[buffer_count_ - 1] = local_descriptor;
+                }
+                has_descriptors_ = true;
             }
             buffer_bytes_ += buffer.size();
         }
     }
 
 private:
+    std::array<iovec, inline_capacity> inline_iov_{};
+    std::array<mr_descriptor, inline_capacity> inline_descriptors_{};
     std::vector<iovec, iov_allocator> buffer_iov_;
     std::vector<mr_descriptor, descriptor_allocator> buffer_descriptors_;
+    std::size_t buffer_count_{};
     std::size_t buffer_bytes_{};
+    bool has_descriptors_{};
     bool registrations_valid_{true};
 };
 

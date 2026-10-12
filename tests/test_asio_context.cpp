@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <list>
 #include <thread>
 
 #include <asio/bind_allocator.hpp>
@@ -16,6 +17,7 @@
 #include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 using namespace std::literals;
 
@@ -83,20 +85,92 @@ TEST_CASE("buffer metadata uses the handler allocator and cleans up on failure",
     ::asio::cancellation_signal cancellation;
     loom::endpoint ep;
     int deallocations{};
-    int budget{1};
+    const auto allowed = GENERATE(1, 2);
+    const auto count = GENERATE(5UZ, 17UZ, 64UZ);
+    int budget{allowed};
     std::array<std::byte, 8> storage{};
+    std::array<::asio::const_buffer, 64> buffers;
+    buffers.fill(::asio::buffer(storage));
     auto handler = ::asio::bind_allocator(
         tracking_allocator<std::byte>{&deallocations, &budget},
         ::asio::bind_cancellation_slot(cancellation.slot(), [](std::error_code, std::size_t) {
             FAIL("Initiation did not finish");
         }));
-    REQUIRE_THROWS_AS(loom::asio::make_buffered_asio_context<false>(
-                          handler, ioc.get_executor(), &ep, ::asio::buffer(storage)),
-                      std::bad_alloc);
-    REQUIRE(deallocations == 1);
+    REQUIRE_THROWS_AS(
+        loom::asio::make_buffered_asio_context<false>(handler,
+                                                      ioc.get_executor(),
+                                                      &ep,
+                                                      std::span{buffers}.first(count),
+                                                      loom::mr_descriptor{storage.data()}),
+        std::bad_alloc);
+    REQUIRE(deallocations == allowed);
     REQUIRE_FALSE(cancellation.slot().has_handler());
     REQUIRE(ioc.poll() == 0);
     REQUIRE(ioc.stopped());
+}
+
+TEST_CASE("Asio metadata uses inline storage and bounded allocator calls", "[asio][context]") {
+    const auto count = GENERATE(0UZ, 1UZ, 2UZ, 4UZ, 5UZ, 16UZ, 17UZ, 64UZ);
+    const auto registered = GENERATE(false, true);
+    const int expected_allocations = 1 + (count > 4 ? registered ? 2 : 1 : 0);
+    int budget = expected_allocations;
+    int deallocations{};
+    ::asio::io_context ioc;
+    loom::endpoint ep;
+    std::array<std::byte, 64> storage{};
+    std::array<::asio::const_buffer, 64> buffers;
+    for (std::size_t i = 0; i < buffers.size(); ++i)
+        buffers[i] = {storage.data() + i, 1};
+    auto handler = ::asio::bind_allocator(
+        tracking_allocator<std::byte>{&deallocations, &budget},
+        [](std::error_code, std::size_t) { FAIL("Unsubmitted context invoked its handler"); });
+    auto context = loom::asio::make_buffered_asio_context<false>(
+        handler,
+        ioc.get_executor(),
+        &ep,
+        std::span{buffers}.first(count),
+        registered ? std::optional{loom::mr_descriptor{storage.data()}} : std::nullopt);
+    REQUIRE(budget == 0);
+    const auto prepared = context->buffers();
+    REQUIRE(prepared.iov.size() == count);
+    REQUIRE(prepared.descriptors.size() == (registered ? count : 0));
+    REQUIRE(prepared.bytes == count);
+    for (std::size_t i = 0; i < count; ++i) {
+        CHECK(prepared.iov[i].iov_base == storage.data() + i);
+        CHECK(prepared.iov[i].iov_len == 1);
+        if (registered)
+            CHECK(prepared.descriptors[i].raw() == storage.data());
+    }
+    context.reset();
+    REQUIRE(deallocations == expected_allocations);
+    REQUIRE(ioc.poll() == 0);
+    REQUIRE(ioc.stopped());
+}
+
+TEST_CASE("Asio metadata preserves appended buffers across inline capacity", "[asio][context]") {
+    const auto initial = GENERATE(1UZ, 4UZ, 5UZ);
+    std::array<std::byte, 9> storage{};
+    std::list<::asio::const_buffer> first;
+    for (std::size_t i = 0; i < initial; ++i)
+        first.emplace_back(storage.data() + i, 1);
+    loom::asio::detail::asio_buffer_storage metadata;
+    metadata.prepare_buffers<false>(first, std::nullopt);
+    const std::array registered{::asio::const_buffer{storage.data() + initial, 1},
+                                ::asio::const_buffer{storage.data() + initial + 1, 1}};
+    metadata.prepare_buffers<false>(registered, loom::mr_descriptor{storage.data()});
+    const std::array last{::asio::const_buffer{storage.data() + initial + 2, 1},
+                          ::asio::const_buffer{storage.data() + initial + 3, 1}};
+    metadata.prepare_buffers<false>(last, std::nullopt);
+    const auto buffers = metadata.buffers();
+    REQUIRE(buffers.bytes == initial + 4);
+    REQUIRE(buffers.iov.size() == initial + 4);
+    REQUIRE(buffers.descriptors.size() == initial + 4);
+    for (std::size_t i = 0; i < initial + 4; ++i) {
+        CHECK(buffers.iov[i].iov_base == storage.data() + i);
+        CHECK(buffers.iov[i].iov_len == 1);
+        CHECK(buffers.descriptors[i].raw() ==
+              (i == initial || i == initial + 1 ? storage.data() : nullptr));
+    }
 }
 
 TEST_CASE("completion preserves allocator state and clears cancellation", "[asio][context]") {

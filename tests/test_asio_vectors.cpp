@@ -570,6 +570,8 @@ TEST_CASE("Asio messages preserve registered peers and descriptors", "[asio][end
     const auto tagged = GENERATE(false, true);
     const auto helper = GENERATE(false, true);
     const auto single = GENERATE(false, true);
+    const auto count = single ? 1UZ : GENERATE(3UZ, 4UZ, 5UZ, 17UZ, 64UZ);
+    const auto second_index = single ? 0UZ : GENERATE_COPY(1UZ, count - 1);
     const auto first_registered = GENERATE(false, true);
     vector_provider native;
     native.expected_message_peer = GENERATE(fi_addr_t{19}, FI_ADDR_UNSPEC);
@@ -608,12 +610,15 @@ TEST_CASE("Asio messages preserve registered peers and descriptors", "[asio][end
             ::asio::buffer(second), &second_mr, loom::asio::registered_buffer_id{1}} +
             2,
         4);
+    std::vector buffers(count, first_buffer);
+    if (!single)
+        buffers[second_index] = second_buffer;
     int calls{};
     const auto handler =
         ::asio::bind_executor(ioc.get_executor(), [&](std::error_code error, std::size_t bytes) {
             ++calls;
             REQUIRE_FALSE(error);
-            REQUIRE(bytes == (single ? 2 : receive ? 6 : 8));
+            REQUIRE(bytes == (single ? 2 : receive ? 6 : 2 * count + 2));
         });
     const auto submit = [&](const auto& buffers) {
         if constexpr (::asio::is_mutable_buffer_sequence<
@@ -648,7 +653,7 @@ TEST_CASE("Asio messages preserve registered peers and descriptors", "[asio][end
         if (single)
             submit(first_buffer);
         else
-            submit(std::array{first_buffer, second_buffer, first_buffer});
+            submit(buffers);
     } else {
         // Both const and mutable registered buffers must model ConstBufferSequence.
         const auto as_const = GENERATE(false, true);
@@ -656,30 +661,28 @@ TEST_CASE("Asio messages preserve registered peers and descriptors", "[asio][end
             if (single)
                 submit(loom::asio::const_registered_buffer{first_buffer});
             else
-                submit(std::array{loom::asio::const_registered_buffer{first_buffer},
-                                  loom::asio::const_registered_buffer{second_buffer},
-                                  loom::asio::const_registered_buffer{first_buffer}});
+                submit(std::vector<loom::asio::const_registered_buffer>{buffers.begin(),
+                                                                        buffers.end()});
         } else if (single)
             submit(first_buffer);
         else
-            submit(std::array{first_buffer, second_buffer, first_buffer});
+            submit(buffers);
     }
     REQUIRE(calls == 0);
-    REQUIRE(native.buffers.size() == (single ? 1 : 3));
-    CHECK(native.buffers[0].iov_base == first.data() + 1);
-    CHECK(native.buffers[0].iov_len == 2);
+    REQUIRE(native.buffers.size() == count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const bool is_second = !single && i == second_index;
+        CHECK(native.buffers[i].iov_base == (is_second ? second.data() + 2 : first.data() + 1));
+        CHECK(native.buffers[i].iov_len == (is_second ? 4 : 2));
+    }
     const auto first_descriptor = first_registered ? first_mr.descriptor().raw() : nullptr;
     if (single && !first_registered) {
         CHECK(native.descriptors.empty());
     } else {
         REQUIRE(native.descriptors.size() == native.buffers.size());
-        CHECK(native.descriptors[0] == first_descriptor);
-        if (!single) {
-            CHECK(native.buffers[1].iov_base == second.data() + 2);
-            CHECK(native.buffers[1].iov_len == 4);
-            CHECK(native.descriptors[1] == second_mr.descriptor().raw());
-            CHECK(native.descriptors[2] == first_descriptor);
-        }
+        for (std::size_t i = 0; i < count; ++i)
+            CHECK(native.descriptors[i] ==
+                  (!single && i == second_index ? second_mr.descriptor().raw() : first_descriptor));
     }
     loom::completion_event event{.context = loom::context_ptr<void>{native.context},
                                  .bytes_transferred = single ? 2UZ : 6UZ};

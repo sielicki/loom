@@ -874,6 +874,11 @@ Bind those queues before initiating operations and keep them alive through nativ
 completion. A manual progress loop can route events with `cq.dispatch(event)`;
 the old raw-pointer `dispatch_asio_completion` helper has been removed.
 
+Asio retains IOVs and descriptors for up to four buffers inside the operation
+state. Larger sequences reserve each retained array once through the handler's
+associated allocator. The inline capacity does not limit the buffer count;
+provider IOV limits still apply. Blocking operations use the same storage.
+
 Blocking `ep.send(buffers)` and `ep.receive(buffers)` drive the bound CQ until
 their own native completion, without running the executor. Both submit the whole
 buffer sequence and preserve registered-buffer descriptors. Receives return the
