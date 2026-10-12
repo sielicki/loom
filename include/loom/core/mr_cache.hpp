@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -57,6 +59,19 @@ struct dmabuf_cache_key {
 
 using mr_cache_identity = std::variant<host_cache_key, hmem_cache_key, dmabuf_cache_key>;
 
+struct mr_cache_index_key {
+    using coordinate = std::common_type_t<std::uintptr_t, std::uint64_t>;
+    // Local address ranges share one coordinate space. Each unmapped DMA-BUF
+    // descriptor has its own, so equal offsets in unrelated files do not scan.
+    std::optional<int> dmabuf;
+    coordinate position{};
+    auto operator<=>(const mr_cache_index_key&) const = default;
+
+    [[nodiscard]] auto end(std::size_t length) const noexcept -> mr_cache_index_key {
+        return {dmabuf, position + length};
+    }
+};
+
 /**
  * @struct mr_cache_entry_base
  * @brief Base structure for memory region cache entries.
@@ -72,7 +87,8 @@ struct mr_cache_entry_base {
     mr_cache_entry_base* index_parent{};
     mr_cache_entry_base* index_left{};
     mr_cache_entry_base* index_right{};
-    std::uintptr_t index_end{};  ///< Greatest exclusive end in this subtree.
+    mr_cache_index_key index_begin{};
+    mr_cache_index_key index_end{};  ///< Greatest exclusive index end in this subtree.
     int index_height{1};
     mr_cache_entry_base* idle_previous{};
     mr_cache_entry_base* idle_next{};
@@ -809,7 +825,7 @@ private:
     static void index_update(entry_type& entry) noexcept {
         entry.index_height =
             1 + std::max(index_height(entry.index_left), index_height(entry.index_right));
-        entry.index_end = entry.base_addr + entry.length;
+        entry.index_end = entry.index_begin.end(entry.length);
         if (entry.index_left)
             entry.index_end = std::max(entry.index_end, entry.index_left->index_end);
         if (entry.index_right)
@@ -873,18 +889,23 @@ private:
     }
 
     void index_insert(entry_type& entry) noexcept {
+        // Choose coordinates once; every traversal can then compare directly.
+        entry.index_begin = {std::nullopt, entry.base_addr};
+        if (const auto* dma = std::get_if<detail::dmabuf_cache_key>(&entry.identity);
+            dma && !dma->allocation)
+            entry.index_begin = {dma->fd, dma->offset};
         auto** link = &index_root_;
         entry_type* parent{};
         while (*link) {
             parent = *link;
-            const bool before =
-                entry.base_addr < parent->base_addr ||
-                (entry.base_addr == parent->base_addr && std::less<entry_type*>{}(&entry, parent));
+            const bool before = entry.index_begin < parent->index_begin ||
+                                (entry.index_begin == parent->index_begin &&
+                                 std::less<entry_type*>{}(&entry, parent));
             link = before ? &parent->index_left : &parent->index_right;
         }
         *link = &entry;
         entry.index_parent = parent;
-        entry.index_end = entry.base_addr + entry.length;
+        entry.index_end = entry.index_begin.end(entry.length);
         index_rebalance(parent);
     }
 
@@ -964,10 +985,18 @@ private:
         };
         // The AVL index excludes invalidated registrations. Its subtree end
         // bounds prune earlier ranges that cannot contain this request.
+        const auto begin = [&]() -> detail::mr_cache_index_key {
+            if constexpr (std::same_as<Key, detail::dmabuf_cache_key>) {
+                if (!identity.allocation)
+                    return {identity.fd, identity.offset};
+            }
+            return {std::nullopt, addr};
+        }();
+        const auto end = begin.end(length);
         const auto find = [&](this auto& self, entry_type* entry) -> entry_type* {
-            if (!entry || entry->index_end < addr + length)
+            if (!entry || entry->index_end < end)
                 return nullptr;
-            if (entry->base_addr > addr)
+            if (entry->index_begin > begin)
                 return self(entry->index_left);
             if (auto* found = self(entry->index_right))
                 return found;

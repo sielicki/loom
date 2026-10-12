@@ -109,9 +109,10 @@ TEST_CASE("cache limits preserve existing default construction", "[mr_cache][lim
 
 TEST_CASE("cache limits bound idle host and device registrations", "[mr_cache][limits]") {
     using namespace loom;
-    enum class memory { host, hmem, mapped, unmapped };
+    enum class memory { host, hmem, mapped, unmapped, unmapped_files };
     enum class bound { count, bytes, both_count, both_bytes };
-    const auto kind = GENERATE(memory::host, memory::hmem, memory::mapped, memory::unmapped);
+    const auto kind = GENERATE(
+        memory::host, memory::hmem, memory::mapped, memory::unmapped, memory::unmapped_files);
     const auto policy = GENERATE(bound::count, bound::bytes, bound::both_count, bound::both_bytes);
     const std::size_t bytes = kind == memory::host ? 4096 : 17;
     mr_cache_limits limits;
@@ -138,6 +139,9 @@ TEST_CASE("cache limits bound idle host and device registrations", "[mr_cache][l
                     mr_access_flags::send,
                     7,
                     offset);
+            case memory::unmapped_files:
+                return cache.lookup_dmabuf(
+                    nullptr, 17, mr_access_flags::send, static_cast<int>(index));
         }
         std::unreachable();
     };
@@ -669,7 +673,9 @@ TEST_CASE("cache interval reuse matches a linear ownership model", "[mr_cache][i
         const auto action = random() % 10;
         if (action < 7) {
             const auto kind = static_cast<memory>(random() % 4);
-            const auto offset = static_cast<std::uint64_t>(random() % 512) * 4096;
+            const auto offset =
+                static_cast<std::uint64_t>(random() % 512) * 4096 +
+                (kind == memory::unmapped && random() % 2 ? 0xFFFF'FFFF'0000'0000ULL : 0);
             const std::size_t length = (1 + random() % 64) * 4096;
             const std::array permissions{mr_access_flags::send,
                                          mr_access_flags::recv,
@@ -1447,6 +1453,64 @@ TEST_CASE("HMEM cache identity separates devices interfaces and permissions", "[
         cache.lookup_hmem(allocation.data(), 16, mr_access_flags::recv, hmem_device::cuda(0));
     REQUIRE(again);
     CHECK(again->mr()->internal_ptr() == original->mr()->internal_ptr());
+}
+
+TEST_CASE("DMA-BUF range indexing preserves local invalidation", "[mr_cache][dmabuf][index]") {
+    using namespace loom;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom};
+    constexpr auto last = std::numeric_limits<std::uint64_t>::max();
+    constexpr std::uint64_t offset = 4096;
+    auto* allocation = reinterpret_cast<void*>(0x10000000);
+    auto* local = reinterpret_cast<void*>(0x10001000);
+    auto mapped = cache.lookup_dmabuf(allocation, 32, mr_access_flags::send, 7, offset).value();
+    auto unmapped = cache.lookup_dmabuf(nullptr, 32, mr_access_flags::send, 7, offset).value();
+    auto high = cache.lookup_dmabuf(nullptr, 32, mr_access_flags::send, 7, last - 32).value();
+    auto foreign = cache.lookup_dmabuf(nullptr, 32, mr_access_flags::send, 8, last - 32).value();
+    auto host = cache.lookup(local, 32, mr_access_flags::send).value();
+    REQUIRE(mapped.base_address() == local);
+    REQUIRE(unmapped.base_address() == nullptr);
+    REQUIRE(high.base_address() == nullptr);
+    REQUIRE(provider.registrations == 5);
+
+    const auto same_key = [](auto found, const auto& original) {
+        REQUIRE(found);
+        CHECK(found->key() == original.key());
+    };
+    const auto rejected = [](auto found, errc error) {
+        REQUIRE_FALSE(found);
+        CHECK(found.error() == error);
+    };
+    provider.registration_error = -FI_EIO;
+    same_key(cache.lookup_dmabuf(nullptr, 1, mr_access_flags::send, 7, last - 1), high);
+    same_key(cache.lookup_dmabuf(nullptr, 1, mr_access_flags::send, 8, last - 1), foreign);
+    same_key(cache.lookup_dmabuf(nullptr, 16, mr_access_flags::send, 7, offset + 8), unmapped);
+    same_key(cache.lookup_dmabuf(allocation, 16, mr_access_flags::send, 7, offset + 8), mapped);
+    same_key(cache.lookup(local, 16, mr_access_flags::send), host);
+    rejected(cache.lookup_dmabuf(nullptr, 8, mr_access_flags::send, 7, last - 7),
+             errc::invalid_argument);
+
+    // An offset is not an address: invalidation still follows local mappings.
+    cache.invalidate(reinterpret_cast<void*>(offset), 32);
+    same_key(cache.lookup_dmabuf(allocation, 32, mr_access_flags::send, 7, offset), mapped);
+    same_key(cache.lookup_dmabuf(nullptr, 32, mr_access_flags::send, 7, offset), unmapped);
+    cache.invalidate(nullptr, 1);
+    rejected(cache.lookup_dmabuf(nullptr, 32, mr_access_flags::send, 7, offset), errc::io_error);
+    rejected(cache.lookup_dmabuf(nullptr, 32, mr_access_flags::send, 7, last - 32), errc::io_error);
+    rejected(cache.lookup_dmabuf(nullptr, 32, mr_access_flags::send, 8, last - 32), errc::io_error);
+    same_key(cache.lookup_dmabuf(allocation, 32, mr_access_flags::send, 7, offset), mapped);
+    same_key(cache.lookup(local, 32, mr_access_flags::send), host);
+    cache.invalidate(local, 1);
+    rejected(cache.lookup_dmabuf(allocation, 32, mr_access_flags::send, 7, offset), errc::io_error);
+    rejected(cache.lookup(local, 32, mr_access_flags::send), errc::io_error);
+    CHECK(provider.live_regions == 5);
+    mapped = {};
+    unmapped = {};
+    high = {};
+    foreign = {};
+    host = {};
+    CHECK(provider.live_regions == 0);
+    CHECK(cache.size() == 0);
 }
 
 TEST_CASE("DMA-BUF cache identity checks file and virtual ranges", "[mr_cache][dmabuf]") {

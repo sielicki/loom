@@ -463,7 +463,9 @@ Use separate caches for device contexts whose address spaces can alias.
 
 Reusable ranges are indexed in an AVL tree with subtree end bounds. Lookups
 skip earlier registrations that cannot contain the requested range, including
-on misses between disjoint allocations. Overlapping candidates still require
+on misses between disjoint allocations. Unmapped DMA-BUF ranges are indexed by
+descriptor and full-width file offset; mapped registrations use virtual addresses.
+Invalidation still operates on local addresses. Overlapping candidates require
 permission and memory-identity checks. Invalidation removes ranges from this
 index immediately while existing handles retain their registrations.
 Unbounded caches share read access for hits and release of reusable handles;
