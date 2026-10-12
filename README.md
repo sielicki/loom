@@ -466,6 +466,9 @@ skip earlier registrations that cannot contain the requested range, including
 on misses between disjoint allocations. Overlapping candidates still require
 permission and memory-identity checks. Invalidation removes ranges from this
 index immediately while existing handles retain their registrations.
+Cache hits and release of reusable handles share read access; misses recheck
+under exclusive access before registering. Registration, invalidation and
+eviction remain serialized. Hit counters remain exact under concurrent reuse.
 
 Keep allocations and DMA-BUF descriptors valid while their registrations are
 cached. Before freeing or remapping memory, or closing/reusing a descriptor,

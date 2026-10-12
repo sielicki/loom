@@ -94,6 +94,121 @@ TEST_CASE("concurrent cache hits retain exact statistics", "[mr_cache]") {
     REQUIRE(registration->refcount() == 1);
 }
 
+TEST_CASE("concurrent cache misses publish one registration", "[mr_cache][concurrent]") {
+    using namespace loom;
+    enum class memory { host, hmem, dmabuf };
+    const auto kind = GENERATE(memory::host, memory::hmem, memory::dmabuf);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom};
+    alignas(4096) std::array<std::byte, 4096> buffer{};
+    constexpr std::size_t count = 16;
+    std::array<mr_handle<provider::tcp_tag>, count> handles;
+    std::barrier ready{static_cast<std::ptrdiff_t>(count)};
+    std::atomic<bool> failed{};
+    {
+        std::vector<std::jthread> threads;
+        for (std::size_t index = 0; index < count; ++index) {
+            threads.emplace_back([&, index] {
+                ready.arrive_and_wait();
+                auto result = [&] {
+                    switch (kind) {
+                        case memory::host:
+                            return cache.lookup(buffer, mr_access_flags::send);
+                        case memory::hmem:
+                            return cache.lookup_hmem(buffer.data(),
+                                                     buffer.size(),
+                                                     mr_access_flags::send,
+                                                     hmem_device::cuda(0));
+                        case memory::dmabuf:
+                            return cache.lookup_dmabuf(
+                                buffer.data(), buffer.size(), mr_access_flags::send, 7);
+                    }
+                    std::unreachable();
+                }();
+                if (result)
+                    handles[index] = std::move(*result);
+                else
+                    failed.store(true);
+            });
+        }
+    }
+    REQUIRE_FALSE(failed.load());
+    REQUIRE(provider.registrations == 1);
+    REQUIRE(cache.stats().misses == 1);
+    REQUIRE(cache.stats().hits == count - 1);
+    REQUIRE(cache.hit_rate() == static_cast<double>(count - 1) / count);
+    for (const auto& handle : handles) {
+        REQUIRE(handle.key() == handles[0].key());
+        REQUIRE(handle.refcount() == count);
+    }
+}
+
+TEST_CASE("cache reuse and release race invalidation without losing registrations",
+          "[mr_cache][concurrent]") {
+    using namespace loom;
+    enum class memory { host, hmem, dmabuf };
+    const auto kind = GENERATE(memory::host, memory::hmem, memory::dmabuf);
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom};
+    alignas(4096) std::array<std::byte, 32768> buffer{};
+    constexpr int workers = 4, iterations = 2000;
+    std::barrier ready{workers + 1};
+    std::atomic<bool> failed{};
+    {
+        std::vector<std::jthread> threads;
+        for (int worker = 0; worker < workers; ++worker) {
+            threads.emplace_back([&, worker] {
+                ready.arrive_and_wait();
+                for (int iteration = 0; iteration < iterations; ++iteration) {
+                    const auto offset = ((iteration + worker) % 8) * 4096;
+                    auto result = [&] {
+                        switch (kind) {
+                            case memory::host:
+                                return cache.lookup(
+                                    buffer.data() + offset, 32, mr_access_flags::send);
+                            case memory::hmem:
+                                return cache.lookup_hmem(buffer.data() + offset,
+                                                         32,
+                                                         mr_access_flags::send,
+                                                         hmem_device::cuda(0));
+                            case memory::dmabuf:
+                                return cache.lookup_dmabuf(
+                                    buffer.data(), 32, mr_access_flags::send, 7, offset);
+                        }
+                        std::unreachable();
+                    }();
+                    if (!result) {
+                        failed.store(true);
+                        continue;
+                    }
+                    auto copy = *result;
+                    const auto key = copy.key();
+                    // The native registration must remain alive while either
+                    // handle exists, even if its range was just invalidated.
+                    const std::lock_guard lock{provider.mutex};
+                    if (!key || !provider.keys.contains(*key))
+                        failed.store(true);
+                }
+            });
+        }
+        threads.emplace_back([&] {
+            ready.arrive_and_wait();
+            for (int iteration = 0; iteration < iterations; ++iteration) {
+                cache.invalidate(buffer.data(), buffer.size());
+                cache.evict_unreferenced();
+            }
+        });
+    }
+    REQUIRE_FALSE(failed.load());
+    const auto stats = cache.stats();
+    REQUIRE(stats.hits + stats.misses == workers * iterations);
+    REQUIRE(stats.registrations == stats.misses);
+    REQUIRE(provider.registrations == stats.registrations);
+    cache.clear();
+    REQUIRE(cache.size() == 0);
+    REQUIRE(provider.live_regions == 0);
+}
+
 TEST_CASE("cache retains registrations sharing a page", "[mr_cache]") {
     using namespace loom;
     test::mock_domain provider;

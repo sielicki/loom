@@ -420,12 +420,21 @@ public:
             return make_error_result<handle_type>(errc::invalid_argument);
         }
 
+        {
+            const std::shared_lock lock{mutex_};
+            if (auto valid = validate_context(); !valid)
+                return std::unexpected(valid.error());
+            if (auto* entry = find_existing_entry(uaddr, length, access)) {
+                hits_.fetch_add(1, std::memory_order_relaxed);
+                return handle_type{this, entry};
+            }
+        }
         std::unique_lock lock(mutex_);
         if (auto valid = validate_context(); !valid)
             return std::unexpected(valid.error());
 
         if (auto* entry = find_existing_entry(uaddr, length, access)) {
-            ++stats_.hits;
+            hits_.fetch_add(1, std::memory_order_relaxed);
             return handle_type{this, entry};
         }
 
@@ -496,12 +505,21 @@ public:
         const auto local = addr ? uaddr + static_cast<std::uintptr_t>(offset) : 0;
         const detail::dmabuf_cache_key identity{uaddr, fd, offset};
 
+        {
+            const std::shared_lock lock{mutex_};
+            if (auto valid = validate_context(); !valid)
+                return std::unexpected(valid.error());
+            if (auto* entry = find_existing_entry(local, length, access, identity)) {
+                hits_.fetch_add(1, std::memory_order_relaxed);
+                return handle_type{this, entry};
+            }
+        }
         std::unique_lock lock(mutex_);
         if (auto valid = validate_context(); !valid)
             return std::unexpected(valid.error());
 
         if (auto* entry = find_existing_entry(local, length, access, identity)) {
-            ++stats_.hits;
+            hits_.fetch_add(1, std::memory_order_relaxed);
             return handle_type{this, entry};
         }
         ++stats_.misses;
@@ -551,13 +569,22 @@ public:
             return make_error_result<handle_type>(errc::invalid_argument);
         }
 
+        const detail::hmem_cache_key identity{device.iface, device.device_id, device.hmem_data};
+        {
+            const std::shared_lock lock{mutex_};
+            if (auto valid = validate_context(); !valid)
+                return std::unexpected(valid.error());
+            if (auto* entry = find_existing_entry(uaddr, length, access, identity)) {
+                hits_.fetch_add(1, std::memory_order_relaxed);
+                return handle_type{this, entry};
+            }
+        }
         std::unique_lock lock(mutex_);
         if (auto valid = validate_context(); !valid)
             return std::unexpected(valid.error());
 
-        const detail::hmem_cache_key identity{device.iface, device.device_id, device.hmem_data};
         if (auto* entry = find_existing_entry(uaddr, length, access, identity)) {
-            ++stats_.hits;
+            hits_.fetch_add(1, std::memory_order_relaxed);
             return handle_type{this, entry};
         }
         ++stats_.misses;
@@ -654,7 +681,9 @@ public:
      */
     [[nodiscard]] auto stats() const noexcept -> mr_cache_stats {
         std::shared_lock lock(mutex_);
-        return stats_;
+        auto snapshot = stats_;
+        snapshot.hits = hits_.load(std::memory_order_relaxed);
+        return snapshot;
     }
 
     /**
@@ -672,8 +701,9 @@ public:
      */
     [[nodiscard]] auto hit_rate() const noexcept -> double {
         std::shared_lock lock(mutex_);
-        auto total = stats_.hits + stats_.misses;
-        return total > 0 ? static_cast<double>(stats_.hits) / static_cast<double>(total) : 0.0;
+        const auto hits = hits_.load(std::memory_order_relaxed);
+        const auto total = hits + stats_.misses;
+        return total > 0 ? static_cast<double>(hits) / static_cast<double>(total) : 0.0;
     }
 
 private:
@@ -861,8 +891,17 @@ private:
      * @param entry The released entry.
      */
     void release_entry(detail::mr_cache_entry_base* entry) noexcept {
-        // Hold the lock before dropping the reference: eviction must not destroy
-        // the entry between the decrement and the invalidation check.
+        {
+            // Readers protect the entry until the decrement is finished. A
+            // reusable registration stays cached even after its last handle.
+            const std::shared_lock lock{mutex_};
+            if (!entry->invalidated) {
+                entry->refcount.fetch_sub(1, std::memory_order_acq_rel);
+                return;
+            }
+        }
+        // Retain our reference while switching locks so eviction cannot destroy
+        // an invalidated entry before its final release acquires exclusive access.
         std::unique_lock lock(mutex_);
         if (entry->refcount.fetch_sub(1, std::memory_order_acq_rel) != 1 || !entry->invalidated)
             return;
@@ -888,6 +927,7 @@ private:
     std::multimap<std::uintptr_t, std::unique_ptr<detail::mr_cache_entry_base>>
         entries_;           ///< Cache entries
     entry_type* index_root_{};  ///< Nonowning AVL index of reusable ranges.
+    std::atomic<std::size_t> hits_{};
     mr_cache_stats stats_;  ///< Cache statistics
 };
 
