@@ -461,6 +461,12 @@ null. Device registrations keep their exact ranges and contribute to the same
 hit, miss, registration, and byte statistics as host registrations.
 Use separate caches for device contexts whose address spaces can alias.
 
+Reusable ranges are indexed in an AVL tree with subtree end bounds. Lookups
+skip earlier registrations that cannot contain the requested range, including
+on misses between disjoint allocations. Overlapping candidates still require
+permission and memory-identity checks. Invalidation removes ranges from this
+index immediately while existing handles retain their registrations.
+
 Keep allocations and DMA-BUF descriptors valid while their registrations are
 cached. Before freeing or remapping memory, or closing/reusing a descriptor,
 invalidate the registered range and retire all handles that still use it.

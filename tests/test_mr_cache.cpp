@@ -3,6 +3,8 @@
 #include <loom/core/mr_cache.hpp>
 
 #include <barrier>
+#include <numeric>
+#include <random>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -153,6 +155,195 @@ TEST_CASE("cache finds an earlier overlapping registration", "[mr_cache]") {
     REQUIRE(found);
     REQUIRE(found->key() == large->key());
     REQUIRE(provider.registrations == 2);
+}
+
+TEST_CASE("cache range indexing survives varied insertion and removal orders",
+          "[mr_cache][index]") {
+    using namespace loom;
+    enum class order { ascending, descending, shuffled };
+    const auto insertion = GENERATE(order::ascending, order::descending, order::shuffled);
+    const auto removal = GENERATE(order::ascending, order::descending, order::shuffled);
+    constexpr std::size_t count = 2048;
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom};
+    std::vector<std::size_t> indices(count);
+    std::iota(indices.begin(), indices.end(), 0);
+    auto arrange = [&](order selected) {
+        std::ranges::sort(indices);
+        if (selected == order::descending)
+            std::ranges::reverse(indices);
+        else if (selected == order::shuffled)
+            std::shuffle(indices.begin(), indices.end(), std::mt19937{1729});
+    };
+    const auto address = [](std::size_t index) {
+        return reinterpret_cast<void*>((2 * index + 1) * 4096);
+    };
+    std::vector<mr_handle<provider::tcp_tag>> handles(count);
+    arrange(insertion);
+    for (const auto index : indices) {
+        auto handle = cache.lookup(address(index), 4096, mr_access_flags::send);
+        REQUIRE(handle);
+        handles[index] = std::move(*handle);
+    }
+    REQUIRE(provider.registrations == count);
+    arrange(removal);
+    for (const auto index : indices) {
+        const auto key = handles[index].key();
+        REQUIRE(cache.lookup(address(index), 4096, mr_access_flags::send)->key() == key);
+        cache.invalidate(address(index), 4096);
+        handles[index] = {};
+        // Reinserting a deleted range must not resurrect its retired MR or
+        // lose another subtree while replacing a node with two children.
+        auto replacement = cache.lookup(address(index), 4096, mr_access_flags::send);
+        REQUIRE(replacement);
+        REQUIRE(replacement->key() != key);
+        handles[index] = std::move(*replacement);
+    }
+    REQUIRE(cache.size() == count);
+    REQUIRE(provider.registrations == 2 * count);
+    for (const auto index : indices)
+        REQUIRE(cache.lookup(address(index), 4096, mr_access_flags::send)->key() ==
+                handles[index].key());
+    // Erase every reusable node without immediately replacing it.
+    for (const auto index : indices) {
+        cache.invalidate(address(index), 4096);
+        handles[index] = {};
+    }
+    REQUIRE(cache.size() == 0);
+    REQUIRE(provider.live_regions == 0);
+}
+
+TEST_CASE("cache interval reuse matches a linear ownership model", "[mr_cache][index]") {
+    using namespace loom;
+    enum class memory { host, hmem, mapped, unmapped };
+    struct request {
+        memory kind;
+        std::uintptr_t base;
+        std::size_t length;
+        mr_access access;
+        int device_or_fd;
+        std::uint64_t offset;
+    };
+    struct record {
+        request range;
+        std::uint64_t key;
+        bool reusable{true};
+        bool alive{true};
+        mr_handle<provider::tcp_tag> handle;
+    };
+    test::mock_domain provider;
+    mr_cache<provider::tcp_tag> cache{provider.dom};
+    std::vector<record> model;
+    std::mt19937 random{GENERATE(7U, 1729U, 65537U)};
+    constexpr std::uintptr_t allocation = 0x10000000;
+    const auto contains =
+        [](std::uint64_t base, std::size_t size, std::uint64_t start, std::size_t length) {
+            return start >= base && start - base <= size && length <= size - (start - base);
+        };
+    const auto overlaps =
+        [](std::uintptr_t base, std::size_t size, std::uintptr_t start, std::size_t length) {
+            return start < base ? base - start < length : start - base < size;
+        };
+    const auto lookup = [&](request requested) {
+        auto result = [&]() -> loom::result<mr_handle<provider::tcp_tag>> {
+            auto* address = reinterpret_cast<void*>(requested.base);
+            switch (requested.kind) {
+                case memory::host:
+                    return cache.lookup(address, requested.length, requested.access);
+                case memory::hmem:
+                    return cache.lookup_hmem(address,
+                                             requested.length,
+                                             requested.access,
+                                             hmem_device::cuda(requested.device_or_fd));
+                case memory::mapped:
+                case memory::unmapped:
+                    return cache.lookup_dmabuf(requested.kind == memory::mapped
+                                                   ? reinterpret_cast<void*>(allocation)
+                                                   : nullptr,
+                                               requested.length,
+                                               requested.access,
+                                               requested.device_or_fd,
+                                               requested.offset);
+            }
+            std::unreachable();
+        }();
+        REQUIRE(result);
+        const auto key = result->key();
+        REQUIRE(key);
+        const auto matching = [&](const record& cached) {
+            const auto& range = cached.range;
+            return cached.alive && cached.reusable && range.kind == requested.kind &&
+                   range.device_or_fd == requested.device_or_fd &&
+                   range.access.has(requested.access) &&
+                   contains(range.base, range.length, requested.base, requested.length) &&
+                   ((range.kind != memory::mapped && range.kind != memory::unmapped) ||
+                    contains(range.offset, range.length, requested.offset, requested.length));
+        };
+        if (std::ranges::any_of(model, matching)) {
+            REQUIRE(std::ranges::any_of(model, [&](const record& cached) {
+                return matching(cached) && cached.key == *key;
+            }));
+        } else {
+            REQUIRE(provider.registrations == model.size() + 1);
+            model.push_back({requested, *key, true, true, std::move(*result)});
+        }
+        REQUIRE(provider.registrations == model.size());
+    };
+    for (std::size_t index = 0; index < 512; ++index)
+        lookup({memory::host, allocation + index * 8192, 4096, mr_access_flags::send, 0, 0});
+
+    for (int iteration = 0; iteration < 3000; ++iteration) {
+        const auto action = random() % 10;
+        if (action < 7) {
+            const auto kind = static_cast<memory>(random() % 4);
+            const auto offset = static_cast<std::uint64_t>(random() % 512) * 4096;
+            const std::size_t length = (1 + random() % 64) * 4096;
+            const std::array permissions{mr_access_flags::send,
+                                         mr_access_flags::recv,
+                                         mr_access_flags::send | mr_access_flags::recv};
+            lookup({kind,
+                    kind == memory::unmapped ? 0 : allocation + offset,
+                    length,
+                    permissions[random() % permissions.size()],
+                    kind == memory::host ? 0 : static_cast<int>(random() % 3),
+                    offset});
+        } else if (action == 7) {
+            const auto start = random() % 8 == 0 ? 0 : allocation + (random() % 512) * 4096;
+            const std::size_t length = (1 + random() % 4) * 4096;
+            cache.invalidate(reinterpret_cast<void*>(start), length);
+            for (auto& cached : model) {
+                if (cached.alive &&
+                    overlaps(cached.range.base, cached.range.length, start, length)) {
+                    cached.reusable = false;
+                    if (!cached.handle)
+                        cached.alive = false;
+                }
+            }
+        } else if (action == 8) {
+            auto& cached = model[random() % model.size()];
+            cached.handle = {};
+            if (!cached.reusable)
+                cached.alive = false;
+        } else {
+            cache.evict_unreferenced();
+            for (auto& cached : model)
+                if (!cached.handle)
+                    cached.alive = false;
+        }
+        std::size_t entries{}, bytes{};
+        for (const auto& cached : model) {
+            if (cached.alive) {
+                ++entries;
+                bytes += cached.range.length;
+            }
+        }
+        REQUIRE(cache.size() == entries);
+        REQUIRE(cache.stats().total_registered_bytes == bytes);
+        REQUIRE(provider.live_regions == entries);
+    }
+    model.clear();
+    cache.clear();
+    REQUIRE(provider.live_regions == 0);
 }
 
 TEST_CASE("device registrations retain their exact range", "[mr_cache]") {

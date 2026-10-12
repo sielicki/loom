@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cstddef>
@@ -68,6 +69,11 @@ struct mr_cache_entry_base {
     bool invalidated{false};               ///< Retained only for existing handles
     std::atomic<std::size_t> refcount{0};  ///< Reference count
     std::optional<memory_region> mr{};     ///< Cached memory region
+    mr_cache_entry_base* index_parent{};
+    mr_cache_entry_base* index_left{};
+    mr_cache_entry_base* index_right{};
+    std::uintptr_t index_end{};  ///< Greatest exclusive end in this subtree.
+    int index_height{1};
 
     /**
      * @brief Default constructor.
@@ -445,6 +451,7 @@ public:
 
         auto* entry_ptr = entry.get();
         entries_.emplace(aligned_base, std::move(entry));
+        index_insert(*entry_ptr);
 
         ++stats_.registrations;
         ++stats_.current_entries;
@@ -517,6 +524,7 @@ public:
 
         auto* entry_ptr = entry.get();
         entries_.emplace(entry_ptr->base_addr, std::move(entry));
+        index_insert(*entry_ptr);
 
         ++stats_.registrations;
         ++stats_.current_entries;
@@ -571,6 +579,7 @@ public:
 
         auto* entry_ptr = entry.get();
         entries_.emplace(uaddr, std::move(entry));
+        index_insert(*entry_ptr);
 
         ++stats_.registrations;
         ++stats_.current_entries;
@@ -596,6 +605,8 @@ public:
         while (it != entries_.end()) {
             auto& entry = *it->second;
             if (entry.overlaps(uaddr, length)) {
+                if (!entry.invalidated)
+                    index_remove(entry);
                 entry.invalidated = true;
                 if (entry.refcount.load(std::memory_order_acquire) == 0) {
                     stats_.total_registered_bytes -= entry.length;
@@ -625,6 +636,8 @@ public:
         auto it = entries_.begin();
         while (it != entries_.end()) {
             if (it->second->refcount.load(std::memory_order_acquire) == 0) {
+                if (!it->second->invalidated)
+                    index_remove(*it->second);
                 stats_.total_registered_bytes -= it->second->length;
                 --stats_.current_entries;
                 ++stats_.evictions;
@@ -665,6 +678,117 @@ public:
 
 private:
     friend class mr_handle<Provider>;
+    using entry_type = detail::mr_cache_entry_base;
+
+    static auto index_height(const entry_type* entry) noexcept -> int {
+        return entry ? entry->index_height : 0;
+    }
+
+    static void index_update(entry_type& entry) noexcept {
+        entry.index_height =
+            1 + std::max(index_height(entry.index_left), index_height(entry.index_right));
+        entry.index_end = entry.base_addr + entry.length;
+        if (entry.index_left)
+            entry.index_end = std::max(entry.index_end, entry.index_left->index_end);
+        if (entry.index_right)
+            entry.index_end = std::max(entry.index_end, entry.index_right->index_end);
+    }
+
+    void index_replace(entry_type& entry, entry_type* replacement) noexcept {
+        if (!entry.index_parent)
+            index_root_ = replacement;
+        else if (entry.index_parent->index_left == &entry)
+            entry.index_parent->index_left = replacement;
+        else
+            entry.index_parent->index_right = replacement;
+        if (replacement)
+            replacement->index_parent = entry.index_parent;
+    }
+
+    auto index_rotate_left(entry_type& entry) noexcept -> entry_type* {
+        auto* next = entry.index_right;
+        index_replace(entry, next);
+        entry.index_right = next->index_left;
+        if (entry.index_right)
+            entry.index_right->index_parent = &entry;
+        next->index_left = &entry;
+        entry.index_parent = next;
+        index_update(entry);
+        index_update(*next);
+        return next;
+    }
+
+    auto index_rotate_right(entry_type& entry) noexcept -> entry_type* {
+        auto* next = entry.index_left;
+        index_replace(entry, next);
+        entry.index_left = next->index_right;
+        if (entry.index_left)
+            entry.index_left->index_parent = &entry;
+        next->index_right = &entry;
+        entry.index_parent = next;
+        index_update(entry);
+        index_update(*next);
+        return next;
+    }
+
+    void index_rebalance(entry_type* entry) noexcept {
+        while (entry) {
+            index_update(*entry);
+            const auto balance = index_height(entry->index_left) - index_height(entry->index_right);
+            if (balance > 1) {
+                if (index_height(entry->index_left->index_left) <
+                    index_height(entry->index_left->index_right))
+                    index_rotate_left(*entry->index_left);
+                entry = index_rotate_right(*entry);
+            } else if (balance < -1) {
+                if (index_height(entry->index_right->index_right) <
+                    index_height(entry->index_right->index_left))
+                    index_rotate_right(*entry->index_right);
+                entry = index_rotate_left(*entry);
+            }
+            entry = entry->index_parent;
+        }
+    }
+
+    void index_insert(entry_type& entry) noexcept {
+        auto** link = &index_root_;
+        entry_type* parent{};
+        while (*link) {
+            parent = *link;
+            const bool before =
+                entry.base_addr < parent->base_addr ||
+                (entry.base_addr == parent->base_addr && std::less<entry_type*>{}(&entry, parent));
+            link = before ? &parent->index_left : &parent->index_right;
+        }
+        *link = &entry;
+        entry.index_parent = parent;
+        entry.index_end = entry.base_addr + entry.length;
+        index_rebalance(parent);
+    }
+
+    void index_remove(entry_type& entry) noexcept {
+        auto* parent = entry.index_parent;
+        if (!entry.index_left || !entry.index_right) {
+            index_replace(entry, entry.index_left ? entry.index_left : entry.index_right);
+        } else {
+            auto* next = entry.index_right;
+            while (next->index_left)
+                next = next->index_left;
+            if (next->index_parent == &entry) {
+                parent = next;
+            } else {
+                parent = next->index_parent;
+                index_replace(*next, next->index_right);
+                next->index_right = entry.index_right;
+                next->index_right->index_parent = next;
+            }
+            index_replace(entry, next);
+            next->index_left = entry.index_left;
+            next->index_left->index_parent = next;
+        }
+        entry.index_parent = entry.index_left = entry.index_right = nullptr;
+        index_rebalance(parent);
+    }
 
     [[nodiscard]] auto validate_context() const noexcept -> void_result {
         if (!*domain_ || domain_->internal_ptr() != domain_identity_)
@@ -698,29 +822,38 @@ private:
                                            mr_access access,
                                            const Key& identity = {}) const noexcept
         -> detail::mr_cache_entry_base* {
-        for (auto it = std::make_reverse_iterator(entries_.upper_bound(addr));
-             it != entries_.rend();
-             ++it) {
-            auto& entry = *it->second;
-            if (entry.invalidated || !entry.contains(addr, length) || !entry.access.has(access))
-                continue;
+        const auto matches = [&](const entry_type& entry) {
+            if (!entry.contains(addr, length) || !entry.access.has(access))
+                return false;
             const auto* cached = std::get_if<Key>(&entry.identity);
             if (!cached)
-                continue;
+                return false;
             if constexpr (std::same_as<Key, detail::dmabuf_cache_key>) {
                 // File offsets distinguish unmapped buffers, whose local addresses are null.
                 if (cached->allocation != identity.allocation || cached->fd != identity.fd ||
                     identity.offset < cached->offset ||
                     identity.offset - cached->offset > entry.length ||
                     length > entry.length - (identity.offset - cached->offset))
-                    continue;
+                    return false;
             } else if (*cached != identity) {
-                continue;
+                return false;
             }
-            return it->second.get();
-        }
-
-        return nullptr;
+            return true;
+        };
+        // The AVL index excludes invalidated registrations. Its subtree end
+        // bounds prune earlier ranges that cannot contain this request.
+        const auto find = [&](this auto& self, entry_type* entry) -> entry_type* {
+            if (!entry || entry->index_end < addr + length)
+                return nullptr;
+            if (entry->base_addr > addr)
+                return self(entry->index_left);
+            if (auto* found = self(entry->index_right))
+                return found;
+            if (matches(*entry))
+                return entry;
+            return self(entry->index_left);
+        };
+        return find(index_root_);
     }
 
     /**
@@ -754,6 +887,7 @@ private:
     mutable std::shared_mutex mutex_;  ///< Lock for thread safety
     std::multimap<std::uintptr_t, std::unique_ptr<detail::mr_cache_entry_base>>
         entries_;           ///< Cache entries
+    entry_type* index_root_{};  ///< Nonowning AVL index of reusable ranges.
     mr_cache_stats stats_;  ///< Cache statistics
 };
 
