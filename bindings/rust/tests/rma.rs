@@ -441,6 +441,20 @@ async fn target_progress(
 }
 
 #[cfg(feature = "tokio")]
+async fn retry_async(mut submit: impl AsyncFnMut() -> Result<()>) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match submit().await {
+            Err(error) if error.is_would_block() => {
+                assert!(Instant::now() < deadline, "async RMA submission deadline");
+                tokio::task::yield_now().await;
+            }
+            result => return result,
+        }
+    }
+}
+
+#[cfg(feature = "tokio")]
 async fn async_registered_transfers(provider: &str) {
     let mut source = [0x37; 512];
     let mut target = [0; 512];
@@ -521,6 +535,70 @@ async fn async_registered_transfers(provider: &str) {
     for (index, &byte) in source.iter().enumerate() {
         assert_eq!(byte, if (61..260).contains(&index) { 0x37 } else { 0 });
     }
+    let destinations = [300, 400].map(|offset| RmaTarget {
+        peer,
+        memory: remote
+            .region
+            .remote_memory()
+            .unwrap()
+            .subregion(offset, 64)
+            .unwrap(),
+    });
+    source[..64].fill(0x71);
+    source[64..128].fill(0xa2);
+    target_progress(
+        async {
+            let (first, second) = futures::join!(
+                retry_async(async || unsafe {
+                    endpoint
+                        .write(&source[..64], &registration, destinations[0], delivered)
+                        .await
+                }),
+                retry_async(async || unsafe {
+                    endpoint
+                        .write(&source[64..128], &registration, destinations[1], delivered)
+                        .await
+                })
+            );
+            first?;
+            second
+        },
+        &remote,
+    )
+    .await
+    .unwrap();
+    assert_eq!(&target[300..364], &[0x71; 64]);
+    assert_eq!(&target[400..464], &[0xa2; 64]);
+    source[..128].fill(0);
+    let (first, second) = source[..128].split_at_mut(64);
+    target_progress(
+        async {
+            let (first, second) = futures::join!(
+                retry_async(async || unsafe {
+                    endpoint
+                        .read(first, &registration, destinations[0], RmaOptions::default())
+                        .await
+                }),
+                retry_async(async || unsafe {
+                    endpoint
+                        .read(
+                            second,
+                            &registration,
+                            destinations[1],
+                            RmaOptions::default(),
+                        )
+                        .await
+                })
+            );
+            first?;
+            second
+        },
+        &remote,
+    )
+    .await
+    .unwrap();
+    assert_eq!(&source[..64], &[0x71; 64]);
+    assert_eq!(&source[64..128], &[0xa2; 64]);
     assert!(endpoint.tx_cq().poll().is_none());
     endpoint.close().unwrap();
 }

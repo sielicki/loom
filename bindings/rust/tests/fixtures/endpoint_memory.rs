@@ -68,7 +68,7 @@ fn registration_factory_honors_mode_device_and_endpoint_identity() {
             {
                 let (_fabric, info, domain) = parents(&mut fixture);
                 let mut first = Endpoint::new(&domain, &info).unwrap();
-                let mut second = Endpoint::new(&domain, &info).unwrap();
+                let second = Endpoint::new(&domain, &info).unwrap();
                 let mut buffer = [0_u8; 64];
                 let registration = unsafe {
                     MemoryRegion::register_for_endpoint(

@@ -730,6 +730,9 @@ impl OperationContext {
 /// reference suitably aligned, writable native scratch storage that remains
 /// stable until completion or successful close. AsyncEndpoint manages this
 /// storage for its own submissions.
+/// Submission methods share a thread-confined endpoint reference and serialize
+/// native access internally. Configuration and close still require exclusive
+/// access. The endpoint is neither `Send` nor `Sync`.
 ///
 /// Submitting borrowed buffers requires an explicit lifetime guarantee:
 ///
@@ -849,7 +852,7 @@ impl Endpoint {
     /// valid until the matching completion is consumed. Receive buffers must
     /// not be accessed, and send buffers must not be mutated, before then.
     /// A successful return only means the operation was submitted.
-    pub unsafe fn send(&mut self, data: &[u8], context: usize) -> Result<()> {
+    pub unsafe fn send(&self, data: &[u8], context: usize) -> Result<()> {
         error::from_submission_status(ffi::ffi::endpoint_send(
             self.state.inner.borrow_mut().pin_mut(),
             data,
@@ -870,7 +873,7 @@ impl Endpoint {
     /// valid until the matching completion is consumed. Receive buffers must
     /// not be accessed, and send buffers must not be mutated, before then.
     /// A successful return only means the operation was submitted.
-    pub unsafe fn recv(&mut self, buf: &mut [u8], context: usize) -> Result<()> {
+    pub unsafe fn recv(&self, buf: &mut [u8], context: usize) -> Result<()> {
         error::from_submission_status(ffi::ffi::endpoint_recv(
             self.state.inner.borrow_mut().pin_mut(),
             buf,
@@ -892,7 +895,7 @@ impl Endpoint {
     /// valid until the matching completion is consumed. Receive buffers must
     /// not be accessed, and send buffers must not be mutated, before then.
     /// A successful return only means the operation was submitted.
-    pub unsafe fn tagged_send(&mut self, data: &[u8], tag: u64, context: usize) -> Result<()> {
+    pub unsafe fn tagged_send(&self, data: &[u8], tag: u64, context: usize) -> Result<()> {
         error::from_submission_status(ffi::ffi::endpoint_tagged_send(
             self.state.inner.borrow_mut().pin_mut(),
             data,
@@ -917,7 +920,7 @@ impl Endpoint {
     /// not be accessed, and send buffers must not be mutated, before then.
     /// A successful return only means the operation was submitted.
     pub unsafe fn tagged_recv(
-        &mut self,
+        &self,
         buf: &mut [u8],
         tag: u64,
         ignore: u64,
@@ -955,7 +958,7 @@ impl Endpoint {
     /// the local buffer while the operation may write it. Success means acceptance,
     /// not completion; a later error does not make other accepted work reusable.
     pub unsafe fn read(
-        &mut self,
+        &self,
         buffer: &mut [u8],
         registration: &MemoryRegion,
         target: RmaTarget,
@@ -990,7 +993,7 @@ impl Endpoint {
     /// Success means acceptance; completion alone does not establish GPU
     /// visibility. The caller must establish visibility before device access.
     pub unsafe fn read_raw(
-        &mut self,
+        &self,
         buffer: *mut u8,
         len: usize,
         registration: &MemoryRegion,
@@ -1023,7 +1026,7 @@ impl Endpoint {
     /// the local buffer while the operation may read it. Local completion permits
     /// local reuse; it does not establish remote delivery or GPU visibility.
     pub unsafe fn write(
-        &mut self,
+        &self,
         buffer: &[u8],
         registration: &MemoryRegion,
         target: RmaTarget,
@@ -1058,7 +1061,7 @@ impl Endpoint {
     /// not establish remote delivery or GPU visibility. The caller must make
     /// device writes visible to the provider before submission.
     pub unsafe fn write_raw(
-        &mut self,
+        &self,
         buffer: *const u8,
         len: usize,
         registration: &MemoryRegion,

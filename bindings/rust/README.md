@@ -134,6 +134,14 @@ an optional borrowed descriptor; it replaces the unconditional `AsRawFd` API.
 An exported region on a manual-progress provider still needs an active
 progress task for its entire advertised lifetime, including while idle.
 
+Managed messaging and RMA futures share an endpoint borrow, so multiple sends,
+receives, reads or writes can remain outstanding on one `AsyncEndpoint`. Poll
+them together, for example with `futures::join!`, using nonconflicting buffers.
+Native calls are serialized internally, and the endpoint remains confined to
+one thread. Configuration, replacement and close require exclusive access after
+those futures finish or are dropped. Dropping a future still does not cancel
+accepted native work or permit its buffer to be reused.
+
 ### Registered RMA
 
 `Endpoint::read` and `Endpoint::write` submit a registered local slice to

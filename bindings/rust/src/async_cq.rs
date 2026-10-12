@@ -432,6 +432,19 @@ pub(crate) const PROGRESS_BUDGET: usize = 64;
 ///
 /// This wraps an [`Endpoint`] and uses an [`AsyncCompletionQueue`] to
 /// provide async operations that integrate with tokio.
+/// Multiple operations may remain pending on the same endpoint. Native calls
+/// are serialized through its internal borrow; no borrow guard spans an await.
+/// Endpoints remain confined to one thread, and buffers must not alias in ways
+/// that conflict with native access. Configuration and close require exclusive
+/// access after outstanding futures have completed or been dropped.
+///
+/// ```compile_fail
+/// fn close_pending(ep: &mut loom_fabric::AsyncEndpoint, data: &[u8]) {
+///     let pending = unsafe { ep.send(data) };
+///     ep.close().unwrap();
+///     drop(pending);
+/// }
+/// ```
 ///
 /// The caller must account for cancellation when borrowing a buffer:
 ///
@@ -527,7 +540,7 @@ impl AsyncEndpoint {
     /// not cancel the request. Unobserved completions remain on the public CQ.
     /// Native context storage is retained by the CQ until completion or a
     /// successful endpoint close; the caller still owns the buffer lifetime.
-    pub async unsafe fn send(&mut self, data: &[u8]) -> Result<()> {
+    pub async unsafe fn send(&self, data: &[u8]) -> Result<()> {
         let ticket = self.tx_cq.inner.router.allocate()?;
         let ctx = ticket.address;
 
@@ -554,7 +567,7 @@ impl AsyncEndpoint {
     /// not cancel the request. Unobserved completions remain on the public CQ.
     /// Native context storage is retained by the CQ until completion or a
     /// successful endpoint close; the caller still owns the buffer lifetime.
-    pub async unsafe fn recv(&mut self, buf: &mut [u8]) -> Result<usize> {
+    pub async unsafe fn recv(&self, buf: &mut [u8]) -> Result<usize> {
         let ticket = self.rx_cq.inner.router.allocate()?;
         let ctx = ticket.address;
 
@@ -581,7 +594,7 @@ impl AsyncEndpoint {
     /// not cancel the request. Unobserved completions remain on the public CQ.
     /// Native context storage is retained by the CQ until completion or a
     /// successful endpoint close; the caller still owns the buffer lifetime.
-    pub async unsafe fn tagged_send(&mut self, data: &[u8], tag: u64) -> Result<()> {
+    pub async unsafe fn tagged_send(&self, data: &[u8], tag: u64) -> Result<()> {
         let ticket = self.tx_cq.inner.router.allocate()?;
         let ctx = ticket.address;
 
@@ -604,12 +617,7 @@ impl AsyncEndpoint {
     /// not cancel the request. Unobserved completions remain on the public CQ.
     /// Native context storage is retained by the CQ until completion or a
     /// successful endpoint close; the caller still owns the buffer lifetime.
-    pub async unsafe fn tagged_recv(
-        &mut self,
-        buf: &mut [u8],
-        tag: u64,
-        ignore: u64,
-    ) -> Result<usize> {
+    pub async unsafe fn tagged_recv(&self, buf: &mut [u8], tag: u64, ignore: u64) -> Result<usize> {
         let ticket = self.rx_cq.inner.router.allocate()?;
         let ctx = ticket.address;
 
@@ -634,7 +642,7 @@ impl AsyncEndpoint {
     /// successful endpoint close; the allocation is still borrowed. Dropping
     /// the future does not cancel accepted work or permit buffer access.
     pub async unsafe fn read(
-        &mut self,
+        &self,
         buffer: &mut [u8],
         registration: &MemoryRegion,
         target: RmaTarget,
@@ -662,7 +670,7 @@ impl AsyncEndpoint {
     /// successful endpoint close; the allocation is still borrowed. Dropping
     /// the future does not cancel accepted work or permit buffer mutation.
     pub async unsafe fn write(
-        &mut self,
+        &self,
         buffer: &[u8],
         registration: &MemoryRegion,
         target: RmaTarget,
@@ -849,6 +857,43 @@ mod tests {
             ticket.reject();
         }
         assert!(router.pending.borrow().is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the libfabric TCP provider with wait descriptors"]
+    async fn managed_receives_can_remain_pending_together() {
+        use std::future::Future;
+        use std::task::Context;
+
+        let mut buffers = [[0_u8; 1]; 32];
+        let info = crate::query_fabric_with_hints(
+            "tcp",
+            crate::Capabilities::MSG,
+            crate::EndpointType::Msg,
+        )
+        .unwrap();
+        let fabric = crate::Fabric::new(&info).unwrap();
+        let domain = Domain::new(&fabric, &info).unwrap();
+        let mut endpoint = AsyncEndpoint::new(&domain, &info, 64).unwrap();
+        endpoint.enable().unwrap();
+        let queue = endpoint.rx_cq.inner.clone();
+        let mut receives: Vec<_> = buffers
+            .iter_mut()
+            .map(|buffer| Box::pin(unsafe { endpoint.recv(buffer) }))
+            .collect();
+        let mut task = Context::from_waker(futures::task::noop_waker_ref());
+        for (index, receive) in receives.iter_mut().enumerate() {
+            assert!(receive.as_mut().poll(&mut task).is_pending());
+            assert_eq!(queue.router.pending.borrow().len(), index + 1);
+        }
+        drop(receives);
+        assert_eq!(queue.router.pending.borrow().len(), 32);
+        assert!(matches!(
+            endpoint.inner_mut(),
+            Err(Error::PendingOperations)
+        ));
+        endpoint.close().unwrap();
+        assert!(queue.router.pending.borrow().is_empty());
     }
 
     #[tokio::test]
