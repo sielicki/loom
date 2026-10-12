@@ -656,6 +656,47 @@ TEST_CASE("Asio callback replacement of every queue reschedules the timer",
     REQUIRE_FALSE(service.deregister_cq(added.queue));
 }
 
+TEST_CASE("Asio timer honors the shortest registered interval", "[asio][fabric_service]") {
+    enum class registration_order { fast_first, slow_first, while_running };
+    const auto order = GENERATE(registration_order::fast_first,
+                                registration_order::slow_first,
+                                registration_order::while_running);
+    ::asio::io_context ioc;
+    service_queue slow, fast;
+    auto& service = loom::asio::fabric_service::use(ioc);
+    constexpr loom::asio::fabric_service_options slow_options{.poll_interval = 1h,
+                                                              .use_fd_polling = false};
+    constexpr loom::asio::fabric_service_options fast_options{.poll_interval = 0us,
+                                                              .use_fd_polling = false};
+    bool completed{};
+    auto callback = [&] {
+        completed = true;
+        service.stop();
+    };
+    fi_context2 context{};
+    loom::completion_registration registration;
+    REQUIRE(registration.bind(fast.queue,
+                              loom::context_ptr<void>{&context},
+                              &callback,
+                              [](void* object, const loom::completion_event&) {
+                                  (*static_cast<decltype(callback)*>(object))();
+                              }));
+    fast.pending.push_back({.op_context = &context});
+    if (order == registration_order::fast_first)
+        service.register_cq(fast.queue, fast_options);
+    service.register_cq(slow.queue, slow_options);
+    if (order == registration_order::while_running)
+        service.start();
+    if (order != registration_order::fast_first)
+        service.register_cq(fast.queue, fast_options);
+    service.start();
+    ioc.run_for(100ms);
+    service.stop();
+    REQUIRE(completed);
+    REQUIRE_FALSE(service.deregister_cq(slow.queue));
+    REQUIRE_FALSE(service.deregister_cq(fast.queue));
+}
+
 TEST_CASE("reentrant Asio progress cannot overwrite an unclaimed event", "[asio][fabric_service]") {
     ::asio::io_context ioc;
     service_queue native;

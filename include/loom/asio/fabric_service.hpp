@@ -47,6 +47,7 @@ namespace loom::asio {
  */
 /**
  * @brief Configuration options for the fabric service.
+ * The shared polling timer uses the shortest registered queue interval.
  */
 struct fabric_service_options {
     std::chrono::microseconds poll_interval{100};  ///< Timer-based poll interval
@@ -247,10 +248,11 @@ inline void fabric_service::register_cq(completion_queue& cq, const options& opt
                             [&cq](const auto& entry) { return entry->cq == &cq; })) {
         return;
     }
-    const bool was_empty = std::ranges::none_of(
-        completion_queues_, [](const auto& entry) { return entry->cq != nullptr; });
+    const bool faster = std::ranges::none_of(completion_queues_, [&](const auto& entry) {
+        return entry->cq && entry->opts.poll_interval <= opts.poll_interval;
+    });
     completion_queues_.push_back(std::make_unique<cq_entry>(&cq, opts, std::nullopt));
-    if (running_.load(std::memory_order_acquire) && was_empty) {
+    if (running_.load(std::memory_order_acquire) && faster) {
         schedule_poll();
     }
 }
@@ -322,16 +324,15 @@ inline void fabric_service::schedule_poll() {
         return;
     }
 
-    std::chrono::microseconds interval{100};
-    const auto first = std::ranges::find_if(completion_queues_,
-                                            [](const auto& entry) { return entry->cq != nullptr; });
-    if (first != completion_queues_.end()) {
-        interval = (*first)->opts.poll_interval;
+    std::optional<std::chrono::microseconds> interval;
+    for (const auto& entry : completion_queues_) {
+        if (entry->cq && (!interval || entry->opts.poll_interval < *interval))
+            interval = entry->opts.poll_interval;
     }
 
     const auto generation = ++poll_generation_;
     try {
-        poll_timer_->expires_after(interval);
+        poll_timer_->expires_after(interval.value_or(std::chrono::microseconds{100}));
         poll_timer_->async_wait([this, generation](const std::error_code& ec) {
             const std::lock_guard lock{mutex_};
             if (ec || !running_.load(std::memory_order_acquire) || generation != poll_generation_) {
