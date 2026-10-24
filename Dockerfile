@@ -16,9 +16,27 @@ RUN dnf install -y \
     cmake \
     ninja-build \
     pkgconf-pkg-config \
-    libfabric-devel \
+    autoconf \
+    automake \
+    libtool \
+    make \
+    libuuid-devel \
     git \
     && dnf clean all
+
+# Fedora's packaged libfabric lags Loom's minimum. Build the same upstream
+# release as the Nix flake, and verify the tag resolves to its pinned commit.
+RUN git clone --depth 1 --branch v2.7.0 https://github.com/ofiwg/libfabric.git /tmp/libfabric \
+    && test "$(git -C /tmp/libfabric rev-parse HEAD)" = 9011331bb34bb90b38a7aad53857df4430c5db45 \
+    && cd /tmp/libfabric \
+    && ./autogen.sh \
+    && ./configure --prefix=/usr/local --libdir=/usr/local/lib64 --disable-static \
+    && make -j"$(nproc)" \
+    && make install \
+    && ldconfig \
+    && rm -rf /tmp/libfabric
+
+ENV PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig
 
 WORKDIR /build
 
