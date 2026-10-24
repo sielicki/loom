@@ -1042,15 +1042,15 @@ private:
         }
     }
 
-    domain* domain_;                   ///< Fabric domain
-    void* domain_identity_;            ///< Native identity fixed at construction
-    endpoint* endpoint_{};             ///< Optional endpoint registration scope
+    domain* domain_;         ///< Fabric domain
+    void* domain_identity_;  ///< Native identity fixed at construction
+    endpoint* endpoint_{};   ///< Optional endpoint registration scope
     void* endpoint_identity_{};
-    memory_resource* resource_;        ///< Memory resource
+    memory_resource* resource_;  ///< Memory resource
     const mr_cache_limits limits_;
     mutable std::shared_mutex mutex_;  ///< Lock for thread safety
     entry_map entries_;                ///< Entries owned by stable identity.
-    entry_type* index_root_{};  ///< Nonowning AVL index of reusable ranges.
+    entry_type* index_root_{};         ///< Nonowning AVL index of reusable ranges.
     entry_type* idle_first_{};
     entry_type* idle_last_{};
     std::atomic<std::size_t> hits_{};

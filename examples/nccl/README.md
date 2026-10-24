@@ -159,13 +159,13 @@ or establish GPU visibility.
 
 The remaining adapter work is explicit:
 
-| Example | HMEM work still required |
-| --- | --- |
-| NIXL | Validate experimental CUDA registration and receiver visibility acknowledgements on hardware; add other device runtimes and DMA-BUF. |
-| Monarch | Carry GPU allocation identity through the Rust/C++ registration boundary and retain its keepalive through retirement and visibility completion. |
-| Open MPI | Enable accelerator dependencies, retain MTL device registrations and descriptors in the Loom bridge, and validate matching/packing with device buffers. |
-| NCCL | Validate the experimental CUDA path on hardware and with NCCL collectives; add DMA-BUF and other supported registration/visibility profiles. |
-| AWS OFI NCCL / NVSHMEM | Create the consumer integrations and apply the same registration, lifetime, progress, and visibility contracts. |
+| Example                | HMEM work still required                                                                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NIXL                   | Validate experimental CUDA registration and receiver visibility acknowledgements on hardware; add other device runtimes and DMA-BUF.                    |
+| Monarch                | Carry GPU allocation identity through the Rust/C++ registration boundary and retain its keepalive through retirement and visibility completion.         |
+| Open MPI               | Enable accelerator dependencies, retain MTL device registrations and descriptors in the Loom bridge, and validate matching/packing with device buffers. |
+| NCCL                   | Validate the experimental CUDA path on hardware and with NCCL collectives; add DMA-BUF and other supported registration/visibility profiles.            |
+| AWS OFI NCCL / NVSHMEM | Create the consumer integrations and apply the same registration, lifetime, progress, and visibility contracts.                                         |
 
 For every adapter, native transfer completion and GPU visibility are distinct
 requirements. GPU acceptance must allocate actual device memory, transfer it,

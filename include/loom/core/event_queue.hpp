@@ -59,12 +59,12 @@ enum class event_type : std::uint32_t {
  */
 struct fabric_event : event_base<fabric_event> {
     event_type type{event_type::unknown};  ///< The event type
-    void* fid{nullptr};         ///< Associated fabric identifier
-    void* context{nullptr};     ///< User context pointer
-    std::error_code error;      ///< Error code if event indicates failure
-    std::uint64_t data{0};      ///< Event-specific data
-    std::pmr::vector<std::byte> info;  ///< Owned connection data or provider error detail
-    std::size_t info_len{0};    ///< Length of info data
+    void* fid{nullptr};                    ///< Associated fabric identifier
+    void* context{nullptr};                ///< User context pointer
+    std::error_code error;                 ///< Error code if event indicates failure
+    std::uint64_t data{0};                 ///< Event-specific data
+    std::pmr::vector<std::byte> info;      ///< Owned connection data or provider error detail
+    std::size_t info_len{0};               ///< Length of info data
 
     /// Incoming connection metadata, usable with endpoint::create. Event copies
     /// share ownership; the queue's memory resource must outlive every copy.
