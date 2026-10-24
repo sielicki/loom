@@ -150,16 +150,16 @@
       "locked": {
         "lastModified": 1791494160,
         "narHash": "sha256-acy6NyT5cnaR/qXDygVJA7hA2e1hGMybhlsXHtTu51Q=",
-        "owner": "NVIDIA",
-        "repo": "nccl",
+        "ref": "refs/heads/master",
         "rev": "3e46c089f4ae4732722a419eb6096aead7e47a30",
-        "type": "github"
+        "revCount": 1589,
+        "type": "git",
+        "url": "https://github.com/NVIDIA/nccl.git"
       },
       "original": {
-        "owner": "NVIDIA",
-        "repo": "nccl",
         "rev": "3e46c089f4ae4732722a419eb6096aead7e47a30",
-        "type": "github"
+        "type": "git",
+        "url": "https://github.com/NVIDIA/nccl.git"
       }
     },
     "nixl-src": {

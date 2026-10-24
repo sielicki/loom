@@ -18,7 +18,7 @@
       flake = false;
     };
     nccl-src = {
-      url = "github:NVIDIA/nccl/3e46c089f4ae4732722a419eb6096aead7e47a30";
+      url = "git+https://github.com/NVIDIA/nccl.git?rev=3e46c089f4ae4732722a419eb6096aead7e47a30";
       flake = false;
     };
     openmpi-src = {

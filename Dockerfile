@@ -20,15 +20,29 @@ RUN dnf install -y \
     automake \
     libtool \
     make \
+    patch \
     libuuid-devel \
     git \
     && dnf clean all
 
 # Fedora's packaged libfabric lags Loom's minimum. Build the same upstream
-# release as the Nix flake, and verify the tag resolves to its pinned commit.
+# release and provider fixes as the Nix flake.
+COPY nix/pkgs/libfabric/*.patch /tmp/libfabric-patches/
+
 RUN git clone --depth 1 --branch v2.7.0 https://github.com/ofiwg/libfabric.git /tmp/libfabric \
     && test "$(git -C /tmp/libfabric rev-parse HEAD)" = 9011331bb34bb90b38a7aad53857df4430c5db45 \
     && cd /tmp/libfabric \
+    && for name in \
+        name-server-cleanup \
+        psm3-endpoint-cleanup \
+        psm3-discovery-cleanup \
+        sockets-probe-metadata \
+        sockets-cm-metadata \
+        sockets-unified-progress \
+        sockets-receive-cleanup \
+        srx-probe-metadata \
+        discovery-copy-ownership \
+        cuda-device-ordinal; do patch -p1 < "/tmp/libfabric-patches/$name.patch"; done \
     && ./autogen.sh \
     && ./configure --prefix=/usr/local --libdir=/usr/local/lib64 --disable-static \
     && make -j"$(nproc)" \
