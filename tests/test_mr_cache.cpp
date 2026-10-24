@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "joining_thread.hpp"
 #include "mock_domain.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -332,7 +333,7 @@ TEST_CASE("concurrent cache hits retain exact statistics", "[mr_cache]") {
     auto registration = lookup();
     REQUIRE(registration);
     {
-        std::vector<std::jthread> threads;
+        std::vector<loom::test::joining_thread> threads;
         for (int i = 0; i < 4; ++i) {
             threads.emplace_back([&] {
                 for (int j = 0; j < 1000; ++j) {
@@ -361,7 +362,7 @@ TEST_CASE("concurrent cache misses publish one registration", "[mr_cache][concur
     std::barrier ready{static_cast<std::ptrdiff_t>(count)};
     std::atomic<bool> failed{};
     {
-        std::vector<std::jthread> threads;
+        std::vector<loom::test::joining_thread> threads;
         for (std::size_t index = 0; index < count; ++index) {
             threads.emplace_back([&, index] {
                 ready.arrive_and_wait();
@@ -415,7 +416,7 @@ TEST_CASE("cache reuse and release race invalidation without losing registration
     std::barrier ready{workers + 1};
     std::atomic<bool> failed{};
     {
-        std::vector<std::jthread> threads;
+        std::vector<loom::test::joining_thread> threads;
         for (int worker = 0; worker < workers; ++worker) {
             threads.emplace_back([&, worker] {
                 ready.arrive_and_wait();
@@ -883,7 +884,7 @@ TEST_CASE("last handle release can race cache invalidation and eviction",
         auto registration = cache.lookup(buffer, mr_access_flags::send);
         REQUIRE(registration);
         std::barrier ready{2};
-        std::jthread release([handle = std::move(*registration), &ready]() mutable {
+        loom::test::joining_thread release([handle = std::move(*registration), &ready]() mutable {
             ready.arrive_and_wait();
             handle = {};
         });

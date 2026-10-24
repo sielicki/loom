@@ -8,6 +8,7 @@
 #include <thread>
 #include <utility>
 
+#include "joining_thread.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/generators/catch_generators_range.hpp>
@@ -306,7 +307,7 @@ TEST_CASE("selective reads do not block behind a native waiter", "[completion_qu
     loom::completion_queue queue{loom::detail::make_pmr_unique<loom::detail::completion_queue_impl>(
         loom::get_default_resource(), &native.handle, loom::runtime_progress_policy{}, true)};
     std::optional<loom::completion_event> completed;
-    std::jthread waiter{[&] { completed = queue.wait().value(); }};
+    loom::test::joining_thread waiter{[&] { completed = queue.wait().value(); }};
     native.entered.wait(false);
     const auto selected = queue.read_for(loom::context_ptr<void>{&native.context});
     CHECK(!selected);

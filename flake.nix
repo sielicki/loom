@@ -18,7 +18,9 @@
       flake = false;
     };
     nccl-src = {
-      url = "github:NVIDIA/nccl/3e46c089f4ae4732722a419eb6096aead7e47a30";
+      # The GitHub fetcher and codeload can produce different export-subst
+      # newlines in nccl4py/.git_archival.txt for this commit.
+      url = "tarball+https://codeload.github.com/NVIDIA/nccl/tar.gz/3e46c089f4ae4732722a419eb6096aead7e47a30";
       flake = false;
     };
     openmpi-src = {

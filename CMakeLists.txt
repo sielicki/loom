@@ -237,7 +237,7 @@ if(LOOM_USE_STDEXEC)
         FetchContent_Declare(
             stdexec
             GIT_REPOSITORY https://github.com/NVIDIA/stdexec.git
-            GIT_TAG        a1c78ecfc2cdc38d5f435c688036955d1e18117d
+            GIT_TAG        8398d5a547b2ce1c5168336a9123cce8be9ab7f6
         )
 
         set(STDEXEC_BUILD_TESTS OFF CACHE BOOL "" FORCE)

@@ -6,13 +6,13 @@
 }:
 stdenv.mkDerivation rec {
   pname = "stdexec";
-  version = "0-unstable-2025-12-31";
+  version = "0-unstable-2026-10-20";
 
   src = fetchFromGitHub {
     owner = "NVIDIA";
     repo = "stdexec";
-    rev = "a1c78ecfc2cdc38d5f435c688036955d1e18117d";
-    hash = "sha256-NMVw3nIZF3rUEndpkJ45H9aBXPQ1YZXmIL1poHMGaMA=";
+    rev = "8398d5a547b2ce1c5168336a9123cce8be9ab7f6";
+    hash = "sha256-Pz8ECdQSJZMLWsOEFqNdAG0kkCWUmZSpY80YLdkqZU4=";
   };
 
   nativeBuildInputs = [ cmake ];
