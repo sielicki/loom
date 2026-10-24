@@ -9,6 +9,7 @@
 #include <random>
 #include <thread>
 
+#include "joining_thread.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 namespace {
@@ -191,9 +192,9 @@ TEST_CASE("separate completion registrations support concurrent progress", "[cq]
     queue_fixture fixture;
     std::atomic<int> calls{};
     std::atomic<bool> valid{true};
-    std::array<std::jthread, 4> workers;
+    std::array<loom::test::joining_thread, 4> workers;
     for (auto& worker : workers) {
-        worker = std::jthread{[&] {
+        worker = loom::test::joining_thread{[&] {
             for (int i = 0; i < 256; ++i) {
                 fi_context2 context{};
                 loom::completion_registration registration;

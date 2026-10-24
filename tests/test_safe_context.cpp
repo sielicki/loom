@@ -2,6 +2,7 @@
 #include <loom/core/safe_context.hpp>
 
 #include <algorithm>
+
 #include <catch2/catch_test_macros.hpp>
 
 TEST_CASE("provider context writes preserve application metadata", "[context]") {

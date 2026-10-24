@@ -17,7 +17,7 @@ namespace loom::detail {
 
 /// @brief Internal implementation of the counter.
 struct counter_impl {
-    ::fid_cntr* cntr{nullptr};  ///< Underlying libfabric counter handle.
+    ::fid_cntr* cntr{nullptr};   ///< Underlying libfabric counter handle.
     std::uint64_t threshold{1};  ///< Configured threshold for waits and checks.
     bool wait_enabled{false};    ///< Whether creation requested a native wait object.
     std::uint64_t max_value{std::numeric_limits<std::uint64_t>::max()};

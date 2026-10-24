@@ -6,6 +6,7 @@
 #include <barrier>
 #include <thread>
 
+#include "joining_thread.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 namespace {
@@ -109,9 +110,9 @@ TEST_CASE("const fabric iterators share stable entries across threads", "[fabric
     std::array<std::array<const loom::fabric_info*, 3>, 8> entries{};
     std::barrier ready{8};
     {
-        std::array<std::jthread, 8> threads;
+        std::array<loom::test::joining_thread, 8> threads;
         for (std::size_t i = 0; i < threads.size(); ++i) {
-            threads[i] = std::jthread([&, i] {
+            threads[i] = loom::test::joining_thread([&, i] {
                 ready.arrive_and_wait();
                 auto cursor = info.begin();
                 for (auto& entry : entries[i]) {

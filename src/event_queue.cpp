@@ -17,8 +17,6 @@
 
 namespace loom {
 
-
-
 event_queue::event_queue() = default;
 
 event_queue::event_queue(impl_ptr impl) noexcept : impl_(std::move(impl)) {}
