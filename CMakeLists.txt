@@ -242,6 +242,8 @@ if(LOOM_USE_STDEXEC)
 
         set(STDEXEC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(STDEXEC_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        # loom::execution exports this target for installed consumers.
+        set(STDEXEC_INSTALL ON CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(stdexec)
         set(LOOM_HAS_STDEXEC ON)
         # stdexec's CMake exports STDEXEC::stdexec when built via FetchContent
