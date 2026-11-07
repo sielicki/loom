@@ -5,6 +5,9 @@
 #include <rdma/fi_cm.h>
 #include <rdma/fi_endpoint.h>
 
+#include <optional>
+#include <utility>
+
 #include "loom/core/address_vector.hpp"
 #include "loom/core/allocator.hpp"
 #include "loom/core/domain.hpp"
@@ -30,8 +33,11 @@ struct scalable_endpoint_impl {
     caps capabilities{};
     std::uint64_t tx_op_flags{};
     std::uint64_t rx_op_flags{};
+    std::uint64_t mode{};
     ::fid_domain* origin_domain{};
     endpoint_iov_limits iov_limits{};
+    std::optional<::fi_tx_attr> tx_attributes;
+    std::optional<::fi_rx_attr> rx_attributes;
 
     /// @brief Default constructor.
     scalable_endpoint_impl() = default;
@@ -48,6 +54,9 @@ struct scalable_endpoint_impl {
     /// @param tx_op_flags_ Native transmit flags from the creation attributes.
     /// @param rx_op_flags_ Native receive flags from the creation attributes.
     /// @param limits Negotiated vector counts; omit only when no vector I/O is used.
+    /// @param transmit Native transmit defaults to copy, if available.
+    /// @param receive Native receive defaults to copy, if available.
+    /// @param mode_ Operational mode inherited from the negotiated endpoint.
     scalable_endpoint_impl(::fid_ep* sep_,
                            std::size_t tx_cnt,
                            std::size_t rx_cnt,
@@ -59,11 +68,15 @@ struct scalable_endpoint_impl {
                            std::uint64_t tx_op_flags_ = 0,
                            std::uint64_t rx_op_flags_ = 0,
                            ::fid_domain* origin = nullptr,
-                           endpoint_iov_limits limits = {})
+                           endpoint_iov_limits limits = {},
+                           const ::fi_tx_attr* transmit = nullptr,
+                           const ::fi_rx_attr* receive = nullptr,
+                           std::uint64_t mode_ = 0)
         : sep(sep_), tx_ctx_cnt(tx_cnt), rx_ctx_cnt(rx_cnt), type(type_), addr_format(format),
           max_msg_size(max_msg_size_), inject_size(inject_size_), capabilities(capabilities_),
-          tx_op_flags(tx_op_flags_), rx_op_flags(rx_op_flags_), origin_domain(origin),
-          iov_limits(limits) {}
+          tx_op_flags(tx_op_flags_), rx_op_flags(rx_op_flags_), mode(mode_), origin_domain(origin),
+          iov_limits(limits), tx_attributes(transmit ? std::optional{*transmit} : std::nullopt),
+          rx_attributes(receive ? std::optional{*receive} : std::nullopt) {}
 
     /// @brief Destructor that closes the libfabric scalable endpoint.
     ~scalable_endpoint_impl() {
@@ -146,7 +159,10 @@ auto scalable_endpoint::create(const domain& dom,
             tx_flags,
             rx_flags,
             dom_ptr,
-            detail::from_fi_iov_limits(*info_ptr));
+            detail::from_fi_iov_limits(*info_ptr),
+            info_ptr->tx_attr,
+            info_ptr->rx_attr,
+            info_ptr->mode);
         (void)pending.release();
         return scalable_endpoint{std::move(impl)};
     }
@@ -165,7 +181,10 @@ auto scalable_endpoint::create(const domain& dom,
         tx_flags,
         rx_flags,
         dom_ptr,
-        detail::from_fi_iov_limits(*info_ptr));
+        detail::from_fi_iov_limits(*info_ptr),
+        info_ptr->tx_attr,
+        info_ptr->rx_attr,
+        info_ptr->mode);
     (void)pending.release();
     return scalable_endpoint{std::move(impl)};
 }
@@ -218,70 +237,159 @@ auto scalable_endpoint::get_local_address() const -> result<address> {
         impl_->addr_format);
 }
 
+auto scalable_endpoint::tx_context_attributes() const -> result<::fi_tx_attr> {
+    if (!impl_valid()) {
+        return make_error_result<::fi_tx_attr>(errc::invalid_argument);
+    }
+    if (!impl_->tx_attributes) {
+        return make_error_result<::fi_tx_attr>(errc::not_supported);
+    }
+    return *impl_->tx_attributes;
+}
+
+auto scalable_endpoint::rx_context_attributes() const -> result<::fi_rx_attr> {
+    if (!impl_valid()) {
+        return make_error_result<::fi_rx_attr>(errc::invalid_argument);
+    }
+    if (!impl_->rx_attributes) {
+        return make_error_result<::fi_rx_attr>(errc::not_supported);
+    }
+    return *impl_->rx_attributes;
+}
+
 auto scalable_endpoint::tx_context(std::size_t index) -> result<endpoint> {
+    return create_tx_context(index, nullptr);
+}
+
+auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
+    return create_rx_context(index, nullptr);
+}
+
+auto scalable_endpoint::tx_context(std::size_t index, ::fi_tx_attr& attributes)
+    -> result<endpoint> {
+    auto native = attributes;
+    auto context = create_tx_context(index, &native);
+    if (context) {
+        attributes = native;
+    }
+    return context;
+}
+
+auto scalable_endpoint::rx_context(std::size_t index, ::fi_rx_attr& attributes)
+    -> result<endpoint> {
+    auto native = attributes;
+    auto context = create_rx_context(index, &native);
+    if (context) {
+        attributes = native;
+    }
+    return context;
+}
+
+auto scalable_endpoint::create_tx_context(std::size_t index, ::fi_tx_attr* attributes)
+    -> result<endpoint> {
     if (!impl_ || !impl_->sep) {
         return make_error_result<endpoint>(errc::invalid_argument);
     }
 
-    if (index >= impl_->tx_ctx_cnt) {
+    if (!std::in_range<int>(index) || index >= impl_->tx_ctx_cnt) {
         return make_error_result<endpoint>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->sep->ops, fi_ops_ep, tx_ctx)) {
+        return make_error_result<endpoint>(errc::not_supported);
+    }
+
+    const auto requested_mode = attributes             ? attributes->mode
+                                : impl_->tx_attributes ? impl_->tx_attributes->mode
+                                                       : 0ULL;
+    if ((impl_->mode | requested_mode) & FI_ASYNC_IOV) {
+        return make_error_result<endpoint>(errc::not_supported);
+    }
+
     ::fid_ep* tx_ep = nullptr;
-    int ret = ::fi_tx_context(impl_->sep, static_cast<int>(index), nullptr, &tx_ep, nullptr);
+    int ret = ::fi_tx_context(impl_->sep, static_cast<int>(index), attributes, &tx_ep, nullptr);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<endpoint>(-ret);
     }
 
     detail::unique_fid<::fid_ep> pending{tx_ep};
+    if (attributes && (attributes->mode & FI_ASYNC_IOV)) {
+        return make_error_result<endpoint>(errc::not_supported);
+    }
+    auto limits = impl_->iov_limits;
+    if (attributes) {
+        limits.transmit = attributes->iov_limit;
+        limits.rma = attributes->rma_iov_limit;
+    }
 
     auto* resource = std::pmr::get_default_resource();
-    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
-                                                                  tx_ep,
-                                                                  impl_->type,
-                                                                  impl_->addr_format,
-                                                                  impl_->max_msg_size,
-                                                                  impl_->inject_size,
-                                                                  impl_->capabilities,
-                                                                  impl_->tx_op_flags,
-                                                                  impl_->rx_op_flags,
-                                                                  impl_->origin_domain,
-                                                                  impl_->iov_limits);
+    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
+        resource,
+        tx_ep,
+        impl_->type,
+        impl_->addr_format,
+        impl_->max_msg_size,
+        attributes ? attributes->inject_size : impl_->inject_size,
+        attributes ? detail::from_fi_caps(attributes->caps) : impl_->capabilities,
+        attributes ? attributes->op_flags : impl_->tx_op_flags,
+        impl_->rx_op_flags,
+        impl_->origin_domain,
+        limits);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }
 
-auto scalable_endpoint::rx_context(std::size_t index) -> result<endpoint> {
+auto scalable_endpoint::create_rx_context(std::size_t index, ::fi_rx_attr* attributes)
+    -> result<endpoint> {
     if (!impl_ || !impl_->sep) {
         return make_error_result<endpoint>(errc::invalid_argument);
     }
 
-    if (index >= impl_->rx_ctx_cnt) {
+    if (!std::in_range<int>(index) || index >= impl_->rx_ctx_cnt) {
         return make_error_result<endpoint>(errc::invalid_argument);
     }
 
+    if (!FI_CHECK_OP(impl_->sep->ops, fi_ops_ep, rx_ctx)) {
+        return make_error_result<endpoint>(errc::not_supported);
+    }
+
+    const auto requested_mode = attributes             ? attributes->mode
+                                : impl_->rx_attributes ? impl_->rx_attributes->mode
+                                                       : 0ULL;
+    if ((impl_->mode | requested_mode) & FI_ASYNC_IOV) {
+        return make_error_result<endpoint>(errc::not_supported);
+    }
+
     ::fid_ep* rx_ep = nullptr;
-    int ret = ::fi_rx_context(impl_->sep, static_cast<int>(index), nullptr, &rx_ep, nullptr);
+    int ret = ::fi_rx_context(impl_->sep, static_cast<int>(index), attributes, &rx_ep, nullptr);
 
     if (ret != 0) {
         return make_error_result_from_fi_errno<endpoint>(-ret);
     }
 
     detail::unique_fid<::fid_ep> pending{rx_ep};
+    if (attributes && (attributes->mode & FI_ASYNC_IOV)) {
+        return make_error_result<endpoint>(errc::not_supported);
+    }
+    auto limits = impl_->iov_limits;
+    if (attributes) {
+        limits.receive = attributes->iov_limit;
+    }
 
     auto* resource = std::pmr::get_default_resource();
-    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(resource,
-                                                                  rx_ep,
-                                                                  impl_->type,
-                                                                  impl_->addr_format,
-                                                                  impl_->max_msg_size,
-                                                                  0UZ,
-                                                                  impl_->capabilities,
-                                                                  impl_->tx_op_flags,
-                                                                  impl_->rx_op_flags,
-                                                                  impl_->origin_domain,
-                                                                  impl_->iov_limits);
+    auto ep_impl = detail::make_pmr_unique<detail::endpoint_impl>(
+        resource,
+        rx_ep,
+        impl_->type,
+        impl_->addr_format,
+        impl_->max_msg_size,
+        0UZ,
+        attributes ? detail::from_fi_caps(attributes->caps) : impl_->capabilities,
+        impl_->tx_op_flags,
+        attributes ? attributes->op_flags : impl_->rx_op_flags,
+        impl_->origin_domain,
+        limits);
     (void)pending.release();
     return endpoint{std::move(ep_impl)};
 }

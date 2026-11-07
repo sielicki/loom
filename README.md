@@ -400,6 +400,27 @@ The count fields reject libfabric's shared-context sentinel; use the shared
 receive flag to request an SRX. Close all child contexts before destroying
 their scalable endpoint.
 
+Contexts opened with just an index inherit the parent defaults. To configure
+one context, copy `sep.tx_context_attributes()` or `rx_context_attributes()`
+and pass the modified native attribute struct to the corresponding overload:
+
+```cpp
+auto attributes = sep.tx_context_attributes().value();
+attributes.iov_limit = 1;
+attributes.size = 64;
+auto tx = sep.tx_context(0, attributes).value();
+// attributes now contains the provider's returned values.
+```
+
+The direction-specific overloads accept `fi_tx_attr&` and `fi_rx_attr&`,
+preserving all native fields, including modes, ordering and traffic class.
+On failure the supplied struct is unchanged. The created context uses the
+returned capabilities, default operation flags, injection limit and vector
+limits; the parent defaults remain unchanged. Support for overrides depends
+on the provider. `FI_ASYNC_IOV` is rejected, including when inherited from the
+endpoint, because Loom constructs temporary descriptor arrays during submission.
+Close each child before its parent.
+
 Use `sep.get_local_address()` to obtain the parent's typed address for
 peer exchange after any provider-required binding and enablement. It
 preserves socket and opaque provider formats and propagates native errors.
