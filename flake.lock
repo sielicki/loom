@@ -145,19 +145,6 @@
         "type": "github"
       }
     },
-    "nccl-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1791494160,
-        "narHash": "sha256-poDpCHTIB0j/0ItrDMfG8Wgf9m05RJgL0U+N0ihvdN4=",
-        "type": "tarball",
-        "url": "https://codeload.github.com/NVIDIA/nccl/tar.gz/3e46c089f4ae4732722a419eb6096aead7e47a30"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://codeload.github.com/NVIDIA/nccl/tar.gz/3e46c089f4ae4732722a419eb6096aead7e47a30"
-      }
-    },
     "nixl-src": {
       "flake": false,
       "locked": {
@@ -264,7 +251,6 @@
         "monarch-rdma-src": "monarch-rdma-src",
         "monarch-src": "monarch-src",
         "mpi-standard-src": "mpi-standard-src",
-        "nccl-src": "nccl-src",
         "nixl-src": "nixl-src",
         "nixpkgs": "nixpkgs",
         "openmpi-oac-src": "openmpi-oac-src",

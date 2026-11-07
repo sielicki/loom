@@ -17,12 +17,6 @@
       url = "github:ai-dynamo/nixl/b69182fe73ac64221dcdbeeee744161f76006dda";
       flake = false;
     };
-    nccl-src = {
-      # The GitHub fetcher and codeload can produce different export-subst
-      # newlines in nccl4py/.git_archival.txt for this commit.
-      url = "tarball+https://codeload.github.com/NVIDIA/nccl/tar.gz/3e46c089f4ae4732722a419eb6096aead7e47a30";
-      flake = false;
-    };
     openmpi-src = {
       url = "github:open-mpi/ompi/873cd3a294c7194a5f88937de36d5bc0b1c18d88";
       flake = false;
@@ -407,7 +401,11 @@
             // pkgs.lib.optionalAttrs (!isDarwin) {
               nccl-plugin-sdk = pkgs.callPackage ./examples/nccl/sdk.nix {
                 stdenv = pkgs.gcc15Stdenv;
-                src = inputs.nccl-src;
+                src = pkgs.fetchgit {
+                  url = "https://github.com/NVIDIA/nccl.git";
+                  rev = "3e46c089f4ae4732722a419eb6096aead7e47a30";
+                  hash = "sha256-0N9UlLEyyK/6EQqXaG0xmmkt8FrIdXEPlmJg51z9xs4=";
+                };
                 cudaPackages = (import nixpkgs {
                   inherit system;
                   config.allowUnfree = true;
@@ -749,7 +747,7 @@
             // pkgs.lib.optionalAttrs (!isDarwin) {
               nccl-plugin = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
                 packages = [ self'.packages.loom self'.packages.nccl-plugin-sdk self'.packages.nccl-plugin-sdk.cudaCompiler pkgs.cmake pkgs.ninja pkgs.pkg-config ];
-                NCCL_SOURCE = inputs.nccl-src;
+                NCCL_SOURCE = self'.packages.nccl-plugin-sdk.src;
               };
               openmpi-consumer = pkgs.mkShell.override { stdenv = pkgs.gcc15Stdenv; } {
                 inputsFrom = [ self'.packages.openmpi-consumer ];
