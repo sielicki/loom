@@ -62,7 +62,7 @@ struct cq_error_info {
     /// Owned immutable diagnostic bytes, shared by copies of the event.
     /// The queue's memory resource must outlive all retaining events.
     std::shared_ptr<const std::byte[]> err_data{};
-    std::size_t err_data_size{0};  ///< Size of error data in bytes
+    std::size_t err_data_size{0};    ///< Size of error data in bytes
     std::size_t overflow_length{0};  ///< Received bytes discarded by truncation (native olen)
     /// True when a native CQ error entry supplied these fields. Queue read
     /// failures have no entry, even when their generic error code is nonzero.
@@ -135,9 +135,9 @@ enum class cq_format {
  * @brief Attributes for creating a completion queue.
  */
 struct completion_queue_attr {
-    queue_size size{1024UL};  ///< Number of entries in the queue
-    std::uint64_t flags{0};   ///< Creation flags
-    bool wait_obj{false};     ///< Enable blocking wait support
+    queue_size size{1024UL};              ///< Number of entries in the queue
+    std::uint64_t flags{0};               ///< Creation flags
+    bool wait_obj{false};                 ///< Enable blocking wait support
     cq_format format{cq_format::tagged};  ///< Native completion entry layout
     /// Use native source-address reads. Bound endpoints must negotiate FI_SOURCE
     /// to report peer addresses; unavailable addresses remain unspecified.

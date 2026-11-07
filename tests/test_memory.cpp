@@ -455,13 +455,15 @@ TEST_CASE("parallel registrations reserve distinct live keys", "[memory][mr_keys
     std::array<std::byte, 64> buffer{};
     std::array<result<memory_region>, 64> regions;
     {
-        std::vector<std::jthread> workers;
+        std::vector<std::thread> workers;
         for (auto& region : regions) {
             workers.emplace_back([&provider, &buffer, &region] {
                 region =
                     memory_region::register_memory(provider.dom, buffer, mr_access_flags::read);
             });
         }
+        for (auto& worker : workers)
+            worker.join();
     }
     for (const auto& region : regions)
         REQUIRE(region);

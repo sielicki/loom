@@ -13,7 +13,7 @@ stdenv.mkDerivation {
   version = "0.1.0";
   src = lib.fileset.toSource {
     root = ../.;
-    fileset = lib.fileset.unions [ ./CMakeLists.txt ./backend.cpp ./workload.cpp ./test-contract.cpp ./gpu-workload.cpp ../hmem/cuda.hpp ../hmem/test-cuda.cpp ../hmem/cuda-workload.hpp ../hmem/visibility.ptx ];
+    fileset = lib.fileset.unions [ ./CMakeLists.txt ./backend.cpp ./workload.cpp ./test-contract.cpp ./test-shutdown.cpp ./gpu-workload.cpp ../hmem/cuda.hpp ../hmem/test-cuda.cpp ../hmem/cuda-workload.hpp ../hmem/visibility.ptx ];
   };
   sourceRoot = "source/nixl";
   nativeBuildInputs = [ cmake ninja pkg-config makeWrapper cudaPackages.cuda_nvcc ];

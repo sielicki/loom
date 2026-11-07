@@ -1,31 +1,29 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
-#include <assert.h>
-#include <stdio.h>
-
 #include <rdma/fabric.h>
 #include <rdma/fi_errno.h>
 
+#include <assert.h>
+#include <stdio.h>
+
 struct mock_nic {
     struct fid_nic nic;
-    struct mock_nic *copy;
+    struct mock_nic* copy;
     unsigned int closes;
     int copy_error;
 };
 
-static int close_nic(struct fid *fid)
-{
-    struct mock_nic *nic = fid->context;
+static int close_nic(struct fid* fid) {
+    struct mock_nic* nic = fid->context;
     ++nic->closes;
     return 0;
 }
 
-static int copy_nic(struct fid *fid, int command, void *output)
-{
-    struct mock_nic *nic = fid->context;
+static int copy_nic(struct fid* fid, int command, void* output) {
+    struct mock_nic* nic = fid->context;
     assert(command == FI_DUP);
     if (nic->copy_error)
         return nic->copy_error;
-    *(struct fid_nic **) output = &nic->copy->nic;
+    *(struct fid_nic**)output = &nic->copy->nic;
     return 0;
 }
 
@@ -35,12 +33,11 @@ static struct fi_ops nic_ops = {
     .control = copy_nic,
 };
 
-static void check_copy(int error)
-{
+static void check_copy(int error) {
     struct mock_nic copy = {0};
     struct mock_nic source = {.copy = &copy, .copy_error = error};
-    struct fi_info *info = fi_allocinfo();
-    struct fi_info *duplicate;
+    struct fi_info* info = fi_allocinfo();
+    struct fi_info* duplicate;
     assert(info);
     source.nic.fid.context = &source;
     source.nic.fid.ops = &nic_ops;
@@ -64,8 +61,7 @@ static void check_copy(int error)
     assert(source.closes == 1);
 }
 
-int main(void)
-{
+int main(void) {
     check_copy(-FI_EIO);
     check_copy(-FI_ENOMEM);
     check_copy(0);

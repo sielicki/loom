@@ -4,6 +4,7 @@
 #include <rdma/fabric.h>
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -27,7 +28,7 @@ struct safe_context {
 };
 
 static_assert(std::is_standard_layout_v<safe_context>);
-static_assert(std::is_pointer_interconvertible_with_class(&safe_context::provider));
+static_assert(offsetof(safe_context, provider) == 0);
 
 template <typename T>
 void store_safe_context(safe_context& ctx, T* ptr) noexcept {

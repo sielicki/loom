@@ -22,14 +22,16 @@ struct opening_provider {
     int open_error{};
 
     template <typename Native>
+    static auto close_handle(fid* handle) -> int {
+        ++static_cast<opening_provider*>(handle->context)->closed;
+        delete reinterpret_cast<Native*>(handle);
+        return 0;
+    }
+
+    template <typename Native>
     inline static fi_ops lifetime_ops{
         .size = sizeof(fi_ops),
-        .close =
-            [](fid* handle) {
-                ++static_cast<opening_provider*>(handle->context)->closed;
-                delete reinterpret_cast<Native*>(handle);
-                return 0;
-            },
+        .close = &close_handle<Native>,
     };
     template <typename Native>
     auto open(Native** output) -> int {

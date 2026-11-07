@@ -18,7 +18,9 @@
       flake = false;
     };
     nccl-src = {
-      url = "github:NVIDIA/nccl/3e46c089f4ae4732722a419eb6096aead7e47a30";
+      # The GitHub fetcher and codeload can produce different export-subst
+      # newlines in nccl4py/.git_archival.txt for this commit.
+      url = "tarball+https://codeload.github.com/NVIDIA/nccl/tar.gz/3e46c089f4ae4732722a419eb6096aead7e47a30";
       flake = false;
     };
     openmpi-src = {
@@ -86,7 +88,7 @@
           ]);
 
           # Retain provider packaging while pinning the upstream stable source.
-          libfabric = (inputs'.libfabric.packages.default.override {
+          libfabric = (inputs'.libfabric.packages.default.override ({
             version = "2.7.0";
             src = inputs.libfabric-src;
             # OPX with GPU support requires vendor HFI1 kernel headers.
@@ -111,7 +113,16 @@
                   --replace-fail 'VN=$(./git-version)' 'VN=${old.version}'
               '';
             });
-          }).overrideAttrs (old: {
+          } // lib.optionalAttrs isDarwin {
+            # callPackage fills optional Linux dependencies even on Darwin.
+            numactl = null;
+            libnl = null;
+            rdma-core = null;
+            liburing = null;
+            lttng-ust = null;
+            libpsm2 = null;
+            valgrind = null;
+          })).overrideAttrs (old: {
             patches = (old.patches or [ ]) ++ [
               ./nix/pkgs/libfabric/name-server-cleanup.patch
               ./nix/pkgs/libfabric/psm3-endpoint-cleanup.patch

@@ -326,8 +326,8 @@ public:
     [[nodiscard]] static constexpr auto requires_staging() noexcept -> bool { return false; }
 
 private:
-    domain* domain_;                                        ///< Fabric domain reference
-    std::optional<memory_region> staging_mr_;               ///< Optional staging memory region
+    domain* domain_;                           ///< Fabric domain reference
+    std::optional<memory_region> staging_mr_;  ///< Optional staging memory region
 };
 
 /**

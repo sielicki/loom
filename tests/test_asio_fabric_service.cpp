@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "joining_thread.hpp"
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -218,9 +219,9 @@ TEST_CASE("fabric_service creation is safe across threads", "[asio][fabric_servi
         std::array<std::exception_ptr, 8> errors{};
         std::barrier ready{8};
         {
-            std::array<std::jthread, 8> threads;
+            std::array<loom::test::joining_thread, 8> threads;
             for (std::size_t i = 0; i < threads.size(); ++i) {
-                threads[i] = std::jthread{[&, i] {
+                threads[i] = loom::test::joining_thread{[&, i] {
                     ready.arrive_and_wait();
                     try {
                         services[i] = &loom::asio::fabric_service::use(ioc);
@@ -554,11 +555,11 @@ TEST_CASE("Asio deregistration waits for an in-flight queue read", "[asio][fabri
     };
     service.register_cq(native.queue);
     std::size_t count{};
-    std::jthread poller{[&] { count = service.poll_once(); }};
+    loom::test::joining_thread poller{[&] { count = service.poll_once(); }};
     reading.wait();
     std::promise<std::optional<loom::completion_event>> result;
     auto removed = result.get_future();
-    std::jthread remover{[&] {
+    loom::test::joining_thread remover{[&] {
         removing.count_down();
         result.set_value(service.deregister_cq(native.queue));
     }};
@@ -861,7 +862,7 @@ TEST_CASE("Asio polling stays stopped after concurrent timer restarts", "[asio][
     };
     service.register_cq(native.queue, {.poll_interval = 0us});
     auto work = ::asio::make_work_guard(ioc);
-    std::jthread runner{[&] { ioc.run(); }};
+    loom::test::joining_thread runner{[&] { ioc.run(); }};
     bool stayed_stopped = true;
     for (int iteration = 0; iteration < 64; ++iteration) {
         service.start();
@@ -1289,7 +1290,7 @@ TEST_CASE("Asio FD polling stays stopped across concurrent restarts",
     };
     service.register_cq(native.queue, {.poll_interval = 1h});
     auto work = ::asio::make_work_guard(ioc);
-    std::jthread runner{[&] { ioc.run(); }};
+    loom::test::joining_thread runner{[&] { ioc.run(); }};
     bool stayed_stopped = true;
     for (int iteration = 0; iteration < 64; ++iteration) {
         service.start();

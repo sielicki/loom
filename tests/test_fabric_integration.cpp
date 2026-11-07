@@ -386,6 +386,7 @@ TEST_CASE("endpoint bind to completion queue", "[endpoint][integration]") {
     // Bind CQ to endpoint for both TX and RX
     auto bind_result = ep_result->bind_cq(*cq_result, cq_bind::transmit | cq_bind::recv);
     REQUIRE(static_cast<bool>(bind_result));
+    REQUIRE(ep_result->close());
 }
 
 TEST_CASE("endpoint bind to address vector", "[endpoint][integration]") {
@@ -409,6 +410,7 @@ TEST_CASE("endpoint bind to address vector", "[endpoint][integration]") {
 
     auto bind_result = ep_result->bind_av(*av_result);
     REQUIRE(static_cast<bool>(bind_result));
+    REQUIRE(ep_result->close());
 }
 
 TEST_CASE("endpoint enable after binding", "[endpoint][integration]") {
@@ -441,6 +443,7 @@ TEST_CASE("endpoint enable after binding", "[endpoint][integration]") {
     // Enable endpoint
     auto enable_result = ep_result->enable();
     REQUIRE(static_cast<bool>(enable_result));
+    REQUIRE(ep_result->close());
 }
 
 // =============================================================================

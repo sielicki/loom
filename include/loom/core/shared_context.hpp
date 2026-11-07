@@ -18,8 +18,8 @@
  */
 namespace loom {
 
-class domain;            ///< Forward declaration
-class fabric_info;       ///< Forward declaration
+class domain;       ///< Forward declaration
+class fabric_info;  ///< Forward declaration
 
 /**
  * @namespace detail

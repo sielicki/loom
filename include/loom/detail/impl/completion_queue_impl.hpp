@@ -94,9 +94,9 @@ auto read_cq_entries(fi_cq_format format,
 
 /// @brief Internal implementation of the completion queue.
 struct completion_queue_impl {
-    ::fid_cq* cq{nullptr};               ///< Underlying libfabric completion queue handle.
-    runtime_progress_policy progress{};  ///< Progress policy for the completion queue.
-    bool wait_enabled{false};            ///< Whether a native wait object was requested.
+    ::fid_cq* cq{nullptr};                     ///< Underlying libfabric completion queue handle.
+    runtime_progress_policy progress{};        ///< Progress policy for the completion queue.
+    bool wait_enabled{false};                  ///< Whether a native wait object was requested.
     fi_cq_format format{FI_CQ_FORMAT_TAGGED};  ///< Layout used by native reads.
     std::size_t capacity{};                    ///< Requested minimum queue capacity.
     bool source_addresses{false};              ///< Whether reads capture receive source addresses.

@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include "joining_thread.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -418,7 +419,7 @@ TEST_CASE("event polling progresses while another read is waiting", "[queue][buf
     REQUIRE(queue);
     loom::result<loom::fabric_event> waited =
         loom::make_error_result<loom::fabric_event>(loom::errc::again);
-    std::jthread reader{[&] { waited = queue->wait(std::chrono::seconds{5}); }};
+    loom::test::joining_thread reader{[&] { waited = queue->wait(std::chrono::seconds{5}); }};
     REQUIRE(state.entered.try_acquire_for(std::chrono::seconds{5}));
     // A failed fallback allocation must not release the waiting reader's claim.
     resource.remaining = 0;

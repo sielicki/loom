@@ -222,15 +222,15 @@ struct fabric_hints {
     mode mode_bits{0ULL};                                     ///< Required mode bits
     address_format addr_format{address_format::unspecified};  ///< Preferred address format
     std::optional<endpoint_type> ep_type{
-        endpoint_types::msg};                                 ///< nullopt permits any endpoint type
-    std::optional<std::string_view> fabric_name;              ///< Specific fabric name
-    std::optional<std::string_view> domain_name;              ///< Specific domain name
-    std::optional<std::string_view> provider_name;            ///< Specific provider name
-    std::optional<threading_mode> threading;                  ///< Required threading mode
-    std::optional<progress_mode> control_progress;            ///< Required control progress mode
-    std::optional<progress_mode> data_progress;               ///< Required data progress mode
-    std::optional<mr_mode> memory_region_mode;                ///< Required memory region mode
-    bool shared_receive_context{};                            ///< Request FI_SHARED_CONTEXT for RX
+        endpoint_types::msg};                       ///< nullopt permits any endpoint type
+    std::optional<std::string_view> fabric_name;    ///< Specific fabric name
+    std::optional<std::string_view> domain_name;    ///< Specific domain name
+    std::optional<std::string_view> provider_name;  ///< Specific provider name
+    std::optional<threading_mode> threading;        ///< Required threading mode
+    std::optional<progress_mode> control_progress;  ///< Required control progress mode
+    std::optional<progress_mode> data_progress;     ///< Required data progress mode
+    std::optional<mr_mode> memory_region_mode;      ///< Required memory region mode
+    bool shared_receive_context{};                  ///< Request FI_SHARED_CONTEXT for RX
 };
 
 /**

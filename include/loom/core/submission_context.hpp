@@ -7,6 +7,7 @@
 #include <coroutine>
 #include <functional>
 #include <future>
+#include <memory>
 #include <system_error>
 #include <type_traits>
 #include <utility>
@@ -108,8 +109,53 @@ private:
 
 namespace detail {
 
+#if defined(__cpp_lib_move_only_function) && __cpp_lib_move_only_function >= 202110L
 template <typename Signature>
 using unique_function = std::move_only_function<Signature>;
+#else
+template <typename Signature>
+class unique_function;
+
+template <typename R, typename... Args>
+class unique_function<R(Args...)> {
+    struct callable_base {
+        virtual ~callable_base() = default;
+        virtual R call(Args... args) = 0;
+    };
+
+    template <typename F>
+    struct callable final : callable_base {
+        F function;
+
+        template <typename G>
+        explicit callable(G&& value) : function(std::forward<G>(value)) {}
+
+        R call(Args... args) override { return std::invoke(function, std::forward<Args>(args)...); }
+    };
+
+public:
+    unique_function() noexcept = default;
+
+    template <typename F>
+        requires(!std::same_as<std::decay_t<F>, unique_function> &&
+                 std::is_invocable_r_v<R, std::decay_t<F>&, Args...> &&
+                 std::constructible_from<std::decay_t<F>, F>)
+    unique_function(F&& function)
+        : function_(std::make_unique<callable<std::decay_t<F>>>(std::forward<F>(function))) {}
+
+    unique_function(unique_function&&) noexcept = default;
+    unique_function& operator=(unique_function&&) noexcept = default;
+    unique_function(const unique_function&) = delete;
+    unique_function& operator=(const unique_function&) = delete;
+
+    explicit operator bool() const noexcept { return static_cast<bool>(function_); }
+
+    R operator()(Args... args) { return function_->call(std::forward<Args>(args)...); }
+
+private:
+    std::unique_ptr<callable_base> function_;
+};
+#endif
 
 }  // namespace detail
 
