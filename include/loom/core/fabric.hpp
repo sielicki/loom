@@ -231,6 +231,11 @@ struct fabric_hints {
     std::optional<progress_mode> data_progress;     ///< Required data progress mode
     std::optional<mr_mode> memory_region_mode;      ///< Required memory region mode
     bool shared_receive_context{};                  ///< Request FI_SHARED_CONTEXT for RX
+    /// Requested contexts per endpoint; zero lets discovery select the count.
+    /// Counts cannot contain the native shared-context sentinel. A nonzero RX
+    /// count is incompatible with shared_receive_context.
+    queue_size tx_context_count{0UZ};
+    queue_size rx_context_count{0UZ};
 };
 
 /**

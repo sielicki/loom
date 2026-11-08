@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0-only
 #pragma once
 
+#include <rdma/fabric.h>
+
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
 
+#include "loom/core/address.hpp"
 #include "loom/core/allocator.hpp"
 #include "loom/core/crtp/fabric_object_base.hpp"
 #include "loom/core/endpoint.hpp"
@@ -95,9 +98,27 @@ public:
 
     [[nodiscard]] auto enable() -> void_result;
 
-    [[nodiscard]] auto tx_context(std::size_t index) -> result<endpoint>;
+    /// Returns the parent's address for peer exchange, preserving its native format.
+    /// The provider may require binding and enabling the endpoint first.
+    [[nodiscard]] auto get_local_address() const -> result<address>;
 
+    /// Native defaults captured when this scalable endpoint was created.
+    /// Returned copies can be modified before opening a context. Missing native
+    /// attributes return not_supported; empty endpoints return invalid_argument.
+    [[nodiscard]] auto tx_context_attributes() const -> result<::fi_tx_attr>;
+    [[nodiscard]] auto rx_context_attributes() const -> result<::fi_rx_attr>;
+
+    /// Uses the negotiated defaults. FI_ASYNC_IOV is unsupported.
+    [[nodiscard]] auto tx_context(std::size_t index) -> result<endpoint>;
     [[nodiscard]] auto rx_context(std::size_t index) -> result<endpoint>;
+
+    /// Request context-specific native attributes. On success, attributes holds
+    /// the provider's returned values and the child caches its reported limits,
+    /// capabilities and operation defaults. On failure, attributes is unchanged.
+    /// Start with a copy of the parent defaults to preserve other requirements.
+    /// FI_ASYNC_IOV is unsupported because submissions use temporary descriptor arrays.
+    [[nodiscard]] auto tx_context(std::size_t index, ::fi_tx_attr& attributes) -> result<endpoint>;
+    [[nodiscard]] auto rx_context(std::size_t index, ::fi_rx_attr& attributes) -> result<endpoint>;
 
     [[nodiscard]] auto tx_context_count() const noexcept -> std::size_t;
 
@@ -107,6 +128,11 @@ public:
     [[nodiscard]] auto impl_valid() const noexcept -> bool;
 
 private:
+    [[nodiscard]] auto create_tx_context(std::size_t index, ::fi_tx_attr* attributes)
+        -> result<endpoint>;
+    [[nodiscard]] auto create_rx_context(std::size_t index, ::fi_rx_attr* attributes)
+        -> result<endpoint>;
+
     impl_ptr impl_;
     friend class address_vector;
 };

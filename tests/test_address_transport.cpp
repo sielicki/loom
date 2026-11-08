@@ -5,6 +5,7 @@
 #include <loom/detail/impl/domain_impl.hpp>
 #include <loom/detail/impl/endpoint_impl.hpp>
 #include <loom/detail/impl/passive_endpoint_impl.hpp>
+#include <loom/detail/impl/scalable_endpoint_impl.hpp>
 
 #include <algorithm>
 #include <array>
@@ -127,6 +128,7 @@ struct provider {
         },
     };
     fid_ep ep_handle{.fid = {.context = this, .ops = &ops}, .cm = &cm};
+    fid_ep sep_handle{.fid = {.fclass = FI_CLASS_SEP, .context = this, .ops = &ops}, .cm = &cm};
     fid_pep pep_handle{.fid = {.context = this, .ops = &ops}, .cm = &cm};
     fid_av av_handle{.fid = {.context = this, .ops = &ops}, .ops = &av_ops};
     fi_ops_domain domain_ops{
@@ -163,6 +165,16 @@ struct provider {
         return loom::passive_endpoint{
             loom::detail::make_pmr_unique<loom::detail::passive_endpoint_impl>(
                 loom::get_default_resource(), &pep_handle, format)};
+    }
+    auto scalable(loom::address_format format) -> loom::scalable_endpoint {
+        return loom::scalable_endpoint{
+            loom::detail::make_pmr_unique<loom::detail::scalable_endpoint_impl>(
+                loom::get_default_resource(),
+                &sep_handle,
+                1UZ,
+                1UZ,
+                loom::endpoint_types::rdm,
+                format)};
     }
     auto vector(loom::address_format format) -> loom::address_vector {
         return loom::address_vector{
@@ -259,7 +271,8 @@ TEST_CASE("InfiniBand sockets survive connection and address vector operations",
         batch_with_context,
         lookup,
         local_name,
-        peer_name
+        peer_name,
+        scalable_name
     };
     const auto format = GENERATE(loom::address_format::ib, loom::address_format::sockaddr);
     const auto via = GENERATE(transport::connect,
@@ -268,22 +281,26 @@ TEST_CASE("InfiniBand sockets survive connection and address vector operations",
                               transport::batch_with_context,
                               transport::lookup,
                               transport::local_name,
-                              transport::peer_name);
+                              transport::peer_name,
+                              transport::scalable_name);
     const auto zero = GENERATE(false, true);
     const auto bytes = ib_socket_bytes(zero);
     provider native;
     native.address_size = bytes.size();
     const loom::address addr{zero ? loom::ib_socket_address{} : ib_socket};
     auto av = native.vector(format);
-    if (via == transport::lookup || via == transport::local_name || via == transport::peer_name) {
+    if (via == transport::lookup || via == transport::local_name || via == transport::peer_name ||
+        via == transport::scalable_name) {
         const auto storage = std::as_bytes(std::span{bytes});
         native.stored_address.assign(storage.begin(), storage.end());
         if (via == transport::lookup) {
             REQUIRE(av.lookup(loom::av_handle{100}).value() == addr);
         } else {
             auto ep = native.endpoint(format);
-            const auto result =
-                via == transport::local_name ? ep.get_local_address() : ep.get_peer_address();
+            auto sep = native.scalable(format);
+            const auto result = via == transport::scalable_name ? sep.get_local_address()
+                                : via == transport::local_name  ? ep.get_local_address()
+                                                                : ep.get_peer_address();
             REQUIRE(result);
             CHECK(*result == addr);
         }
@@ -754,8 +771,9 @@ TEST_CASE("batch insertion forwards individual contexts", "[address]") {
 }
 
 TEST_CASE("provider addresses survive name lookup and reinsertion", "[address][provider]") {
-    enum class source { local, peer, passive, lookup };
-    const auto from = GENERATE(source::local, source::peer, source::passive, source::lookup);
+    enum class source { local, peer, passive, scalable, lookup };
+    const auto from =
+        GENERATE(source::local, source::peer, source::passive, source::scalable, source::lookup);
     const auto format = GENERATE(loom::address_format::psmx,
                                  loom::address_format::psmx2,
                                  loom::address_format::gni,
@@ -779,6 +797,7 @@ TEST_CASE("provider addresses survive name lookup and reinsertion", "[address][p
         native.stored_address[i] = static_cast<std::byte>(i);
     auto ep = native.endpoint(format);
     auto pep = native.passive(format);
+    auto sep = native.scalable(format);
     auto av = native.vector(format);
     const auto result = [&]() -> loom::result<loom::address> {
         switch (from) {
@@ -788,6 +807,11 @@ TEST_CASE("provider addresses survive name lookup and reinsertion", "[address][p
                 return ep.get_peer_address();
             case source::passive:
                 return pep.get_local_address();
+            case source::scalable: {
+                auto moved = std::move(sep);
+                CHECK(sep.get_local_address().error() == loom::errc::invalid_argument);
+                return moved.get_local_address();
+            }
             case source::lookup:
                 return av.lookup(loom::av_handle{100});
         }
@@ -909,9 +933,13 @@ TEST_CASE("string addresses use native pointer arrays for AV insertion", "[addre
     native.address_size = input.size();
     native.stored_address.assign(input.begin(), input.end());
     auto ep = native.endpoint(loom::address_format::str);
+    auto sep = native.scalable(loom::address_format::str);
     auto av = native.vector(loom::address_format::str);
     const auto decoded = ep.get_local_address();
     REQUIRE(decoded);
+    const auto scalable_address = sep.get_local_address();
+    REQUIRE(scalable_address);
+    CHECK(*scalable_address == *decoded);
     REQUIRE(std::holds_alternative<loom::opaque_address>(*decoded));
     CHECK(std::ranges::equal(std::get<loom::opaque_address>(*decoded).bytes(), input));
     REQUIRE(ep.connect(*decoded));
@@ -937,13 +965,23 @@ TEST_CASE("string addresses use native pointer arrays for AV insertion", "[addre
 }
 
 TEST_CASE("connection management rejects unavailable native operations", "[address][invalid]") {
-    enum class operation { local_name, peer_name, connect, accept, passive_name, listen, reject };
+    enum class operation {
+        local_name,
+        peer_name,
+        connect,
+        accept,
+        passive_name,
+        scalable_name,
+        listen,
+        reject
+    };
     enum class support { available, missing_table, missing_member, truncated, empty };
     const auto call = GENERATE(operation::local_name,
                                operation::peer_name,
                                operation::connect,
                                operation::accept,
                                operation::passive_name,
+                               operation::scalable_name,
                                operation::listen,
                                operation::reject);
     const auto state = GENERATE(support::available,
@@ -956,11 +994,13 @@ TEST_CASE("connection management rejects unavailable native operations", "[addre
     native.cm_result = native.name_result = -FI_EAGAIN;
     auto ep = native.endpoint(loom::address_format::inet);
     auto pep = native.passive(loom::address_format::inet);
+    auto sep = native.scalable(loom::address_format::inet);
     if (state == support::missing_table)
-        native.ep_handle.cm = native.pep_handle.cm = nullptr;
+        native.ep_handle.cm = native.pep_handle.cm = native.sep_handle.cm = nullptr;
     if (state == support::empty) {
         ep = {};
         pep = {};
+        sep = {};
     }
     const auto configure = [&](auto member, std::size_t offset) {
         if (state == support::missing_member)
@@ -985,6 +1025,9 @@ TEST_CASE("connection management rejects unavailable native operations", "[addre
             case operation::passive_name:
                 configure(&fi_ops_cm::getname, offsetof(fi_ops_cm, getname));
                 return pep.get_local_address().transform([](auto&&) {});
+            case operation::scalable_name:
+                configure(&fi_ops_cm::getname, offsetof(fi_ops_cm, getname));
+                return sep.get_local_address().transform([](auto&&) {});
             case operation::listen:
                 configure(&fi_ops_cm::listen, offsetof(fi_ops_cm, listen));
                 return pep.listen();
@@ -1016,10 +1059,12 @@ TEST_CASE("address queries reject malformed and unsupported representations",
         native.stored_address.assign(4, std::byte{0x55});
     auto ep = native.endpoint(format);
     auto pep = native.passive(format);
+    auto sep = native.scalable(format);
     auto av = native.vector(format);
     const std::array results{ep.get_local_address(),
                              ep.get_peer_address(),
                              pep.get_local_address(),
+                             sep.get_local_address(),
                              av.lookup(loom::av_handle{100})};
     for (const auto& result : results) {
         REQUIRE_FALSE(result);
@@ -1037,15 +1082,17 @@ TEST_CASE("address queries propagate native failures without retry loops", "[add
     native.name_result = native.lookup_result = -error;
     auto ep = native.endpoint(loom::address_format::efa);
     auto pep = native.passive(loom::address_format::efa);
+    auto sep = native.scalable(loom::address_format::efa);
     auto av = native.vector(loom::address_format::efa);
     const std::array results{ep.get_local_address(),
                              ep.get_peer_address(),
                              pep.get_local_address(),
+                             sep.get_local_address(),
                              av.lookup(loom::av_handle{100})};
     for (const auto& result : results) {
         REQUIRE_FALSE(result);
         CHECK(result.error() == loom::make_error_code_from_fi_errno(error));
     }
-    CHECK(native.name_calls == 3);
+    CHECK(native.name_calls == 4);
     CHECK(native.lookup_calls == 1);
 }
